@@ -10,6 +10,9 @@ dist/
 # GUI test screenshots (local verification artifacts, not referenced by docs)
 gui-test-screenshots/
 
+# release packaging output
+dist-release/
+
 # runtime state (top-level Express fallback demo)
 data/graph.json
 

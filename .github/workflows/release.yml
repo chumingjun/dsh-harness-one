@@ -1,0 +1,37 @@
+name: release
+
+# 打 tag 发版：构建并打包 dsh-ccpg-* 插件，作为 GitHub Release asset 上传。
+# 触发：git tag v1.2.3 && git push origin v1.2.3
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    name: pack dsh-plugins
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            dsh-plugins/dsh-ccpg-orchestrator/package-lock.json
+
+      - name: pack
+        run: sh dsh-plugins/pack.sh "$GITHUB_REF_NAME"
+
+      - name: upload asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-release/dsh-ccpg-plugins-*.tar.gz
+          generate_release_notes: true
