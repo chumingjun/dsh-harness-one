@@ -1,7 +1,7 @@
 #!/bin/sh
 # 打包 dsh-ccpg-* 插件为可分发 tarball（release 用，CI 与本地同源）。
 #
-# 产物：dsh-ccpg-plugins-<tag>.tar.gz，内容 = dsh-plugins/ 里六个插件 + setup/start/build/bootstrap 脚本，
+# 产物：dsh-ccpg-plugins-<tag>.tar.gz，内容 = dsh-plugins/ 里七个插件 + setup/start/build/bootstrap 脚本，
 # 且满足"拿到即装"：
 #   - 画布已构建：dsh-ccpg-web/web-dist/ 已生成（build-web.sh 产物），无需再跑构建
 #   - orchestrator 真依赖已装：ajv/cron-parser 在 dsh-ccpg-orchestrator/node_modules/（本地 setup.sh 直接
@@ -24,6 +24,7 @@ OUT="${PACK_DIR:-/tmp/dsh-ccpg-pack}"
 DIST_DIR="$REPO_ROOT/dist-release"
 PKG="dsh-ccpg-plugins-$TAG"
 TAR="$DIST_DIR/$PKG.tar.gz"
+PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-brand"
 
 # ---- 0. node（>=20）----
 NODE_BIN="${WF1_NODE:-}"
@@ -31,12 +32,22 @@ NODE_BIN="${WF1_NODE:-}"
 [ -z "$NODE_BIN" ] && [ -x /tmp/node-v22.20.0-darwin-arm64/bin/node ] && NODE_BIN=/tmp/node-v22.20.0-darwin-arm64/bin/node
 [ -z "$NODE_BIN" ] && { echo "✗ 需要 node>=20（或设 WF1_NODE 指向）"; exit 1; }
 echo "✓ node: $("$NODE_BIN" -v)"
+PATH=$(dirname "$NODE_BIN"):$PATH
+export PATH
+
+# ---- 0.1 插件清单 ----
+for p in $PLUGINS; do
+  [ -f "$HERE/$p/package.json" ] || { echo "✗ 插件缺失: $p/package.json"; exit 1; }
+  "$NODE_BIN" -e "const p=require(process.argv[1]); if(p.name!==process.argv[2]) throw new Error('package name 应为 '+process.argv[2])" \
+    "$HERE/$p/package.json" "$p"
+done
+echo "✓ 七个插件清单已校验"
 
 # ---- 1. 构建画布（生成 dsh-ccpg-web/web-dist）----
 sh "$HERE/build-web.sh"
 echo "✓ 画布已构建"
 
-# ---- 2. orchestrator 真依赖（ajv/cron-parser）----
+# ---- 2. orchestrator 真依赖（ajv/cron-parser/QuickJS WASM）----
 cd "$HERE/dsh-ccpg-orchestrator"
 if [ -f package-lock.json ]; then
   npm ci --no-audit --no-fund
@@ -44,6 +55,13 @@ else
   npm install --no-audit --no-fund
 fi
 echo "✓ orchestrator 依赖已装"
+
+# ---- 2.5 canvasui bundle 重建（必须在 rsync 组装之前）----
+# lib/client.js 是拼接产物（src/client.js @include shared/ 片段）：先重建源码目录再组装，
+# rsync 才会把新产物带进归档——放组装之后就只校验了源码目录，归档仍是旧文件。
+sh "$HERE/build-canvasui.sh"
+sh "$HERE/build-canvasui.sh" --check
+echo "✓ canvasui bundle 已重建并校验"
 
 # ---- 3. 组装（rsync 到临时目录）----
 rm -rf "$OUT" "$DIST_DIR"
@@ -58,8 +76,9 @@ rsync -a --delete \
 rsync -a "$HERE/dsh-ccpg-web/web-dist/" "$OUT/dsh-plugins/dsh-ccpg-web/web-dist/"
 
 # 清理插件包内运行时数据与残余
-for p in dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-larkauth dsh-ccpg-brand; do
+for p in $PLUGINS; do
   rm -rf "$OUT/dsh-plugins/$p/data/runs" \
+         "$OUT/dsh-plugins/$p/data/run-artifacts" \
          "$OUT/dsh-plugins/$p/data/workspaces" \
          "$OUT/dsh-plugins/$p/data/attachments" \
          "$OUT/dsh-plugins/$p/data/credentials.json" \
@@ -71,12 +90,65 @@ done
 mkdir -p "$OUT/dsh-plugins/dsh-ccpg-orchestrator/data/runs"
 rmdir "$OUT/dsh-plugins/dsh-ccpg-orchestrator/data/runs" 2>/dev/null || true
 
-# 校验：web-dist 必须有 index.html
+# 校验：web-dist、七插件目录与 document-preview 构建入口必须完整。
 [ -f "$OUT/dsh-plugins/dsh-ccpg-web/web-dist/index.html" ] || { echo "✗ web-dist/index.html 缺失（构建失败？）"; exit 1; }
+for p in $PLUGINS; do
+  [ -f "$OUT/dsh-plugins/$p/package.json" ] || { echo "✗ 打包目录缺失: $p/package.json"; exit 1; }
+done
+"$NODE_BIN" - "$OUT/dsh-plugins/dsh-ccpg-document-preview/package.json" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const file = process.argv[2];
+const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+const root = path.dirname(file);
+const entries = new Set();
+const add = (value) => {
+  if (typeof value === 'string' && value.startsWith('./')) entries.add(value);
+  else if (value && typeof value === 'object') Object.values(value).forEach(add);
+};
+add(pkg.main);
+add(pkg.exports);
+for (const entry of entries) {
+  if (entry !== './package.json' && !fs.existsSync(path.resolve(root, entry))) {
+    throw new Error(`归档构建入口缺失: ${entry}`);
+  }
+}
+if (!entries.size) throw new Error('document-preview 未声明 main/exports 构建入口');
+NODE
+
+# QuickJS 分发 smoke：必须从临时归档目录加载 WASM 并完成最小脚本执行。
+"$NODE_BIN" --input-type=module - "$OUT/dsh-plugins/dsh-ccpg-orchestrator" <<'NODE'
+import { pathToFileURL } from 'node:url';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+const root = process.argv[2];
+const { runScript } = await import(pathToFileURL(join(root, 'lib', 'script-runner.js')));
+const workspaceDir = mkdtempSync(join(tmpdir(), 'wf1-pack-script-'));
+try {
+  const result = await runScript({
+    workspaceDir,
+    input: { value: 41 },
+    code: 'function main(input) { return { value: input.value + 1 }; }',
+  });
+  if (result.value?.value !== 42) throw new Error('QuickJS smoke 输出错误');
+} finally {
+  rmSync(workspaceDir, { recursive: true, force: true });
+}
+NODE
+echo "✓ QuickJS WASM 归档 smoke 通过"
 
 # ---- 4. 打包 ----
 cd "$OUT"
 tar -czf "$TAR" dsh-plugins
+for p in $PLUGINS; do
+  tar -tzf "$TAR" "dsh-plugins/$p/package.json" >/dev/null 2>&1 \
+    || { echo "✗ tarball 缺失: $p/package.json"; exit 1; }
+done
+if tar -tzf "$TAR" | grep -q '/node_modules/@deepseek-ai/'; then
+  echo "✗ tarball 含不可分发的 @deepseek-ai SDK 软链"
+  exit 1
+fi
 echo "✓ 打包完成: $TAR ($(du -h "$TAR" | cut -f1))"
 echo "内容:"
 tar -tzf "$TAR" | grep -E "dsh-plugins/[^/]+/?$" | sort -u

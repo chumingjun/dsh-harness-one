@@ -1,0 +1,47 @@
+{
+  "name": "dsh-ccpg-document-preview",
+  "version": "0.1.0",
+  "description": "Shared full-screen document preview for dsh and React applications",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./react": "./dist/react.js",
+    "./client": "./dist/client.js",
+    "./styles.css": "./dist/document-preview.css",
+    "./package.json": "./package.json"
+  },
+  "files": ["src", "dist"],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "prepack": "npm run test && npm run build"
+  },
+  "dependencies": {
+    "@file-viewer/pptx": "2.3.0",
+    "docx-preview": "0.4.0",
+    "lucide-react": "^1.32.0",
+    "pdfjs-dist": "5.6.205",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "*",
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/schemastery": { "optional": true }
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "4.3.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "vite": "5.4.19"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-runtime"]
+    }
+  }
+}

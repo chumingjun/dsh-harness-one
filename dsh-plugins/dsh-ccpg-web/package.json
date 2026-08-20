@@ -4,23 +4,9 @@
   "private": false,
   "type": "module",
   "main": "lib/index.js",
-  "description": "Workflow One 编排画布：静态托管 /wf1/ + 官方 UI 侧边栏入口",
+  "description": "Workflow One 编排画布：静态托管 /wf1/",
   "peerDependencies": {
     "@deepseek-ai/schemastery": "*"
   },
-  "peerDependenciesMeta": {},
-  "exports": {
-    ".": "./lib/index.js",
-    "./client": "./lib/client.js",
-    "./package.json": "./package.json"
-  },
-  "dsh": {
-    "client": {
-      "platform": "web",
-      "inject": [
-        "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-sidebar"
-      ]
-    }
-  }
+  "peerDependenciesMeta": {}
 }
