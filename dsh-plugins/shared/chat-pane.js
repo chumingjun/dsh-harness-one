@@ -139,15 +139,17 @@ function ccpgChatPaneEnsureStyle(cssPrefix) {
 	var el = document.createElement("style");
 	el.id = styleId;
 	el.textContent = [
-		"." + cssPrefix + "-head{flex:none;padding:10px 14px;border-bottom:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.08));display:flex;align-items:center;gap:8px;}",
+		// 主题适配：颜色一律走官方 --dsw-alias-* 令牌（layout 主题呈现器把它们投影到
+		// body，亮/暗/皮肤自动跟随）；回退值仅令牌缺失时兜底。
+		"." + cssPrefix + "-head{flex:none;padding:10px 14px;border-bottom:1px solid var(--dsw-alias-border-l2);display:flex;align-items:center;gap:8px;}",
 		"." + cssPrefix + "-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary);letter-spacing:.02em;}",
 		"." + cssPrefix + "-list{flex:1;min-height:0;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:10px;}",
 		"." + cssPrefix + "-msg{max-width:100%;padding:8px 10px;border-radius:10px;font-size:13px;line-height:1.55;word-break:break-word;}",
-		"." + cssPrefix + "-msg-user{align-self:flex-end;background:var(--dsw-alias-state-business-primary,#8B5CF6);color:#fff;border-bottom-right-radius:4px;}",
-		"." + cssPrefix + "-msg-ai{align-self:flex-start;background:var(--dsw-alias-bg-raised,#26221D);color:var(--dsw-alias-label-primary,#e8e4dc);border-bottom-left-radius:4px;}",
-		"." + cssPrefix + "-msg-tool{align-self:flex-start;background:transparent;border:1px dashed var(--dsw-alias-border-l2,rgba(255,255,255,.14));color:var(--dsw-alias-label-tertiary,#8b8578);font-size:12px;font-family:ui-monospace,monospace;padding:5px 9px;}",
-		"." + cssPrefix + "-msg-tool b{color:var(--dsw-alias-state-business-primary,#8B5CF6);font-weight:600;}",
-		"." + cssPrefix + "-hint{flex:none;padding:6px 12px;border-top:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.08));font-size:11px;color:var(--dsw-alias-label-tertiary,#8b8578);text-align:center;}",
+		"." + cssPrefix + "-msg-user{align-self:flex-end;background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary-foreground,#fff);border-bottom-right-radius:4px;}",
+		"." + cssPrefix + "-msg-ai{align-self:flex-start;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);border-bottom-left-radius:4px;}",
+		"." + cssPrefix + "-msg-tool{align-self:flex-start;background:transparent;border:1px dashed var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);font-size:12px;font-family:ui-monospace,monospace;padding:5px 9px;}",
+		"." + cssPrefix + "-msg-tool b{color:var(--dsw-alias-state-business-primary);font-weight:600;}",
+		"." + cssPrefix + "-hint{flex:none;padding:6px 12px;border-top:1px solid var(--dsw-alias-border-l2);font-size:11px;color:var(--dsw-alias-label-tertiary);text-align:center;}",
 		// Markdown 消息体：块间距收敛、标题缩小、表格可横向滚动不撑破气泡
 		"." + cssPrefix + "-md p{margin:0 0 6px;white-space:pre-wrap;}",
 		"." + cssPrefix + "-md p:last-child{margin-bottom:0;}",
@@ -155,15 +157,18 @@ function ccpgChatPaneEnsureStyle(cssPrefix) {
 		"." + cssPrefix + "-md h1{font-size:15px;}",
 		"." + cssPrefix + "-md ul,." + cssPrefix + "-md ol{margin:2px 0 6px;padding-left:18px;}",
 		"." + cssPrefix + "-md li{margin:2px 0;white-space:pre-wrap;}",
-		"." + cssPrefix + "-md blockquote{margin:4px 0;padding:2px 10px;border-left:3px solid var(--dsw-alias-border-l2,rgba(255,255,255,.16));opacity:.9;white-space:pre-wrap;}",
-		"." + cssPrefix + "-md code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:rgba(127,127,127,.14);padding:1px 5px;border-radius:4px;}",
-		"." + cssPrefix + "-md pre{margin:4px 0;padding:8px 10px;background:rgba(0,0,0,.22);border-radius:8px;overflow-x:auto;white-space:pre;}",
+		"." + cssPrefix + "-md blockquote{margin:4px 0;padding:2px 10px;border-left:3px solid var(--dsw-alias-border-l3);opacity:.9;white-space:pre-wrap;}",
+		"." + cssPrefix + "-md code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:var(--dsw-alias-interactive-bg-hover);padding:1px 5px;border-radius:4px;}",
+		"." + cssPrefix + "-md pre{margin:4px 0;padding:8px 10px;background:var(--dsw-alias-markdown-code-block);border-radius:8px;overflow-x:auto;white-space:pre;}",
 		"." + cssPrefix + "-md pre code{background:none;padding:0;font-size:12px;line-height:1.5;}",
 		"." + cssPrefix + "-md table{border-collapse:collapse;margin:6px 0;font-size:12px;display:block;max-width:100%;overflow-x:auto;}",
-		"." + cssPrefix + "-md th,." + cssPrefix + "-md td{border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.16));padding:4px 8px;text-align:left;vertical-align:top;}",
-		"." + cssPrefix + "-md th{background:rgba(127,127,127,.12);font-weight:600;}",
-		"." + cssPrefix + "-md hr{border:0;border-top:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.16));margin:8px 0;}",
-		"." + cssPrefix + "-md a{color:inherit;text-decoration:underline;text-underline-offset:2px;}",
+		"." + cssPrefix + "-md th,." + cssPrefix + "-md td{border:1px solid var(--dsw-alias-border-l2);padding:4px 8px;text-align:left;vertical-align:top;}",
+		"." + cssPrefix + "-md th{background:var(--dsw-alias-interactive-bg-hover);font-weight:600;}",
+		"." + cssPrefix + "-md hr{border:0;border-top:1px solid var(--dsw-alias-border-l2);margin:8px 0;}",
+		"." + cssPrefix + "-md a{color:var(--dsw-alias-brand-primary,var(--dsw-alias-state-business-primary));text-decoration:underline;text-underline-offset:2px;}",
+		// 用户 brand 底气泡里的行内码/链接换成前景安全色（叠层 fill 在 brand 底上会脏）
+		"." + cssPrefix + "-msg-user ." + cssPrefix + "-md code{background:var(--dsw-alias-interactive-bg-hover);}",
+		"." + cssPrefix + "-msg-user ." + cssPrefix + "-md a{color:var(--dsw-alias-label-primary-foreground,#fff);}",
 	].join("\n");
 	document.head.appendChild(el);
 }
@@ -291,10 +296,10 @@ function createChatPane(react, opts) {
 		return react.createElement("div", { style: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 } },
 			react.createElement("div", { className: cssPrefix + "-head" },
 				react.createElement("span", { className: cssPrefix + "-title" }, title),
-				err ? react.createElement("span", { style: { fontSize: 11, color: "#ef4444" } }, "同步失败") : null,
+				err ? react.createElement("span", { style: { fontSize: 11, color: "var(--dsw-alias-label-error,#ef4444)" } }, "同步失败") : null,
 			),
 			react.createElement("div", { className: cssPrefix + "-list", ref: listRef, onScroll: onScroll },
-				items.length === 0 ? react.createElement("div", { style: { color: "#8b8578", fontSize: 12, textAlign: "center", marginTop: 20 } }, emptyText) : null,
+				items.length === 0 ? react.createElement("div", { style: { color: "var(--dsw-alias-label-tertiary,#8b8578)", fontSize: 12, textAlign: "center", marginTop: 20 } }, emptyText) : null,
 				items.map(function (it, idx) {
 					if (it.kind === "tool") {
 						return react.createElement("div", { className: cssPrefix + "-msg " + cssPrefix + "-msg-tool", key: idx },
