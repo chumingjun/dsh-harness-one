@@ -454,7 +454,7 @@ export function apply(ctx, config) {
     }
     // lark-cli 环境探测：装了才告知，避免误导
     if (skillIds.some((x) => x === 'feishu-cli') && larkCliAvailable()) {
-      systemPrompt += `\n\n飞书操作：本机装有 lark-cli（飞书官方 CLI，用户可在画布 ⚙ 设置扫码授权，授权后默认以用户身份执行）。执行 lark-cli 命令默认加 --as user；user 身份报错/未授权时降级 --as bot 并在结果注明。详见技能 feishu-cli。输出 JSON 信封，成功看 ok==true。`;
+      systemPrompt += `\n\n飞书操作：本机装有 lark-cli（飞书官方 CLI，在 dsh 设置「飞书账号」扫码授权一次即可）。默认身份已固定为 user，执行 lark-cli 命令默认加 --as user；user token 由宿主后台自动续约，无需关心过期。user 身份报错/授权失效时降级 --as bot 并在结果注明"需用户重新扫码"。详见技能 feishu-cli。输出 JSON 信封，成功看 ok==true。`;
     }
 
     // 用户输入 = 模板渲染 + 附件复制进工作区
@@ -1175,18 +1175,16 @@ export function apply(ctx, config) {
     const run = readRun(runId);
     const resolved = run && resolveRunArtifact(RUN_ARTIFACTS_DIR, run, artifactId);
     if (!resolved) return json(res, 404, { error: '产物不存在' });
-    const preview = url.searchParams.get('preview') === '1' && resolved.artifact.previewable;
-    const headers = {
-      'Content-Type': resolved.artifact.mediaType || 'application/octet-stream',
-      'Content-Length': String(resolved.artifact.size),
-      'Content-Disposition': `${preview ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(resolved.artifact.name)}`,
-      'X-Content-Type-Options': 'nosniff',
-    };
-    if (preview && resolved.artifact.mediaType.startsWith('text/html')) {
-      headers['Content-Security-Policy'] = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'";
-    }
-    res.writeHead(200, headers);
-    return res.end(readFileSync(resolved.file));
+    const mediaType = resolved.artifact.mediaType || mediaTypeFor(resolved.artifact.name);
+    const preview = url.searchParams.get('preview') === '1'
+      && resolved.artifact.previewable
+      && isPreviewableMediaType(mediaType);
+    return streamArtifactResponse(req, res, {
+      file: resolved.file,
+      filename: resolved.artifact.name,
+      mediaType,
+      preview,
+    });
   } });
 
   ctx.webServer.register({ kind: 'exact', path: '/wf1/api/runs/export', async handler(req, res) {
@@ -1834,15 +1832,19 @@ function safeWsList(dir) {
   } catch { return []; }
 }
 
+// lark-cli 可能由 larkauth 插件在启动后自动安装完成 —— 缓存带 15s TTL，免重启生效
 let _larkCliCache;
+let _larkCliCacheAt = 0;
 function larkCliAvailable() {
-  if (_larkCliCache !== undefined) return _larkCliCache;
+  const now = Date.now();
+  if (_larkCliCache !== undefined && now - _larkCliCacheAt < 15000) return _larkCliCache;
   const candidates = [
     join(homedir(), '.local', 'npm-global', 'bin', 'lark-cli'),
     '/usr/local/bin/lark-cli',
     '/opt/homebrew/bin/lark-cli',
   ];
   _larkCliCache = candidates.some((p) => { try { return statSync(p).isFile(); } catch { return false; } });
+  _larkCliCacheAt = now;
   return _larkCliCache;
 }
 

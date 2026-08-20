@@ -54,6 +54,13 @@ window.__ModuleLoader__.load({
 				if (!status0) load();
 				return function () { if (pollRef.current) clearTimeout(pollRef.current); };
 			}, [load]);
+			// 未安装（宿主正在后台自动安装）时轮询状态，装好即切换到登录界面
+			react.useEffect(function () {
+				if (status && !status.installed) {
+					var t = setTimeout(load, 4000);
+					return function () { clearTimeout(t); };
+				}
+			}, [status, load]);
 
 			var schedulePoll = function (deviceCode) {
 				if (pollRef.current) clearTimeout(pollRef.current);
@@ -97,24 +104,47 @@ window.__ModuleLoader__.load({
 				return react.createElement("div", { style: S.muted }, "正在加载飞书授权状态…");
 			}
 			if (!status.installed) {
-				return react.createElement("div", { style: S.warn },
-					"本机未安装 lark-cli。安装后即可在此扫码登录：",
-					react.createElement("code", { style: S.code }, "npm i -g @larksuite/cli"));
+				return react.createElement("div", { style: S.wrap },
+					react.createElement("div", { style: S.warn },
+						status.installing
+							? "正在自动安装 lark-cli（飞书官方 CLI），通常 1 分钟内完成…"
+							: "本机未安装 lark-cli（飞书官方 CLI）。"),
+					react.createElement("div", { style: S.actions },
+						react.createElement("button", {
+							style: Object.assign({}, S.btn, S.btnPrimary),
+							disabled: busy || status.installing,
+							onClick: function () {
+								setBusy(true);
+								apiPost({ action: "install" }).then(function (d) {
+									setBusy(false);
+									if (d.status) setStatus(d.status); else load();
+								}).catch(function () { setBusy(false); load(); });
+							},
+						}, status.installing ? "安装中…" : "自动安装 lark-cli"),
+						close ? react.createElement("button", { style: S.btn, onClick: close }, "关闭") : null),
+					react.createElement("div", { style: S.muted },
+						"安装后此处即可扫码登录；也可手动执行 ",
+						react.createElement("code", { style: S.code }, "npm i -g @larksuite/cli")));
 			}
 
 			var u = status.user || {};
 			var loggedIn = u.tokenStatus === "valid";
 			var needsRefresh = u.userName && u.tokenStatus !== "valid";
+			var renew = status.autoRenew || {};
+			var renewText = renew.lastAt
+				? " · 自动续约 " + String(renew.lastAt).slice(11, 19) +
+					(renew.lastResult === "renewed" ? " ✓" : renew.lastResult === "fresh" ? "（有效）" : renew.lastResult ? "（" + renew.lastResult + "）" : "")
+				: "";
 
 			return react.createElement("div", { style: S.wrap },
 				react.createElement("div", { style: S.stateRow },
 					react.createElement("span", { className: dotClass(status) }),
 					react.createElement("strong", null, u.userName || "未登录飞书账号"),
 					u.userName ? react.createElement("span", { style: S.muted },
-						u.tokenStatus === "valid" ? "（已授权，agent 默认以用户身份执行）" : "（token 需刷新，重新扫码即可）") : null),
+						u.tokenStatus === "valid" ? "（已授权，agent 默认以用户身份执行，token 自动续约）" : "（token 需刷新，重新扫码即可）") : null),
 				react.createElement("div", { style: S.meta },
-					"App " + (status.appId || "-") + " · bot " + ((status.bot && status.bot.status) || "-") +
-					(u.expiresAt ? " · user token 至 " + String(u.expiresAt).slice(11, 16) : "")),
+					"App " + (status.appId || "-") + " · 默认身份 " + (status.defaultIdentity || "-") + " · bot " + ((status.bot && status.bot.status) || "-") +
+					(u.expiresAt ? " · user token 至 " + String(u.expiresAt).slice(11, 16) : "") + renewText),
 				react.createElement("div", { style: S.actions },
 					loggedIn
 						? react.createElement("button", { style: S.btn, onClick: logout, disabled: busy }, "退出登录")
@@ -228,7 +258,7 @@ window.__ModuleLoader__.load({
 		ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
 			name: "sidebar.footer.action",
 			id: "lark-auth-entry",
-			order: 20, // dsh-ccpg 系入口排序：画布 10 在上，飞书账号 20 在下（容器纵向堆叠，样式由 dsh-ccpg-web 注入）
+			order: 20,
 		}, LarkAuthEntry));
 		}
 
