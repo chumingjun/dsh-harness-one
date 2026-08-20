@@ -493,6 +493,17 @@ body {
   font-size: 11px; font-weight: 500; opacity: .95;
   font-family: var(--font-mono); white-space: nowrap;
 }
+/* 执行中状态：小 spinner + 文案（替代 ⏳ emoji） */
+.flow-node-running { display: inline-flex; align-items: center; gap: 5px; }
+.spinner {
+  width: 10px; height: 10px; flex: none;
+  border: 1.5px solid rgba(245, 158, 11, .3);
+  border-top-color: #f59e0b;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 .flow-node-body { padding: 9px 12px; }
 .flow-node-hint { margin: 0; font-size: 12px; color: var(--fg-muted); line-height: 1.45; }
 .flow-node-live {

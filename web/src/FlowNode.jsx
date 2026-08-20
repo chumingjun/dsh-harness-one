@@ -16,7 +16,8 @@ const STATUS_STYLE = {
 };
 
 const STATUS_TEXT = {
-  queued: '排队中', running: '⏳ 执行中', waiting: '⏸ 待审批',
+  queued: '排队中', running: <span className="flow-node-running"><span className="spinner" />执行中</span>,
+  waiting: '⏸ 待审批',
   error: '✗ 失败', skipped: '跳过', canceled: '已取消',
 };
 
