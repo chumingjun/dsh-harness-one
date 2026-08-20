@@ -1,7 +1,7 @@
 // Express 服务器 v2：静态托管 + 图 CRUD + 运行 API + 附件上传 + 工具清单 + SSE。
 
 import express from 'express';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createLLM } from './llm.js';
@@ -10,6 +10,9 @@ import { createFeishu } from './feishu.js';
 import { createToolExecutor, toolDefinitions } from './tools.js';
 import { listSkills } from './skills.js';
 import { detectDsh } from './agent-runtime.js';
+import { workspaceFor } from './workspace.js';
+import { mediaTypeFor, streamArtifactResponse } from '../dsh-plugins/dsh-ccpg-orchestrator/lib/run-results.js';
+import { resolveInside, safeFilename } from '../dsh-plugins/dsh-ccpg-orchestrator/lib/safe-path.js';
 // 凭据存储与 dsh 插件同源（dsh-ccpg-orchestrator/lib/credentials.js，读写同一 data/credentials.json）
 import {
   listFeishuCreds, addFeishuCred, removeFeishuCred, setDefaultFeishuCred, hasAnyFeishuCred, getFeishuCredOrEnv,
@@ -211,6 +214,63 @@ app.post('/api/run', async (req, res) => {
 
 app.get('/api/runs', (_req, res) => {
   res.json({ runs: orch.history.slice(0, 20), mode: llm.name });
+});
+
+app.post('/api/node/test', async (req, res) => {
+  const node = req.body?.node;
+  if (!node?.id || node.type !== 'script') return res.status(400).json({ error: '4020 回退当前仅支持 script 节点试运行' });
+  const controller = new AbortController();
+  req.once('aborted', () => controller.abort());
+  try {
+    const fakeRun = {
+      outputs: req.body?.upstreamOutputs || {},
+      structuredOutputs: req.body?.upstreamStructuredOutputs || {},
+      nodeStates: Object.fromEntries(Object.keys(req.body?.upstreamOutputs || {}).map((id) => [id, { status: 'success' }])),
+    };
+    const incomingIds = Object.keys(req.body?.upstreamOutputs || {});
+    const s = {
+      run: fakeRun,
+      nodes: new Map([
+        ...incomingIds.map((id) => [id, { id, data: { label: req.body?.upstreamLabels?.[id] || id } }]),
+        [node.id, node],
+      ]),
+      incoming: new Map([[node.id, incomingIds]]),
+      triggerInput: req.body?.triggerInput || '',
+    };
+    const result = await orch._runScriptNode(node, fakeRun, s, controller.signal);
+    res.json({
+      ok: true,
+      output: result.output,
+      structuredOutput: { version: 1, type: 'json', mediaType: 'application/json', value: result.data, ...(result.schema ? { schema: result.schema } : {}) },
+      input: result.input,
+      artifacts: result.artifacts,
+    });
+  } catch (error) {
+    if (!res.headersSent) res.json({ ok: false, error: String(error.message || error) });
+  }
+});
+
+app.get('/api/artifact', (req, res) => {
+  const node = { id: String(req.query.node || 'script'), data: { label: String(req.query.node || 'script') } };
+  const requested = String(req.query.file || '');
+  if (!requested || requested.includes('\\') || requested.includes('\0')) return res.status(400).json({ error: '产物路径无效' });
+  const filename = safeFilename(requested);
+  const workspace = workspaceFor(node);
+  const file = resolveInside(workspace, requested);
+  if (!file || !existsSync(file)) return res.status(404).json({ error: '产物不存在' });
+  try {
+    const realWorkspace = realpathSync(workspace);
+    const realFile = realpathSync(file);
+    if (!resolveInside(realWorkspace, realFile)) return res.status(403).json({ error: '产物路径越界' });
+    return streamArtifactResponse(req, res, {
+      file: realFile,
+      filename,
+      mediaType: mediaTypeFor(filename),
+      preview: req.query.preview === '1',
+    });
+  } catch {
+    return res.status(404).json({ error: '产物不存在' });
+  }
 });
 
 // ---- SSE ----

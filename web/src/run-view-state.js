@@ -20,9 +20,10 @@ export function getRunStatusMeta(status) {
 
 export function deriveRunViewState(model, activeTab = 'result') {
   const safe = model || {};
+  const successfulOutputs = (safe.outputResults || []).filter((row) => row.status === 'success' && row.output);
   const counts = {
-    result: Number(Boolean(safe.coreText)) + (safe.files?.length || 0) + (safe.links?.length || 0),
-    process: safe.events?.length || 0,
+    result: successfulOutputs.length + (safe.finalFiles?.length || 0) + (safe.links?.length || 0),
+    process: safe.nodeTimeline?.length || 0,
     issues: safe.issues?.length || 0,
   };
   const normalizedTab = RESULT_TABS.some((tab) => tab.id === activeTab) ? activeTab : 'result';
@@ -30,8 +31,7 @@ export function deriveRunViewState(model, activeTab = 'result') {
     activeTab: normalizedTab,
     counts,
     hasRun: Boolean(safe.runId),
-    canExport: Boolean(safe.runId && counts.result),
-    canReview: Boolean(safe.runId && ['success', 'error', 'canceled'].includes(safe.status)),
+    canExport: Boolean(safe.runId && (counts.result || safe.processFiles?.length || safe.processResults?.length)),
     isRunning: safe.status === 'running',
     isEmpty: counts.result + counts.process + counts.issues === 0,
     status: getRunStatusMeta(safe.status),

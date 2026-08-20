@@ -164,6 +164,24 @@ export default function App() {
     fetch(apiUrl('/approvals')).then((r) => r.json()).then((d) => setApprovals(d.approvals || [])).catch(() => {});
     fetch(apiUrl('/feishu-credentials')).then((r) => r.json()).then((d) => setFeishuCreds(d.credentials || [])).catch(() => {});
     fetch(apiUrl('/lark-auth')).then((r) => r.json()).then((d) => setLarkStatus(d.status || null)).catch(() => {});
+    fetch(apiUrl('/runs'))
+      .then((response) => response.json())
+      .then(async (data) => {
+        const latest = data.runs?.[0];
+        if (!latest?.runId) return;
+        const response = await fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(latest.runId)}`));
+        if (!response.ok) return;
+        const detail = await response.json();
+        setInspectedRunId(latest.runId);
+        setRunDetails((current) => ({ ...current, [latest.runId]: detail }));
+        setRunStatus((current) => ({
+          ...current,
+          running: Boolean(latest.live),
+          runId: latest.runId,
+          last: latest.status,
+        }));
+      })
+      .catch(() => {});
   }, [setNodes, setEdges]);
 
   // SSE：事件 → 节点状态 + 进度 + 结构化日志
@@ -392,32 +410,45 @@ export default function App() {
 
   const save = useCallback(async ({ silent } = {}) => {
     const graph = toGraph();
+    let response;
+    let document = null;
     if (currentWf?.id) {
-      const document = serializeWorkflowDocument(currentWf, nodesRef.current, edgesRef.current);
-      await fetch(apiUrl('/workflows'), {
+      document = serializeWorkflowDocument(currentWf, nodesRef.current, edgesRef.current);
+      response = await fetch(apiUrl('/workflows'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(document),
       });
-      setCurrentWf(document);
     } else {
-      await fetch(apiUrl('/graph'), {
+      response = await fetch(apiUrl('/graph'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(graph),
       });
     }
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = data.error || `保存失败（HTTP ${response.status}）`;
+      if (!silent) toast(message, 'error');
+      throw new Error(message);
+    }
+    if (document) setCurrentWf({ ...document, updatedAt: data.updatedAt || document.updatedAt });
     setDirty(false);
     await doLint(graph);
     if (!silent) toast(currentWf ? `已保存「${currentWf.name}」` : '已保存草稿', 'success');
+    return { graph, graphFingerprint: data.graphFingerprint || null };
   }, [toGraph, currentWf, toast, doLint]);
 
   // 自动保存：有改动 2.5s 静默保存；同一节流窗内同步画布状态给 AI 助手工具
   useEffect(() => {
     if (!dirty) return;
-    const t = setTimeout(() => { save({ silent: true }); reportCanvasStateRef.current?.(); }, 2500);
+    const t = setTimeout(() => {
+      save({ silent: true })
+        .then(() => reportCanvasStateRef.current?.())
+        .catch((error) => toast(error?.message || '自动保存失败', 'error'));
+    }, 2500);
     return () => clearTimeout(t);
-  }, [dirty, nodes, edges, save]);
+  }, [dirty, nodes, edges, save, toast]);
 
   // 离开页面前提醒未保存
   useEffect(() => {
@@ -499,13 +530,26 @@ export default function App() {
       toast(`无法运行：${bad?.message || '图有错误'}`, 'error');
       return;
     }
-    await save({ silent: true });
+    let saved;
+    try {
+      saved = await save({ silent: true });
+    } catch (error) {
+      toast(`无法运行：${error?.message || '保存失败'}`, 'error');
+      return;
+    }
     setProgress({});
     setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, runStatus: 'idle', runError: null, runOutput: undefined, runtimeStructuredOutput: undefined, livePreview: undefined } })));
     const res = await fetch(apiUrl('/run'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ graph, triggerInput, runInputs, workflowId: currentWf?.id, workflowName: currentWf?.name }),
+      body: JSON.stringify({
+        graph: saved.graph,
+        graphFingerprint: saved.graphFingerprint,
+        triggerInput,
+        runInputs,
+        workflowId: currentWf?.id,
+        workflowName: currentWf?.name,
+      }),
     });
     const data = await res.json();
     if (!res.ok) toast(`启动失败：${data.error}`, 'error');
@@ -1142,7 +1186,7 @@ export default function App() {
             <MiniMap
               pannable
               zoomable
-              nodeColor={(n) => ({ agent: '#8B5CF6', input: '#38BDF8', condition: '#F59E0B', approval: '#FB7185', http: '#34D399', output: '#A3E635', note: '#78716C' })[n.data?.nodeType] || '#57534E'}
+              nodeColor={(n) => ({ agent: '#8B5CF6', input: '#38BDF8', script: '#F97316', condition: '#F59E0B', approval: '#FB7185', http: '#34D399', output: '#A3E635', note: '#78716C' })[n.data?.nodeType] || '#57534E'}
               maskColor="rgba(20,18,15,0.7)"
             />
           </ReactFlow>

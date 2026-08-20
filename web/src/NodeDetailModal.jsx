@@ -15,6 +15,12 @@ function kv(rows) {
   return rows.filter(Boolean).join(' · ');
 }
 
+function detailText(value) {
+  if (value == null) return null;
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value, null, 2); } catch { return String(value); }
+}
+
 function TraceEntry({ en, i }) {
   const [open, setOpen] = useState(false);
   if (en.kind === 'turn-end') {
@@ -125,8 +131,8 @@ export function NodeDetailModal({ runId, nodeId, onClose }) {
             <div className="detail-io">
               {data.input != null && (
                 <div className="detail-io-block">
-                  <span className="trace-block-label">输入（模板渲染后）</span>
-                  <pre className="trace-text">{data.input || '(空)'}</pre>
+                  <span className="trace-block-label">{data.nodeType === 'input' ? '本次运行输入' : '输入（模板渲染后）'}</span>
+                  <pre className="trace-text">{detailText(data.input) || '(空)'}</pre>
                 </div>
               )}
               <div className="detail-io-block">

@@ -25,13 +25,14 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
   const [history, setHistory] = useState([]); // 最近几次试运行结果
   const [showDiff, setShowDiff] = useState(false);
   const esRef = useRef(null);
+  const requestAbortRef = useRef(null);
 
   const isApproval = node.data.nodeType === 'approval';
   const hasUpstream = upstreamNodes.length > 0;
 
   // 流式进度：监听 agent-progress（runId 匹配 test_ 前缀即试运行）
   useEffect(() => {
-    if (!running) return;
+    if (!running) return undefined;
     const es = new EventSource(apiUrl('/events'));
     esRef.current = es;
     es.addEventListener('agent-progress', (e) => {
@@ -40,6 +41,13 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
     });
     return () => { es.close(); esRef.current = null; };
   }, [running]);
+
+  useEffect(() => () => requestAbortRef.current?.abort(), []);
+
+  const close = () => {
+    requestAbortRef.current?.abort();
+    onClose();
+  };
 
   const run = async () => {
     setRunning(true);
@@ -67,8 +75,10 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
     }
     try {
       const url = apiUrl('/node/test');
+      const controller = new AbortController();
+      requestAbortRef.current = controller;
       const request = {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
         body: JSON.stringify({
           node: { id: node.id, type: node.data.nodeType, data: stripRuntime(node.data) },
           upstreamOutputs, upstreamStructuredOutputs, upstreamLabels,
@@ -88,9 +98,12 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
       else toast(`试运行失败：${d.error}`, 'error');
       onResult?.(d);
     } catch (e) {
-      setResult({ ok: false, error: e.message, at: new Date().toLocaleTimeString('zh-CN', { hour12: false }) });
-      toast(`试运行失败：${e.message}`, 'error');
+      if (e.name !== 'AbortError') {
+        setResult({ ok: false, error: e.message, at: new Date().toLocaleTimeString('zh-CN', { hour12: false }) });
+        toast(`试运行失败：${e.message}`, 'error');
+      }
     } finally {
+      requestAbortRef.current = null;
       setRunning(false);
     }
   };
@@ -98,10 +111,10 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
   return (
     <Modal
       title={`▶ 试运行「${node.data.label || node.id}」`}
-      onClose={onClose}
+      onClose={close}
       footer={(
         <>
-          <button className="btn" onClick={onClose}>关闭</button>
+          <button className="btn" onClick={close}>关闭</button>
           <button className="btn btn-primary" disabled={running} onClick={run}>
             {running ? '运行中…' : '▶ 执行'}
           </button>
@@ -166,10 +179,24 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
             {result.ok ? `✓ 结果（${result.at}${result.turns ? ` · ${result.turns} 轮` : ''}${result.model ? ` · ${result.model}` : ''}）` : `✕ 失败（${result.at}）`}
           </div>
           <pre>{result.ok ? result.output : result.error}</pre>
+          {result.ok && result.input !== undefined && (
+            <details className="test-structured">
+              <summary>解析后的 JSON 入参</summary>
+              <pre>{JSON.stringify(result.input, null, 2)}</pre>
+            </details>
+          )}
           {result.ok && result.structuredOutput?.type === 'json' && (
             <details className="test-structured" open>
               <summary>结构化输出预览</summary>
               <pre>{JSON.stringify(result.structuredOutput.value, null, 2)}</pre>
+            </details>
+          )}
+          {result.ok && result.artifacts?.length > 0 && (
+            <details className="test-structured" open>
+              <summary>工作区产物（{result.artifacts.length}）</summary>
+              <ul className="test-artifact-list">
+                {result.artifacts.map((artifact) => <li key={artifact}>{artifact}</li>)}
+              </ul>
             </details>
           )}
           {result.simulated && <p className="sec-hint">模拟分支：{result.simulated === 'approve' ? '批准' : '拒绝'}（未产生真实审批）</p>}

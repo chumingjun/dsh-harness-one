@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { artifactPreviewKind } from './artifact-preview.js';
 import { adaptRunResults, getRunId, normalizeRunEvent } from './result-adapter.js';
 import { deriveRunViewState, getRunStatusMeta } from './run-view-state.js';
 
@@ -12,8 +13,10 @@ const runDetail = {
     nodes: [
       { id: 'input', type: 'input', data: { label: '输入' } },
       { id: 'agent', type: 'agent', data: { label: '写报告' } },
+      { id: 'note', type: 'note', data: { label: '画布说明' } },
       { id: 'output', type: 'output', data: { label: '最终交付' } },
     ],
+    edges: [{ source: 'input', target: 'agent' }, { source: 'agent', target: 'output' }],
   },
   outputs: {
     input: 'input text',
@@ -33,52 +36,72 @@ assert.equal(getRunId(null, { runId: 'run-live' }, null), 'run-live');
 const fallback = adaptRunResults({}, { runDetail });
 assert.equal(fallback.runId, 'run-42');
 assert.equal(fallback.coreText, runDetail.outputs.output);
-assert.equal(fallback.files.length, 1);
-assert.deepEqual(fallback.files[0], {
-  name: 'report.md', path: 'report.md', nodeId: 'agent', nodeLabel: '写报告',
-});
+assert.equal(fallback.outputResults.length, 1);
+assert.equal(fallback.outputResults[0].nodeId, 'output');
+assert.equal(fallback.processResults.length, 2);
+assert.equal(fallback.finalFiles.length, 0);
+assert.equal(fallback.processFiles.length, 1);
 assert.deepEqual(fallback.links, [{ url: 'https://example.com/report', label: 'https://example.com/report' }]);
-assert.equal(fallback.events.length, 3);
+assert.deepEqual(fallback.nodeTimeline.map((row) => row.nodeId), ['input', 'agent', 'output']);
+assert.equal(fallback.processResults.some((row) => row.nodeId === 'note'), false);
 assert.equal(fallback.issues.length, 0);
 assert.equal(fallback.input, '原始输入');
 
-const explicit = adaptRunResults({
-  runId: 'run-42',
-  status: 'error',
-  result: {
-    coreText: '接口核心文本',
-    files: [
-      { name: 'data.csv', url: '/download/data.csv' },
-      { name: 'data.csv', url: '/download/data.csv' },
-    ],
-    links: [{ title: '文档', href: 'https://docs.example.com' }],
-    issues: [{ nodeId: 'agent', message: '格式不完整' }],
-  },
-  review: { decision: 'approved', note: '符合要求', reviewedBy: '审核人' },
-}, { runDetail, events: [{ nodeId: 'agent', status: 'running', message: '处理中' }] });
-assert.equal(explicit.coreText, '接口核心文本');
-assert.equal(explicit.files.length, 2, '重复接口文件去重，同时保留旧运行详情中的节点产物');
-assert.deepEqual(explicit.files.map((file) => file.name).sort(), ['data.csv', 'report.md']);
-assert.equal(explicit.links[0].label, '文档');
-assert.equal(explicit.events[0].text, '处理中');
-assert.equal(explicit.issues[0].message, '格式不完整');
-assert.equal(explicit.review.status, 'approved');
-assert.equal(explicit.review.comment, '符合要求');
+const partialEvents = adaptRunResults({}, {
+  runDetail,
+  events: [{ nodeId: 'agent', status: 'running', message: '处理中' }],
+});
+assert.equal(partialEvents.nodeTimeline.length, 3, '不完整 SSE 不能覆盖完整流程节点');
+assert.equal(partialEvents.nodeTimeline.find((row) => row.nodeId === 'agent').status, 'running');
 
 const backendShape = adaptRunResults({
   runId: 'run-backend',
   status: 'success',
-  primaryResult: { output: '# 后端核心结果' },
-  artifacts: [{ name: 'deliverable.pdf', relativePath: 'deliverable.pdf', downloadUrl: '/artifact', previewUrl: '/preview', mediaType: 'application/pdf', nodeLabel: '报告节点' }],
+  finalStatus: 'available',
+  outputResults: [{ nodeId: 'output', nodeLabel: '最终交付', nodeType: 'output', status: 'success', output: '# 后端最终结果' }],
+  processResults: [{ nodeId: 'agent', nodeLabel: '报告节点', nodeType: 'agent', status: 'success', output: '中间草稿' }],
+  nodeTimeline: [
+    { nodeId: 'agent', nodeLabel: '报告节点', nodeType: 'agent', status: 'success' },
+    { nodeId: 'output', nodeLabel: '最终交付', nodeType: 'output', status: 'success' },
+  ],
+  artifacts: [
+    { id: 'a1', name: 'deliverable.pdf', relativePath: 'deliverable.pdf', downloadUrl: '/artifact', previewUrl: '/preview', mediaType: 'application/pdf', nodeId: 'output', nodeLabel: '最终交付' },
+    { id: 'a2', name: 'debug.json', relativePath: 'debug.json', downloadUrl: '/debug', previewUrl: '/debug-preview', mediaType: 'application/json', nodeId: 'agent', nodeLabel: '报告节点' },
+  ],
+  finalArtifacts: [{ id: 'a1', name: 'deliverable.pdf', relativePath: 'deliverable.pdf', downloadUrl: '/artifact', previewUrl: '/preview', mediaType: 'application/pdf', nodeId: 'output', nodeLabel: '最终交付' }],
+  processArtifacts: [{ id: 'a2', name: 'debug.json', relativePath: 'debug.json', downloadUrl: '/debug', previewUrl: '/debug-preview', mediaType: 'application/json', nodeId: 'agent', nodeLabel: '报告节点' }],
   inputs: { triggerInput: '后端输入' },
-  review: { status: 'accepted', by: '验收人', updatedAt: '2026-08-20T10:00:00.000Z' },
-});
-assert.equal(backendShape.coreText, '# 后端核心结果');
-assert.equal(backendShape.files[0].url, '/artifact');
-assert.equal(backendShape.files[0].previewUrl, '/preview');
-assert.equal(backendShape.files[0].mimeType, 'application/pdf');
+}, { runDetail });
+assert.equal(backendShape.coreText, '# 后端最终结果');
+assert.equal(backendShape.finalFiles[0].url, '/artifact');
+assert.equal(backendShape.processFiles[0].url, '/debug');
 assert.equal(backendShape.input, '后端输入');
-assert.equal(backendShape.review.reviewer, '验收人');
+
+const failedOutput = adaptRunResults({}, {
+  runDetail: {
+    ...runDetail,
+    status: 'error',
+    outputs: { input: 'input text', agent: '中间结果' },
+    nodeStates: {
+      input: { status: 'success' },
+      agent: { status: 'success' },
+      output: { status: 'skipped' },
+    },
+  },
+});
+assert.equal(failedOutput.finalStatus, 'unavailable');
+assert.equal(failedOutput.coreText, '', '有输出节点时不得用中间结果冒充最终成果');
+assert.equal(failedOutput.outputResults[0].status, 'skipped');
+
+const legacy = adaptRunResults({}, {
+  runDetail: {
+    runId: 'legacy', status: 'success', nodeOrder: ['agent'],
+    graph: { nodes: [{ id: 'agent', type: 'agent', data: { label: '旧节点' } }], edges: [] },
+    outputs: { agent: '旧结果' }, nodeStates: { agent: { status: 'success' } },
+  },
+});
+assert.equal(legacy.finalStatus, 'legacy-inferred');
+assert.equal(legacy.outputResults[0].legacyInferred, true);
 
 const withFailure = adaptRunResults({}, {
   runDetail: {
@@ -87,20 +110,32 @@ const withFailure = adaptRunResults({}, {
     nodeStates: { agent: { status: 'error', error: '模型超时' } },
   },
 });
-assert.deepEqual(withFailure.issues[0], {
-  id: 'issue-0', status: 'error', nodeId: 'agent', nodeLabel: '写报告', message: '模型超时',
-});
+assert.equal(withFailure.issues[0].message, '模型超时');
 
 assert.deepEqual(normalizeRunEvent({ type: 'node-status', node: { id: 'n1', label: '节点一' }, state: 'success', timestamp: 123 }), {
   id: '123-0', time: 123, kind: 'node-status', status: 'success', nodeId: 'n1', nodeLabel: '节点一', text: '', meta: undefined,
   raw: { type: 'node-status', node: { id: 'n1', label: '节点一' }, state: 'success', timestamp: 123 },
 });
 
+assert.equal(artifactPreviewKind('report.md'), 'markdown');
+assert.equal(artifactPreviewKind('data.json'), 'json');
+assert.equal(artifactPreviewKind('notes.txt'), 'text');
+assert.equal(artifactPreviewKind('table.csv'), 'csv');
+assert.equal(artifactPreviewKind('photo.png'), 'image');
+assert.equal(artifactPreviewKind('document.pdf'), 'pdf');
+assert.equal(artifactPreviewKind('document.docx'), 'docx');
+assert.equal(artifactPreviewKind('workbook.xls'), 'sheet');
+assert.equal(artifactPreviewKind('workbook.xlsx'), 'sheet');
+assert.equal(artifactPreviewKind('slides.pptx'), 'pptx');
+assert.equal(artifactPreviewKind('legacy.doc'), null);
+assert.equal(artifactPreviewKind('legacy.ppt'), null);
+assert.equal(artifactPreviewKind('archive.zip'), null);
+assert.equal(artifactPreviewKind('unsafe.svg'), null);
+
 const state = deriveRunViewState(fallback, 'bad-tab');
 assert.equal(state.activeTab, 'result');
-assert.deepEqual(state.counts, { result: 3, process: 3, issues: 0 });
+assert.deepEqual(state.counts, { result: 2, process: 3, issues: 0 });
 assert.equal(state.canExport, true);
-assert.equal(state.canReview, true);
 assert.equal(state.isEmpty, false);
 assert.deepEqual(getRunStatusMeta('mystery'), { label: 'mystery', tone: 'neutral' });
 

@@ -1196,15 +1196,28 @@ export function apply(ctx, config) {
     if (!run) return json(res, 404, { error: '运行记录不存在' });
     const state = run.nodeStates?.[nodeId];
     const label = (run.graph?.nodes || []).find((n) => n.id === nodeId)?.data?.label || nodeId;
+    const node = (run.graph?.nodes || []).find((n) => n.id === nodeId);
+    const structuredOutput = run.structuredOutputs?.[nodeId] ?? null;
+    const structuredValue = structuredOutput?.value && typeof structuredOutput.value === 'object'
+      ? structuredOutput.value
+      : null;
+    const inputDetail = node?.type === 'input' || node?.data?.nodeType === 'input'
+      ? {
+          configuredText: structuredValue?.text ?? node?.data?.text ?? '',
+          triggerInput: structuredValue?.triggerInput ?? run.triggerInput ?? '',
+          upstreamText: structuredValue?.upstreamText ?? '',
+        }
+      : state?.input ?? null;
     const out = {
       runId, nodeId, label,
+      nodeType: node?.type || node?.data?.nodeType || null,
       status: state?.status || 'pending',
       state: state || null,
       output: run.outputs?.[nodeId] ?? '',
-      structuredOutput: run.structuredOutputs?.[nodeId] ?? null,
+      structuredOutput,
       schemaVersion: run.schemaVersion || 1,
-      variables: run.graph?.nodes ? describeNodeOutput((run.graph.nodes || []).find((n) => n.id === nodeId)) : null,
-      input: state?.input ?? null,
+      variables: run.graph?.nodes ? describeNodeOutput(node) : null,
+      input: inputDetail,
       trace: state?.trace ?? null,
       sessionId: state?.sessionId || null,
     };
@@ -1511,12 +1524,7 @@ export function apply(ctx, config) {
     json(res, 405, { error: 'method' });
   } });
 
-  // ---- 产物下载：?run=&node=&file= 读该节点工作区文件 ----
-  const DL_MIME = {
-    '.md': 'text/markdown; charset=utf-8', '.txt': 'text/plain; charset=utf-8',
-    '.json': 'application/json; charset=utf-8', '.csv': 'text/csv; charset=utf-8',
-    '.html': 'text/html; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg',
-  };
+  // ---- 产物下载/预览：?node=&file=&preview=1 读该节点工作区文件 ----
   ctx.webServer.register({ kind: 'exact', path: '/wf1/api/artifact', async handler(req, res) {
     const url = new URL(req.url, 'http://x');
     const nodeLabel = safeFileId(url.searchParams.get('node') || '', '');
@@ -1530,11 +1538,9 @@ export function apply(ctx, config) {
     const realDir = realpathSync(dir);
     const realFull = realpathSync(full);
     if (resolveInside(realDir, realFull) !== realFull) return json(res, 404, { error: '产物不存在' });
-    res.writeHead(200, {
-      'Content-Type': DL_MIME[extname(full).toLowerCase()] || 'application/octet-stream',
-      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file)}`,
-    });
-    res.end(readFileSync(full));
+    const mediaType = mediaTypeFor(file);
+    const preview = url.searchParams.get('preview') === '1' && isPreviewableMediaType(mediaType);
+    return streamArtifactResponse(req, res, { file: realFull, filename: file, mediaType, preview });
   } });
 
   // ---- 技能目录 ----

@@ -22,17 +22,59 @@ function uniqueBy(items, keyOf) {
   });
 }
 
-function nodeMap(runDetail) {
-  return new Map(asArray(runDetail?.graph?.nodes).map((node) => [node.id, node]));
+function graphNodes(runDetail) {
+  return asArray(runDetail?.graph?.nodes);
 }
 
-function finalOutput(runDetail) {
-  const outputs = asObject(runDetail?.outputs);
-  const nodes = nodeMap(runDetail);
-  const order = asArray(runDetail?.nodeOrder).length ? runDetail.nodeOrder : Object.keys(outputs);
-  const outputNodeId = [...order].reverse().find((id) => nodes.get(id)?.data?.nodeType === 'output' || nodes.get(id)?.type === 'output');
-  const finalId = outputNodeId || [...order].reverse().find((id) => outputs[id] != null);
-  return finalId ? textOf(outputs[finalId]) : '';
+function nodeMap(runDetail) {
+  return new Map(graphNodes(runDetail).map((node) => [node.id, node]));
+}
+
+function nodeType(node) {
+  return node?.type || node?.data?.nodeType || null;
+}
+
+function isRuntimeNode(value) {
+  return first(value?.nodeType, value?.type, nodeType(value)) !== 'note';
+}
+
+function stableNodeOrder(runDetail) {
+  const nodes = graphNodes(runDetail).filter(isRuntimeNode);
+  if (!nodes.length) {
+    const ids = [...new Set([
+      ...asArray(runDetail?.nodeOrder),
+      ...Object.keys(asObject(runDetail?.nodeStates)),
+      ...Object.keys(asObject(runDetail?.outputs)),
+    ])];
+    return ids.map((id) => ({ id, type: null, data: { label: id } }));
+  }
+  const index = new Map(nodes.map((node, position) => [node.id, position]));
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const incoming = new Map(nodes.map((node) => [node.id, 0]));
+  const outgoing = new Map(nodes.map((node) => [node.id, []]));
+  for (const edge of asArray(runDetail?.graph?.edges)) {
+    if (!byId.has(edge.source) || !byId.has(edge.target)) continue;
+    outgoing.get(edge.source).push(edge.target);
+    incoming.set(edge.target, incoming.get(edge.target) + 1);
+  }
+  const ready = nodes.filter((node) => incoming.get(node.id) === 0).sort((a, b) => index.get(a.id) - index.get(b.id));
+  const ordered = [];
+  while (ready.length) {
+    const node = ready.shift();
+    ordered.push(node);
+    for (const target of outgoing.get(node.id)) {
+      incoming.set(target, incoming.get(target) - 1);
+      if (incoming.get(target) === 0) {
+        ready.push(byId.get(target));
+        ready.sort((a, b) => index.get(a.id) - index.get(b.id));
+      }
+    }
+  }
+  if (ordered.length !== nodes.length) {
+    const seen = new Set(ordered.map((node) => node.id));
+    ordered.push(...nodes.filter((node) => !seen.has(node.id)));
+  }
+  return ordered;
 }
 
 function normalizeFile(file, fallback = {}) {
@@ -40,12 +82,14 @@ function normalizeFile(file, fallback = {}) {
     return { name: file.split('/').filter(Boolean).at(-1) || file, path: file, ...fallback };
   }
   const value = asObject(file);
-  const path = first(value.path, value.file, value.filename, value.name, value.key);
+  const path = first(value.path, value.relativePath, value.file, value.filename, value.name, value.key);
   if (!path) return null;
   return {
+    id: value.id,
     name: first(value.name, value.filename, String(path).split('/').filter(Boolean).at(-1), path),
     path: String(path),
     url: first(value.url, value.href, value.downloadUrl),
+    downloadUrl: first(value.downloadUrl, value.url, value.href),
     previewUrl: value.previewUrl,
     nodeId: first(value.nodeId, fallback.nodeId),
     nodeLabel: first(value.nodeLabel, value.node, fallback.nodeLabel),
@@ -58,7 +102,52 @@ function normalizeLink(link) {
   if (typeof link === 'string') return { url: link, label: link };
   const value = asObject(link);
   const url = first(value.url, value.href, value.link);
-  return url ? { url: String(url), label: first(value.label, value.title, value.name, url) } : null;
+  return url ? {
+    url: String(url),
+    label: first(value.label, value.title, value.name, url),
+    nodeId: value.nodeId,
+    nodeLabel: value.nodeLabel,
+  } : null;
+}
+
+function normalizeResultRow(row, nodes, runDetail) {
+  const value = asObject(row);
+  const nodeId = first(value.nodeId, value.id);
+  const node = nodes.get(nodeId);
+  const state = asObject(runDetail?.nodeStates?.[nodeId]);
+  return {
+    nodeId,
+    nodeLabel: first(value.nodeLabel, value.label, node?.data?.label, nodeId),
+    nodeType: first(value.nodeType, value.type, nodeType(node)),
+    status: first(value.status, state.status, 'pending'),
+    output: value.output == null ? null : textOf(value.output),
+    structuredOutput: first(value.structuredOutput, runDetail?.structuredOutputs?.[nodeId], null),
+    error: first(value.error, state.error, state.toleratedError),
+    durationMs: first(value.durationMs, state.durationMs),
+    legacyInferred: Boolean(value.legacyInferred),
+  };
+}
+
+function fallbackRows(runDetail) {
+  const nodes = nodeMap(runDetail);
+  const outputs = asObject(runDetail.outputs);
+  return stableNodeOrder(runDetail).map((node) => normalizeResultRow({
+    nodeId: node.id,
+    nodeType: nodeType(node),
+    status: runDetail.nodeStates?.[node.id]?.status,
+    output: Object.prototype.hasOwnProperty.call(outputs, node.id) ? outputs[node.id] : null,
+  }, nodes, runDetail));
+}
+
+function timelineText(row) {
+  if (row.error) return row.error;
+  if (row.status === 'success') return '节点已完成';
+  if (row.status === 'running') return '节点正在执行';
+  if (row.status === 'queued' || row.status === 'pending') return '节点等待执行';
+  if (row.status === 'waiting') return '节点等待审批';
+  if (row.status === 'skipped') return '本次流程未执行该节点';
+  if (row.status === 'canceled') return '节点已取消';
+  return `节点状态：${row.status}`;
 }
 
 export function normalizeRunEvent(event, index = 0) {
@@ -90,25 +179,43 @@ export function adaptRunResults(payload, context = {}) {
   const runDetail = asObject(context.runDetail || source.runDetail || source.run || source.detail);
   const result = asObject(source.result || source.results);
   const nodes = nodeMap(runDetail);
-  const nodeStates = asObject(runDetail.nodeStates);
   const runId = getRunId(runDetail, context.status, source);
+  const fallback = fallbackRows(runDetail);
 
-  const explicitFiles = [
-    ...asArray(source.files), ...asArray(source.artifacts),
-    ...asArray(result.files), ...asArray(result.artifacts),
-  ].map((file) => normalizeFile(file)).filter(Boolean);
-  const stateFiles = Object.entries(nodeStates).flatMap(([nodeId, state]) => {
+  const explicitRows = asArray(source.results).map((row) => normalizeResultRow(row, nodes, runDetail)).filter(isRuntimeNode);
+  const baseRows = explicitRows.length ? explicitRows : fallback;
+  const outputResults = asArray(source.outputResults).length
+    ? source.outputResults.map((row) => normalizeResultRow(row, nodes, runDetail)).filter(isRuntimeNode)
+    : baseRows.filter((row) => row.nodeType === 'output');
+  let effectiveOutputs = outputResults;
+  let finalStatus = source.finalStatus;
+  if (!effectiveOutputs.length) {
+    const inferred = [...baseRows].reverse().find((row) => row.status === 'success' && row.output);
+    if (inferred) effectiveOutputs = [{ ...inferred, legacyInferred: true }];
+    finalStatus ||= inferred ? 'legacy-inferred' : 'unavailable';
+  } else if (!finalStatus) {
+    const successful = effectiveOutputs.filter((row) => row.status === 'success' && row.output);
+    finalStatus = successful.length === effectiveOutputs.length ? 'available' : successful.length ? 'partial' : 'unavailable';
+  }
+  const processResults = asArray(source.processResults).length
+    ? source.processResults.map((row) => normalizeResultRow(row, nodes, runDetail)).filter(isRuntimeNode)
+    : baseRows.filter((row) => row.nodeType !== 'output');
+
+  const explicitFiles = [...asArray(source.files), ...asArray(source.artifacts), ...asArray(result.files), ...asArray(result.artifacts)]
+    .map((file) => normalizeFile(file)).filter(Boolean);
+  const stateFiles = Object.entries(asObject(runDetail.nodeStates)).flatMap(([nodeId, state]) => {
     const nodeLabel = nodes.get(nodeId)?.data?.label || nodeId;
     return asArray(state?.artifacts).map((file) => normalizeFile(file, { nodeId, nodeLabel })).filter(Boolean);
   });
-  const files = uniqueBy([...explicitFiles, ...stateFiles], (file) => `${file.nodeLabel || ''}:${file.path}`);
+  const allFiles = uniqueBy([...explicitFiles, ...stateFiles], (file) => `${file.nodeId || file.nodeLabel || ''}:${file.path}`);
+  const explicitFinalFiles = asArray(source.finalArtifacts).map((file) => normalizeFile(file)).filter(Boolean);
+  const explicitProcessFiles = asArray(source.processArtifacts).map((file) => normalizeFile(file)).filter(Boolean);
+  const outputIds = new Set(effectiveOutputs.map((row) => row.nodeId));
+  const finalFiles = explicitFinalFiles.length ? explicitFinalFiles : allFiles.filter((file) => outputIds.has(file.nodeId));
+  const processFiles = explicitProcessFiles.length ? explicitProcessFiles : allFiles.filter((file) => !outputIds.has(file.nodeId));
 
-  const coreText = textOf(first(
-    source.coreText, source.primaryText, source.markdown, source.content,
-    result.coreText, result.primaryText, result.markdown, result.content, result.text,
-    source.primaryResult?.output, result.primaryResult?.output,
-    finalOutput(runDetail),
-  ));
+  const selectedOutput = effectiveOutputs.find((row) => row.status === 'success' && row.output) || null;
+  const coreText = textOf(first(source.coreText, source.primaryText, source.primaryResult?.output, selectedOutput?.output));
   const extractedLinks = (coreText.match(URL_PATTERN) || []).map(normalizeLink).filter(Boolean);
   const links = uniqueBy([
     ...asArray(source.links).map(normalizeLink),
@@ -116,26 +223,24 @@ export function adaptRunResults(payload, context = {}) {
     ...extractedLinks,
   ].filter(Boolean), (link) => link.url);
 
-  const explicitEvents = [
+  const liveByNode = new Map(asArray(context.events).filter((event) => event?.nodeId).map((event) => [event.nodeId, normalizeRunEvent(event)]));
+  const sourceTimeline = asArray(source.nodeTimeline).length
+    ? source.nodeTimeline.map((row) => normalizeResultRow(row, nodes, runDetail)).filter(isRuntimeNode)
+    : fallback;
+  const nodeTimeline = sourceTimeline.map((row) => {
+    const live = liveByNode.get(row.nodeId);
+    const merged = live ? { ...row, status: live.status || row.status, error: live.text || row.error } : row;
+    return { ...merged, id: `node:${row.nodeId}`, kind: 'node', text: timelineText(merged), meta: merged.durationMs != null ? `${merged.durationMs}ms` : undefined };
+  });
+  const runEvents = [
     ...asArray(context.events), ...asArray(source.events), ...asArray(source.process),
     ...asArray(result.events), ...asArray(result.process),
-  ];
-  const stateEvents = Object.entries(nodeStates).map(([nodeId, state]) => ({
-    kind: 'node', nodeId, nodeLabel: nodes.get(nodeId)?.data?.label || nodeId,
-    status: state?.status, text: state?.error || '', durationMs: state?.durationMs,
-  }));
-  const events = (explicitEvents.length ? explicitEvents : stateEvents).map(normalizeRunEvent);
+  ].filter((event) => !event?.nodeId).map(normalizeRunEvent);
 
-  const explicitIssues = [
-    ...asArray(source.issues), ...asArray(source.problems), ...asArray(source.errors),
-    ...asArray(result.issues), ...asArray(result.problems),
-  ];
-  const stateIssues = Object.entries(nodeStates)
+  const explicitIssues = [...asArray(source.issues), ...asArray(source.problems), ...asArray(source.errors), ...asArray(result.issues), ...asArray(result.problems)];
+  const stateIssues = Object.entries(asObject(runDetail.nodeStates))
     .filter(([, state]) => state?.error || ['error', 'canceled'].includes(state?.status))
-    .map(([nodeId, state]) => ({
-      nodeId, nodeLabel: nodes.get(nodeId)?.data?.label || nodeId,
-      status: state.status || 'error', message: state.error || `节点${state.status === 'canceled' ? '已取消' : '执行失败'}`,
-    }));
+    .map(([nodeId, state]) => ({ nodeId, nodeLabel: nodes.get(nodeId)?.data?.label || nodeId, status: state.status || 'error', message: state.error || `节点${state.status === 'canceled' ? '已取消' : '执行失败'}` }));
   const issues = [...explicitIssues, ...stateIssues].map((issue, index) => {
     if (typeof issue === 'string') return { id: `issue-${index}`, status: 'error', message: issue };
     const value = asObject(issue);
@@ -148,7 +253,6 @@ export function adaptRunResults(payload, context = {}) {
     };
   });
 
-  const review = asObject(source.review || source.acceptance || result.review || result.acceptance || runDetail.review);
   return {
     runId,
     status: first(source.status, source.run?.status, runDetail.status, context.status?.last, context.status?.status, context.status?.running ? 'running' : undefined, 'idle'),
@@ -156,18 +260,19 @@ export function adaptRunResults(payload, context = {}) {
     startedAt: first(source.startedAt, source.run?.startedAt, runDetail.startedAt),
     durationMs: first(source.durationMs, source.run?.durationMs, runDetail.durationMs),
     summary: textOf(first(source.summary, result.summary, source.description, result.description)),
+    finalStatus,
+    outputResults: effectiveOutputs,
+    processResults,
     coreText,
-    files,
+    finalFiles,
+    processFiles,
+    files: allFiles,
     links,
     input: textOf(first(source.input, source.inputs?.triggerInput, result.input, result.inputs?.triggerInput, runDetail.triggerInput, context.triggerInput)),
-    events,
+    nodeTimeline,
+    runEvents,
+    events: nodeTimeline,
     issues,
-    review: {
-      status: first(review.status, review.decision, review.result, 'pending'),
-      comment: textOf(first(review.comment, review.note, review.reason)),
-      reviewer: first(review.reviewer, review.reviewedBy, review.by, review.author),
-      reviewedAt: first(review.reviewedAt, review.updatedAt, review.createdAt),
-    },
     raw: payload,
   };
 }
