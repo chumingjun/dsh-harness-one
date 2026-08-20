@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 3,
+  "variables": [],
+  "inputSchema": {
+    "fields": []
+  },
+  "dependencies": {
+    "globalVariables": [],
+    "credentials": []
+  },
+  "id": "wf_mt14cem3",
+  "name": "新工作流",
+  "updatedAt": "2026-08-20T06:11:36.132Z",
+  "graph": {
+    "nodes": [
+      {
+        "id": "n_input_mt14ckv5aa9",
+        "type": "input",
+        "position": {
+          "x": -200,
+          "y": -20
+        },
+        "data": {
+          "label": "开始",
+          "text": "",
+          "attachments": [],
+          "tools": [],
+          "planMode": false,
+          "skills": [],
+          "continueOnFail": false,
+          "allowPrivate": false
+        }
+      },
+      {
+        "id": "n_agent_mt14d6rki6v",
+        "type": "agent",
+        "position": {
+          "x": 120,
+          "y": -20
+        },
+        "data": {
+          "label": "新智能体",
+          "prompt": "总结这个飞书文档https://ccpg1987.feishu.cn/docx/LLPLdjaQzor9rmxKub3c1Zefnlh?from=from_copylink",
+          "tools": [],
+          "attachments": [],
+          "planMode": false,
+          "skills": [],
+          "continueOnFail": false,
+          "allowPrivate": false
+        }
+      },
+      {
+        "id": "n_output_mt14dtn6ypv",
+        "type": "output",
+        "position": {
+          "x": 440,
+          "y": -20
+        },
+        "data": {
+          "label": "新输出",
+          "tools": [],
+          "attachments": [],
+          "planMode": false,
+          "skills": [],
+          "continueOnFail": false,
+          "allowPrivate": false,
+          "inputTemplate": ""
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e_mt14d6rk",
+        "source": "n_input_mt14ckv5aa9",
+        "target": "n_agent_mt14d6rki6v"
+      },
+      {
+        "id": "e_mt14dtn6",
+        "source": "n_agent_mt14d6rki6v",
+        "target": "n_output_mt14dtn6ypv"
+      }
+    ]
+  },
+  "ok": true
+}

@@ -1,0 +1,100 @@
+{
+  "id": "wf_msywutms",
+  "name": "渗水报修处理",
+  "updatedAt": "2026-08-20T06:07:20.280Z",
+  "graph": {
+    "nodes": [
+      {
+        "id": "n_input_mt142h3y25l",
+        "type": "input",
+        "position": {
+          "x": 60,
+          "y": 200
+        },
+        "data": {
+          "label": "报修单输入",
+          "text": "3栋2单元501室 张先生 13800001111：厨房水槽下水缓慢已有三天，偶尔返味，希望尽快上门查看。",
+          "attachments": [
+            {
+              "filename": "e83502e355a2fea0b85b.png",
+              "size": 59494
+            },
+            {
+              "filename": "bac4c3fd2eeabde5b956.png",
+              "size": 37201
+            },
+            {
+              "filename": "5d6e602b8ac88e5cc6d7.png",
+              "size": 40564
+            },
+            {
+              "filename": "5d6e602b8ac88e5cc6d7.png",
+              "size": 40564
+            }
+          ],
+          "tools": [],
+          "planMode": false,
+          "skills": [],
+          "continueOnFail": false,
+          "allowPrivate": false
+        }
+      },
+      {
+        "id": "n_agent_mt142h3y57z",
+        "type": "agent",
+        "position": {
+          "x": 380,
+          "y": 190
+        },
+        "data": {
+          "label": "工单整理",
+          "prompt": "你是物业客服助手。把上游的报修信息整理为规范工单，写成 gongdan.md 落盘：提取报修人、联系方式、位置、故障描述、紧急程度（低/中/高）。",
+          "tools": [],
+          "attachments": [],
+          "planMode": false,
+          "skills": [],
+          "continueOnFail": false,
+          "allowPrivate": false
+        }
+      },
+      {
+        "id": "n_output_mt142h3yfq2",
+        "type": "output",
+        "position": {
+          "x": 700,
+          "y": 210
+        },
+        "data": {
+          "label": "工单输出",
+          "tools": [],
+          "attachments": [],
+          "planMode": false,
+          "skills": [],
+          "continueOnFail": false,
+          "allowPrivate": false
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e_mt142h3y_0",
+        "source": "n_input_mt142h3y25l",
+        "target": "n_agent_mt142h3y57z"
+      },
+      {
+        "id": "e_mt142h3y_1",
+        "source": "n_agent_mt142h3y57z",
+        "target": "n_output_mt142h3yfq2"
+      }
+    ]
+  },
+  "schemaVersion": 3,
+  "variables": [],
+  "inputSchema": {
+    "fields": []
+  },
+  "dependencies": {
+    "globalVariables": [],
+    "credentials": []
+  }
+}

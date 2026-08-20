@@ -1,0 +1,15 @@
+{
+  "name": "dsh-ccpg-brand",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "main": "lib/index.js",
+  "description": "CCPG 品牌定制：官方 Web UI 首页品牌改为 CCPG AI 工作台（tapIndex 改 title + 注入样式隐藏原字标换 CCPG logo；exact 路由服务 logo/favicon）",
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "*"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  }
+}

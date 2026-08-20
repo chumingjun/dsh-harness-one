@@ -1,0 +1,26 @@
+{
+  "name": "dsh-ccpg-larkauth",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "main": "lib/index.js",
+  "description": "Workflow One 飞书账号授权：lark-cli Device Flow 登录（扫码）+ 授权状态管理，/wf1/api/lark-auth 端点",
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "*"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  }
+}

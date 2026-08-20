@@ -1,0 +1,19 @@
+{
+  "name": "dsh-ccpg-orchestrator",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "main": "lib/index.js",
+  "description": "Workflow One 物业编排插件：DAG 调度 + 节点级 dsh agent 执行（ctx.agents 进程内驱动）+ HTTP API/SSE",
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/dsh-session": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "cron-parser": "^4.9.0"
+  },
+  "peerDependenciesMeta": {}
+}

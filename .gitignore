@@ -1,0 +1,24 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+
+# macOS
+.DS_Store
+
+# GUI test screenshots (local verification artifacts, not referenced by docs)
+gui-test-screenshots/
+
+# runtime state (top-level Express fallback demo)
+data/graph.json
+
+# runtime state (dsh plugin): secrets, run history, agent workspaces, uploads
+dsh-plugins/dsh-ccpg-orchestrator/data/credentials.json
+dsh-plugins/dsh-ccpg-orchestrator/data/runs/
+dsh-plugins/dsh-ccpg-orchestrator/data/workspaces/
+dsh-plugins/dsh-ccpg-orchestrator/data/attachments/
+dsh-plugins/dsh-ccpg-orchestrator/data/graph.json
+dsh-plugins/dsh-ccpg-orchestrator/data/triggers.json
+dsh-plugins/dsh-ccpg-orchestrator/data/global-variables.json
+dsh-plugins/dsh-ccpg-tools/data/credentials.json

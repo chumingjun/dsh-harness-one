@@ -1,0 +1,13 @@
+{
+  "name": "dsh-ccpg-tools",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "main": "lib/index.js",
+  "description": "Workflow One 物业编排工具插件：飞书文档读写、工作区文件、技能加载，注册到 ctx.tools",
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "*",
+    "@deepseek-ai/dsh-tools": "*"
+  },
+  "peerDependenciesMeta": {}
+}

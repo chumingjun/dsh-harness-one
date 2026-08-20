@@ -1,0 +1,31 @@
+{
+  "name": "mvp-canvas-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "npm run test:variables && npm run test:results",
+    "test:variables": "node src/variables.test.mjs && node src/global-variables.test.mjs && node src/json-response.test.mjs && node src/api-base.test.mjs && node src/trial-request.test.mjs && node src/variable-scope.test.mjs && node src/workflow-serialization.test.mjs",
+    "test:results": "node src/result-adapter.test.mjs"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.9",
+    "@xyflow/react": "^12.3.0",
+    "lucide-react": "^1.32.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.0"
+  }
+}

@@ -1,0 +1,169 @@
+// 节点运行详情弹窗：点击运行日志的节点行打开。
+// 数据来自 /wf1/api/node-detail —— 输入（模板渲染后）、输出全文、agent 过程轨迹
+// （轮次 / 助手文本 / 每一次工具调用的参数与结果）。轨迹由 orchestrator 在节点
+// 完成时从 dsh session 事件折叠存档；旧运行现场从会话存档回放补齐。
+
+import { useEffect, useState } from 'react';
+import { Modal } from './ui.jsx';
+import { apiUrl } from './api.js';
+import { ArtifactLinks } from './ArtifactPreview.jsx';
+
+const ENTRY_ICON = { input: '↳', inject: '⊕', assistant: '✦', tool: '🔧', 'turn-end': '↩' };
+const ENTRY_LABEL = { input: '输入', inject: '注入上下文', assistant: '助手', tool: '工具调用', 'turn-end': '轮次结束' };
+
+function kv(rows) {
+  return rows.filter(Boolean).join(' · ');
+}
+
+function TraceEntry({ en, i }) {
+  const [open, setOpen] = useState(false);
+  if (en.kind === 'turn-end') {
+    return <div className="trace-row trace-turn">—— 第 {i} 轮结束（{en.reason || 'done'}）——</div>;
+  }
+  if (en.kind === 'input' || en.kind === 'inject') {
+    return (
+      <div className={`trace-row trace-${en.kind}`}>
+        <span className="trace-tag">{ENTRY_LABEL[en.kind]}</span>
+        <pre className="trace-text">{en.text}</pre>
+      </div>
+    );
+  }
+  if (en.kind === 'assistant') {
+    return (
+      <div className="trace-row trace-assistant">
+        <span className="trace-tag">{ENTRY_ICON.assistant} {ENTRY_LABEL.assistant}</span>
+        <pre className="trace-text">{en.text}</pre>
+        {en.usage && (
+          <span className="trace-usage">
+            {en.usage.outputTokens ? `${en.usage.outputTokens} tok` : ''}
+            {en.usage.inputTokens ? ` + ${en.usage.inputTokens} in` : ''}
+            {en.usage.cacheReadTokens ? ` (${en.usage.cacheReadTokens} cache)` : ''}
+          </span>
+        )}
+      </div>
+    );
+  }
+  // tool：参数 / 结果可展开（默认收起，长内容不刷屏）
+  const args = (() => { try { return JSON.stringify(JSON.parse(en.args), null, 2); } catch { return en.args; } })();
+  return (
+    <div className={`trace-row trace-tool ${en.result?.ok === false ? 'trace-tool-err' : ''}`}>
+      <button type="button" className="trace-tool-head" onClick={() => setOpen((v) => !v)}>
+        <span className="trace-caret">{open ? '▾' : '▸'}</span>
+        <span className="trace-tool-name">{en.name}</span>
+        {en.turn != null && <span className="trace-usage">第 {en.turn} 轮</span>}
+        {en.result ? (
+          <span className={`trace-tool-flag ${en.result.ok ? '' : 'flag-err'}`}>{en.result.ok ? '✓' : '✗'}</span>
+        ) : <span className="trace-tool-flag">…</span>}
+        {en.result?.text && <span className="trace-tool-brief">{en.result.text.replace(/\s+/g, ' ').slice(0, 80)}</span>}
+      </button>
+      {open && (
+        <div className="trace-tool-body">
+          <div className="trace-block">
+            <span className="trace-block-label">参数</span>
+            <pre className="trace-text">{args || '(空)'}</pre>
+          </div>
+          {en.result && (
+            <div className="trace-block">
+              <span className="trace-block-label">结果{en.result.ok === false ? '（失败）' : ''}</span>
+              <pre className="trace-text">{en.result.text || '(空)'}</pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function NodeDetailModal({ runId, nodeId, onClose }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [tab, setTab] = useState('trace');
+
+  useEffect(() => {
+    let alive = true;
+    fetch(apiUrl(`/node-detail?run=${encodeURIComponent(runId)}&node=${encodeURIComponent(nodeId)}`))
+      .then((r) => r.json())
+      .then((d) => {
+        if (!alive) return;
+        if (d.error) setErr(d.error);
+        else {
+          setData(d);
+          setTab(d.trace ? 'trace' : 'io');
+        }
+      })
+      .catch((e) => alive && setErr(String(e)));
+    return () => { alive = false; };
+  }, [runId, nodeId]);
+
+  const trace = data?.trace;
+  const toolCount = trace?.entries?.filter((e) => e.kind === 'tool').length ?? 0;
+
+  return (
+    <Modal title={`节点详情 · ${data?.label || nodeId}`} onClose={onClose} footer={
+      <button className="btn" onClick={onClose}>关闭</button>
+    }>
+      {err && <p className="panel-error">{err}</p>}
+      {!data && !err && <p className="panel-empty">加载中…</p>}
+      {data && (
+        <>
+          <div className="detail-meta">
+            <span className={`log-status dot-${data.status}`}>{data.status}</span>
+            {data.state?.durationMs != null && <span>{(data.state.durationMs / 1000).toFixed(1)}s</span>}
+            {data.state?.chars != null && <span>{data.state.chars} 字</span>}
+            {data.state?.turns != null && <span>{data.state.turns} 轮</span>}
+            {toolCount > 0 && <span>{toolCount} 次工具调用</span>}
+            {data.state?.model && <span>{data.state.model}</span>}
+            {data.state?.toleratedError && <span className="detail-tol">失败后继续：{data.state.toleratedError}</span>}
+          </div>
+
+          <div className="detail-tabs">
+            {trace && <button className={`log-filter ${tab === 'trace' ? 'log-filter-on' : ''}`} onClick={() => setTab('trace')}>执行过程</button>}
+            <button className={`log-filter ${tab === 'io' ? 'log-filter-on' : ''}`} onClick={() => setTab('io')}>输入 / 输出</button>
+          </div>
+
+          {tab === 'io' && (
+            <div className="detail-io">
+              {data.input != null && (
+                <div className="detail-io-block">
+                  <span className="trace-block-label">输入（模板渲染后）</span>
+                  <pre className="trace-text">{data.input || '(空)'}</pre>
+                </div>
+              )}
+              <div className="detail-io-block">
+                <span className="trace-block-label">输出全文</span>
+                <pre className="trace-text">{data.output || '(空)'}</pre>
+              </div>
+              {data.state?.error && (
+                <div className="detail-io-block">
+                  <span className="trace-block-label">错误</span>
+                  <pre className="trace-text panel-error">{data.state.error}</pre>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === 'trace' && trace && (
+            <div className="detail-trace">
+              {trace.entries?.map((en, i) => <TraceEntry key={i} en={en} i={i} />)}
+              {(!trace.entries || trace.entries.length === 0) && (
+                <p className="panel-empty">无过程记录（该节点可能未真正执行，或是旧版运行）</p>
+              )}
+              {data.state?.artifacts?.length > 0 && (
+                <div className="detail-io-block">
+                  <span className="trace-block-label">工作区产物</span>
+                  <ArtifactLinks
+                    nodeLabel={data.label || nodeId}
+                    artifacts={data.state.artifacts}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          {tab === 'trace' && !trace && (
+            <p className="panel-empty">该运行没有过程轨迹（旧版运行记录，或会话存档已清理）</p>
+          )}
+        </>
+      )}
+    </Modal>
+  );
+}
