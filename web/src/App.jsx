@@ -157,31 +157,37 @@ export default function App() {
           body: JSON.stringify({ canvasId: canvasIdRef.current, graph: g, workflowId: null }),
         }).catch(() => {});
       });
-    fetch(apiUrl('/tools')).then((r) => r.json()).then(setCatalog).catch(() => {});
-    fetch(apiUrl('/skills')).then((r) => r.json()).then((d) => setSkills(d.skills || [])).catch(() => {});
-    fetch(apiUrl('/llm-config')).then((r) => r.json()).then(setLLMConfig).catch(() => {});
-    fetch(apiUrl('/runtime-config')).then((r) => r.json()).then((d) => setRuntime(d.runtime || { available: false })).catch(() => {});
-    fetch(apiUrl('/approvals')).then((r) => r.json()).then((d) => setApprovals(d.approvals || [])).catch(() => {});
-    fetch(apiUrl('/feishu-credentials')).then((r) => r.json()).then((d) => setFeishuCreds(d.credentials || [])).catch(() => {});
-    fetch(apiUrl('/lark-auth')).then((r) => r.json()).then((d) => setLarkStatus(d.status || null)).catch(() => {});
-    fetch(apiUrl('/runs'))
-      .then((response) => response.json())
-      .then(async (data) => {
-        const latest = data.runs?.[0];
-        if (!latest?.runId) return;
-        const response = await fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(latest.runId)}`));
-        if (!response.ok) return;
-        const detail = await response.json();
-        setInspectedRunId(latest.runId);
-        setRunDetails((current) => ({ ...current, [latest.runId]: detail }));
-        setRunStatus((current) => ({
-          ...current,
-          running: Boolean(latest.live),
-          runId: latest.runId,
-          last: latest.status,
-        }));
-      })
-      .catch(() => {});
+    (async () => {
+      const j = (p) => fetch(apiUrl(p)).then((r) => r.json()).catch(() => null);
+      // 并行拉取全部初始数据（原先逐条 await 串行，首屏时间被逐段叠加）
+      const [catalogData, skillsData, llmData, runtimeData, approvalsData, credsData, larkData, runsData] = await Promise.all([
+        j('/tools'), j('/skills'), j('/llm-config'), j('/runtime-config'), j('/approvals'), j('/feishu-credentials'), j('/lark-auth'), j('/runs'),
+      ]);
+      if (catalogData) setCatalog(catalogData);
+      if (skillsData) setSkills(skillsData.skills || []);
+      if (llmData) setLLMConfig(llmData);
+      if (runtimeData) setRuntime(runtimeData.runtime || { available: false });
+      if (approvalsData) setApprovals(approvalsData.approvals || []);
+      if (credsData) setFeishuCreds(credsData.credentials || []);
+      if (larkData) setLarkStatus(larkData.status || null);
+      const latest = runsData?.runs?.[0];
+      if (latest?.runId) {
+        try {
+          const response = await fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(latest.runId)}`));
+          if (response.ok) {
+            const detail = await response.json();
+            setInspectedRunId(latest.runId);
+            setRunDetails((current) => ({ ...current, [latest.runId]: detail }));
+            setRunStatus((current) => ({
+              ...current,
+              running: Boolean(latest.live),
+              runId: latest.runId,
+              last: latest.status,
+            }));
+          }
+        } catch { /* 详情拉取失败不阻塞首屏 */ }
+      }
+    })();
   }, [setNodes, setEdges]);
 
   // SSE：事件 → 节点状态 + 进度 + 结构化日志
@@ -441,7 +447,9 @@ export default function App() {
     return { graph, graphFingerprint: data.graphFingerprint || null };
   }, [toGraph, currentWf, toast, doLint]);
 
-  // 自动保存：有改动 2.5s 静默保存；同一节流窗内同步画布状态给 AI 助手工具
+  // 自动保存：有改动 2.5s 静默保存；同一节流窗内同步画布状态给 AI 助手工具。
+  // 注意依赖只有 dirty：save() 内部经 nodesRef/edgesRef 读最新图，若把 nodes/edges
+  // 放进依赖，拖动时每个 pointermove 都会重置定时器，保存被无限推迟（饥饿）。
   useEffect(() => {
     if (!dirty) return;
     const t = setTimeout(() => {
@@ -450,7 +458,7 @@ export default function App() {
         .catch((error) => toast(error?.message || '自动保存失败', 'error'));
     }, 2500);
     return () => clearTimeout(t);
-  }, [dirty, nodes, edges, save, toast]);
+  }, [dirty, save, toast]);
 
   // 离开页面前提醒未保存
   useEffect(() => {
@@ -988,19 +996,29 @@ export default function App() {
     toast(`已在连线间插入「${NODE_REGISTRY.find((k) => k.type === type)?.label || type}」节点`, 'success', 2400);
   }, [setNodes, setEdges, snapshot, markDirty, toast]);
 
-  // 边样式：状态着色 + 条件分支标签；走自定义 EdgeLine（中点＋插入），样式透传
+  // 边样式：状态着色 + 条件分支标签；走自定义 EdgeLine（中点＋插入），样式透传。
+  // 拆两层 memo：状态映射只依赖节点的【运行状态】序列（拖动/改数据不重建边），
+  // 布局变化才重建边对象——styledEdges 随 [edges, statusKey, insertNodeOnEdge] 重建。
+  const edgeStatusKey = useMemo(
+    () => nodes.map((n) => `${n.id}:${n.data?.runStatus || 'idle'}`).join('|'),
+    [nodes],
+  );
   const styledEdges = useMemo(() => {
-    const statusOf = (id) => nodes.find((n) => n.id === id)?.data?.runStatus || 'idle';
+    const statusOf = new Map();
+    for (const part of edgeStatusKey.split('|')) {
+      const [id, st] = part.split(':');
+      statusOf.set(id, st);
+    }
     const EDGE_COLOR = { success: '#10b981', running: '#f59e0b', error: '#ef4444', skipped: '#9ca3af', canceled: '#94a3b8' };
     return edges.map((e) => {
-      const src = statusOf(e.source);
+      const src = statusOf.get(e.source) || 'idle';
       const color = EDGE_COLOR[src] || '#94a3b8';
       const active = src === 'success' || src === 'running';
       const branch = e.branch || e.data?.branch;
       return {
         ...e,
         type: 'insertable',
-        // onInsert 直接注入边 data：styledEdges 随 [edges,nodes] 重建，insertNodeOnEdge 引用稳定
+        // onInsert 直接注入边 data：styledEdges 随 [edges,statusKey] 重建，insertNodeOnEdge 引用稳定
         data: { onInsert: insertNodeOnEdge, branch },
         label: branch ? (branch === 'true' ? '是' : '否') : undefined,
         labelStyle: { fill: '#A8A29E', fontSize: 11 },
@@ -1010,7 +1028,7 @@ export default function App() {
         markerEnd: { type: MarkerType.ArrowClosed, color },
       };
     });
-  }, [edges, nodes, insertNodeOnEdge]);
+  }, [edges, edgeStatusKey, insertNodeOnEdge]);
 
   const upstreamNodes = useMemo(() => {
     if (!selectedNode) return [];
