@@ -19,9 +19,13 @@ data/graph.json
 # runtime state (dsh plugin): secrets, run history, agent workspaces, uploads
 dsh-plugins/dsh-ccpg-orchestrator/data/credentials.json
 dsh-plugins/dsh-ccpg-orchestrator/data/runs/
+dsh-plugins/dsh-ccpg-orchestrator/data/run-artifacts/
 dsh-plugins/dsh-ccpg-orchestrator/data/workspaces/
 dsh-plugins/dsh-ccpg-orchestrator/data/attachments/
 dsh-plugins/dsh-ccpg-orchestrator/data/graph.json
 dsh-plugins/dsh-ccpg-orchestrator/data/triggers.json
 dsh-plugins/dsh-ccpg-orchestrator/data/global-variables.json
 dsh-plugins/dsh-ccpg-tools/data/credentials.json
+
+# top-level Express fallback runtime artifacts (login QR / agent outputs)
+data/workspaces/

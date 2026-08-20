@@ -31,7 +31,7 @@ DSH_NODE=/tmp/node-v22.20.0-darwin-arm64/bin/node \
 ## 功能
 
 - **可拖拽画布**（React Flow）：节点拖动、连线（禁止自环）、缩放、小地图
-- **三类节点**：输入（文本/附件/飞书链接）、智能体（提示词+工具勾选）、输出（汇总上游）
+- **节点类型**：输入（文本/附件/飞书链接）、智能体（提示词+工具勾选）、**脚本（QuickJS 沙箱 JavaScript）**、条件分支、人工审批、HTTP 请求、输出（汇总上游）、注释
 - **节点属性面板**：点选节点后编辑名称、提示词、输入内容、勾选工具、上传附件
 - **智能体工具勾选**：每个智能体节点可勾选 `read_file` / `web_fetch` / `feishu_doc_read` / `feishu_doc_write`；真实模型走 function-calling / tool_use 工具循环，mock 模式演示单次调用
 - **节点级 LLM 配置**：每个智能体节点可单独设置**模型**（如 glm-5.3 / glm-5.2 / deepseek-chat）、**渠道**（GLM 的 anthropic 订阅通道 / openai 按量通道）、**工具循环轮数上限**（默认 6，最大 20）。留空则用全局默认——同一个图里不同节点可用不同模型组队协作。节点卡片显示所用模型徽标，运行记录也记录每个节点实际使用的模型。
@@ -47,6 +47,9 @@ DSH_NODE=/tmp/node-v22.20.0-darwin-arm64/bin/node \
   - 新引用绑定稳定节点 ID，节点重命名不影响运行；旧 `{{节点名}}`、`{{@节点名}}` 和 `{{节点名.json.path}}` 继续兼容并在 lint 中提示升级。
   - 模板留空或不含变量时保留原来的全量上游注入行为，旧图与旧运行记录不需要改写。
 - **Plan-Execute 模式（agent 节点开关，默认关）**：打开后该节点执行走三阶段——① 规划器基于任务生成 3-6 步计划（不带工具，无副作用）→ ② 按计划逐步执行，每步输出 `STEP n. 结果`，可调用勾选的工具，某步失败标注并继续 → ③ 总结器基于计划+执行记录产出最终交付（不带工具）。计划/执行全程记录在运行结果的 `planTrace` 里；规划解析失败自动回退为直接执行。适合复杂多步任务；简单整理类任务保持关闭更快更省。节点卡片显示 🗺 Plan 徽标。
+- **脚本节点（QuickJS 沙箱）**：固定 JavaScript，声明同步 `function main(input, workspace)` 返回 JSON。命名参数支持「表达式」（完整变量，仅直接上游）或「JSON 常量」两种模式；workspace 仅可 list/read/write/remove 本节点工作区目录（拒绝穿越/反斜杠/符号链接）；超时 100-10000ms 可配；可选 outputSchema 校验结构化输出（校验失败节点报错）。返回值进入变量树（`{{node["..."].data.字段}}`），AI 助手可代建脚本节点。
+- **运行结果结构化**：结果面板时间线按图拓扑稳定排序（跳过的分支节点也可见）；最终结果取输出节点、失败不被中间结果顶替；过程节点产物折叠分组，多输出可切换；产物下载流式（Range 206、统一 MIME 含 Office/PDF、HTML 预览 sandbox CSP）。产物全屏预览：PDF/DOCX/XLS(X)/PPTX 本地渲染（document-preview 插件），旧格式走下载。
+- **保存与试运行健壮性**：保存/自动保存失败 toast 报错并中止运行；命名工作流运行带 graphFingerprint，服务端 409 拒绝与已保存图不一致的请求；试运行关闭弹窗即中断节点执行，按节点超时配置报错。
 - **并发执行**：就绪即发调度器——分支无依赖即并行执行（SSE 事件流里可见 running 状态重叠）
 - **分支容错**：某分支失败只跳过"全部上游都失败"的下游节点；仍有成功上游的节点照常执行（缺失输入按空处理），运行整体标 error 但其余分支完整跑完
 - **环检测**：成环直接拒绝执行
@@ -128,13 +131,17 @@ data/attachments/       上传的附件存储
 
 ## dsh 产品插件形态（dsh-ccpg 系插件，跑在 web profile）——完全体
 
-`dsh-plugins/` 下三个 Cordis 插件 + 一个 profile，整个产品跑在 dsh 进程内：
+`dsh-plugins/` 下七个 Cordis 插件 + 一个 profile，整个产品跑在 dsh 进程内（详见 dsh-plugins/README.md）：
 
 | 包 | 职责 |
 |---|---|
 | `dsh-ccpg-tools` | 飞书文档读写 + load_skill 技能渐进加载，注册到 `ctx.tools`（与 dsh 自带 bash/fs 工具同池） |
-| `dsh-ccpg-orchestrator` | DAG 调度引擎；**agent 节点 = `ctx.agents.create` 进程内真实 dsh agent**（followup → whenIdle → session events 聚合输出，同官方 headless 驱动模式）；节点 cwd = 工作区；`/wf1/api/*` HTTP + SSE 挂 `ctx.webServer` |
+| `dsh-ccpg-orchestrator` | DAG 调度引擎；**agent 节点 = `ctx.agents.create` 进程内真实 dsh agent**；QuickJS 脚本节点；`/wf1/api/*` HTTP + SSE 挂 `ctx.webServer` |
 | `dsh-ccpg-web` | 画布静态托管（`web-dist/`），SPA fallback `/wf1/` |
+| `dsh-ccpg-canvasui` | 官方 dsh Web UI 画布视图（conversation.view tab 载 /wf1/；官方聊天经 canvas_* 工具改图） |
+| `dsh-ccpg-document-preview` | 文档全屏预览（PDF/DOCX/XLS(X)/PPTX 本地渲染，Workflow One 全入口共享） |
+| `dsh-ccpg-larkauth` | 飞书扫码登录（lark-cli Device Flow，token 由 CLI 自管零落盘；启动自举 + user token 后台续约；官方 dsh Web UI 设置面板「飞书账号」唯一入口） |
+| `dsh-ccpg-brand` | 品牌定制（CCPG logo + 聊天 hero 标题） |
 
 - profile：`~/.dsh/profiles/wf1/`（dsh-base + 上述插件行 + GLM provider patch，端口 4021）
 - 启动：`sh dsh-plugins/start.sh` → 画布 http://127.0.0.1:4021/wf1/
@@ -168,3 +175,11 @@ data/attachments/       上传的附件存储
 ### 工作流库（2026-08-19）
 
 侧边栏新增「工作流」tab：命名工作流列表（卡片含名称/智能体数/节点数/更新时间），支持新建/打开编辑/重命名/删除。后端 `GET|POST /wf1/api/workflows` + `GET|DELETE|PATCH /wf1/api/workflows/detail`，存储 `<orchestrator>/data/workflows/<id>.json`。画布打开工作流后「保存」写回该工作流（未打开时保持草稿 graph 旧行为）。旧 Express 入口（4020）同步实现同语义端点，双入口一致。
+
+### 本轮新增（2026-08-20）
+
+- **脚本节点**：QuickJS 沙箱执行（引擎 NodeKind + 前端 CodeMirror 编辑器 + AI 助手/变量树接入），详见「功能」节
+- **结果面板重构**：拓扑稳定时间线、输出节点最终结果、过程产物分组、产物流式下载与全屏预览
+- **保存健壮性**：保存失败可见、命名工作流运行指纹校验（409）、试运行可中断/超时
+- **larkauth 自举**：lark-cli 自动安装、user token 后台续约（refresh 轮换长期有效）、feishu-cli 技能默认全 agent 开放
+- **第七插件 document-preview**：文档全屏预览；canvasui 聊天栏抽 `shared/chat-pane.js` 构建期内联；pack.sh 七插件打包（含 bundle 重建校验），setup.sh 安装失败即中止
