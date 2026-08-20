@@ -25,13 +25,16 @@ import { SessionId } from '@deepseek-ai/dsh-session';
 import { renderTemplate, validateTemplate } from './template.js';
 import { describeNodeOutput, normalizeExecutionResult, RUN_SCHEMA_VERSION } from './output-contract.js';
 import { resolveInside, safeFileId, safeFilename } from './safe-path.js';
+import { runScript } from './script-runner.js';
 import {
   createRunExport,
   createRunResults,
+  isPreviewableMediaType,
+  mediaTypeFor,
   normalizeRunDocument,
   resolveRunArtifact,
-  REVIEW_STATUSES,
   snapshotRunArtifacts,
+  streamArtifactResponse,
 } from './run-results.js';
 import { graphFingerprint, runMatchesGraphScope, selectScopedRun, summarizeNodeStates, summarizeOutputs, summarizeStructuredOutputs } from './run-scope.js';
 import { buildVariableSchema } from './variable-schema.js';
@@ -150,7 +153,7 @@ export function apply(ctx, config) {
       },
     },
     canvas_graph_patch: {
-      description: '批量修改画布图（原子生效，出错整批拒绝）。每批 ≤60 个操作。ops 元素字段：op（必填，addNode|updateNode|renameNode|deleteNode|connect|deleteEdge|updateEdge）；addNode: type 节点类型 input/agent/condition/approval/http/output/note、label 中文名、data 节点字段对象、after 上游节点id自动连线、connect=false 关闭自动连线、position {x,y}；updateNode/renameNode/deleteNode/deleteEdge/updateEdge: id 目标id（updateNode 另需 data，renameNode 另需 label）；connect: from/to 源目标id，branch 条件分支 true/false。',
+      description: '批量修改画布图（原子生效，出错整批拒绝）。每批 ≤60 个操作。ops 元素字段：op（必填，addNode|updateNode|renameNode|deleteNode|connect|deleteEdge|updateEdge）；addNode: type 节点类型 input/agent/script/condition/approval/http/output/note、label 中文名、data 节点字段对象、after 上游节点id自动连线、connect=false 关闭自动连线、position {x,y}；updateNode/renameNode/deleteNode/deleteEdge/updateEdge: id 目标id（updateNode 另需 data，renameNode 另需 label）；connect: from/to 源目标id，branch 条件分支 true/false。',
       parameters: {
         ops: {
           type: 'array', required: true,
@@ -396,6 +399,11 @@ export function apply(ctx, config) {
   // ---- 引擎 ----
   const orch = new Orchestrator(ctx, { onEvent: broadcast, renderTemplate });
   orch.nodeRunner = async (node, run, s, ctl) => runAgentNode(ctx, node, run, s, ctl);
+  orch.scriptRunner = async ({ node, input, signal, timeoutMs }) => {
+    const ws = workspaceFor(node);
+    const result = await runScript({ code: node.data?.code, input, workspaceDir: ws, signal, timeoutMs });
+    return { ...result, artifacts: safeWsList(ws) };
+  };
 
   const startRun = async (graph, {
     triggerInput, workflowName, workflowId, source,
@@ -435,7 +443,9 @@ export function apply(ctx, config) {
 - 当前目录是你的工作区，交付物（报告/工单/回复稿等）必须写成文件落盘；中间产物也建议落盘。
 - 有可用的技能目录时，先用 load_skill 加载对应规范再动手，输出遵守规范。
 - 完成后在最终回复里给出交付物文件清单（文件名 + 一句话说明），不要复述全文。`;
-    const skillIds = Array.isArray(d.skills) ? d.skills : [];
+    const skillIds = Array.isArray(d.skills) ? d.skills.slice() : [];
+    // feishu-cli 默认对所有 agent 可用（lark-cli 已装时）：索引带上，agent 自行决定 load_skill
+    if (larkCliAvailable() && !skillIds.includes('feishu-cli')) skillIds.push('feishu-cli');
     const idx = skillIndexPromptSafe(skillIds);
     if (idx) systemPrompt += `\n\n${idx}`;
     const outputConfig = getAgentOutputConfig(d);
@@ -1036,6 +1046,7 @@ export function apply(ctx, config) {
       pendingApprovals: new Map(),
       emit: broadcast, // runAgentNode 的流式事件直接进 SSE
       nodeRunner: (node, run, s, ctl) => runAgentNode(ctx, node, run, s, ctl), // agent kind 经此调用
+      scriptRunner: orch.scriptRunner,
       renderTemplate,
       templateCtx(n) {
         return {
@@ -1048,6 +1059,11 @@ export function apply(ctx, config) {
       },
     };
 
+    const testAbort = new AbortController();
+    const testTimeoutMs = Number(node.data?.timeoutSec) > 0 ? Number(node.data.timeoutSec) * 1000 : 5 * 60 * 1000;
+    let testTimedOut = false;
+    const testTimer = setTimeout(() => { testTimedOut = true; testAbort.abort(); }, testTimeoutMs);
+    req.once('aborted', () => testAbort.abort());
     broadcast('node-status', { runId, nodeId: node.id, status: 'running', test: true });
     try {
       const kind = getKind(node.type);
@@ -1127,29 +1143,6 @@ export function apply(ctx, config) {
     const run = readRun(id);
     if (!run) return json(res, 404, { error: '运行记录不存在' });
     return json(res, 200, createRunResults(run));
-  } });
-
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/runs/review', async handler(req, res) {
-    if (req.method !== 'PATCH') return json(res, 405, { error: 'method' });
-    const body = await readBody(req);
-    const runId = String(body?.runId || body?.id || '');
-    const requestedStatus = String(body?.status || body?.decision || '');
-    const status = requestedStatus === 'approve' ? 'accepted' : requestedStatus === 'reject' ? 'rejected' : requestedStatus;
-    if (!runId || !REVIEW_STATUSES.has(status)) {
-      return json(res, 400, { error: '需要 runId 和 status=pending|accepted|rejected' });
-    }
-    const run = readRun(runId);
-    if (!run) return json(res, 404, { error: '运行记录不存在' });
-    const saved = writeRun({
-      ...run,
-      review: {
-        status,
-        by: String(body?.by || 'user').slice(0, 80),
-        comment: String(body?.comment || '').slice(0, 2000),
-        updatedAt: new Date().toISOString(),
-      },
-    });
-    return json(res, 200, { ok: true, runId, review: saved.review });
   } });
 
   ctx.webServer.register({ kind: 'exact', path: '/wf1/api/run-artifact', async handler(req, res) {

@@ -11,6 +11,9 @@ import { runPlanExecute } from './plan-mode.js';
 import { listSkills, skillIndexPrompt } from './skills.js';
 import { workspaceFor, wsList } from './workspace.js';
 import { detectDsh, runDshTask } from './agent-runtime.js';
+import { resolveScriptInputs } from '../dsh-plugins/dsh-ccpg-orchestrator/lib/typed-expression.js';
+import { runScript } from '../dsh-plugins/dsh-ccpg-orchestrator/lib/script-runner.js';
+import { validateScriptOutput } from '../dsh-plugins/dsh-ccpg-orchestrator/lib/script-schema.js';
 
 let runSeq = 0;
 
@@ -33,6 +36,7 @@ export class Orchestrator extends EventEmitter {
       mode: this.llm.name,
       nodeStates: {},
       outputs: {},
+      structuredOutputs: {},
     };
     this.history.unshift(run);
     if (this.history.length > 50) this.history.pop();
@@ -116,6 +120,10 @@ export class Orchestrator extends EventEmitter {
         output = await this._runInputNode(node, s);
       } else if (node.type === 'agent') {
         ({ output, model: modelUsed, ...extra } = await this._runAgentNode(node, run, s, toolCtx));
+      } else if (node.type === 'script') {
+        const result = await this._runScriptNode(node, run, s);
+        output = result.output;
+        extra = result;
       } else if (node.type === 'output') {
         const tpl = this._templateCtx(node, run, s);
         const rendered = renderTemplate(node.data?.inputTemplate || '', tpl);
@@ -124,12 +132,14 @@ export class Orchestrator extends EventEmitter {
         output = `(未知节点类型: ${node.type})`;
       }
       run.outputs[node.id] = output;
+      if (extra?.data !== undefined) run.structuredOutputs[node.id] = { version: 1, type: 'json', mediaType: 'application/json', value: extra.data, ...(extra.schema ? { schema: extra.schema } : {}) };
       const state = {
         status: 'success', chars: output.length,
         ...(modelUsed ? { model: modelUsed } : {}),
         ...(extra?.provenance || extra?.trace ? { ...extra.provenance, ...(extra.trace ? { planTrace: extra.trace } : {}) } : {}),
         ...(extra?.artifacts?.length ? { artifacts: extra.artifacts } : {}),
         ...(extra?.runtime ? { runtime: extra.runtime } : {}),
+        ...(extra?.input !== undefined ? { input: extra.input } : {}),
       };
       run.nodeStates[node.id] = state;
       // 输出随事件回传前端（预览截断），供节点面板即时展示
@@ -227,6 +237,29 @@ export class Orchestrator extends EventEmitter {
 
     const result = parts.filter(Boolean).join('\n\n');
     return result || '(输入节点未配置内容)';
+  }
+
+  async _runScriptNode(node, run, s, signal) {
+    const ws = workspaceFor(node);
+    const context = this._templateCtx(node, run, s);
+    const input = resolveScriptInputs(node.data?.inputs || [], context);
+    const result = await runScript({
+      code: node.data?.code,
+      input,
+      workspaceDir: ws,
+      timeoutMs: node.data?.scriptTimeoutMs,
+      signal,
+    });
+    const schema = validateScriptOutput(result.value, node.data?.outputSchema);
+    const artifacts = wsList(ws).split('\n').filter((line) => line && line !== '(空)').map((line) => line.replace(/ \(\d+B\)$/, '')).slice(0, 30);
+    return {
+      output: JSON.stringify(result.value, null, 2),
+      data: result.value,
+      ...(schema ? { schema } : {}),
+      artifacts,
+      runtime: 'quickjs',
+      input,
+    };
   }
 
   async _runAgentNode(node, run, s, toolCtx) {

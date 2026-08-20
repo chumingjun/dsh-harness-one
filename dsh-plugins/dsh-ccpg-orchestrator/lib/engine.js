@@ -3,6 +3,9 @@ import { RUN_SCHEMA_VERSION, mergeExecutionResults, normalizeExecutionResult } f
 import { parseTemplate } from './template-parser.js';
 import { validateTemplate } from './template.js';
 import { getAgentOutputConfig } from './agent-schema.js';
+import { lintScriptInputs, resolveScriptInputs } from './typed-expression.js';
+import { getScriptOutputSchema, validateScriptOutput } from './script-schema.js';
+import { normalizeScriptTimeout, SCRIPT_LIMITS } from './script-runner.js';
 // 相对 v1 的升级：
 //   - 多运行实例并存（Map 而非单 this.s）
 //   - 并发上限（就绪节点排队，槽位释放依次启动）
@@ -62,6 +65,7 @@ export class Orchestrator {
     this.onEvent = onEvent || (() => {});
     this.renderTemplate = renderTemplate;
     this.nodeRunner = null; // index.js 注入：async (node, run, s, {signal, emit}) => ({output, ...extra})
+    this.scriptRunner = null; // index.js 注入：async ({node,input,signal}) => ({value,artifacts,...})
     this.outputSink = null; // index.js 注入：async (node, output, {signal}) => ({output, ...extra}) 输出节点后处理（飞书写回等）
   }
 
@@ -692,6 +696,50 @@ registerKind({
   },
 });
 
+registerKind({
+  type: 'script',
+  async execute({ node, s, engine, signal }) {
+    if (!engine.scriptRunner) throw new Error('script 执行器未注入（宿主初始化异常）');
+    const input = resolveScriptInputs(node.data?.inputs || [], engine.templateCtx(node, s));
+    const schema = getScriptOutputSchema(node.data?.outputSchema);
+    const executed = await engine.scriptRunner({
+      node,
+      input,
+      signal,
+      timeoutMs: normalizeScriptTimeout(node.data?.scriptTimeoutMs),
+    });
+    validateScriptOutput(executed.value, schema);
+    return {
+      output: JSON.stringify(executed.value, null, 2),
+      data: executed.value,
+      ...(schema ? { schema } : {}),
+      artifacts: executed.artifacts || [],
+      runtime: 'quickjs',
+      input,
+      workspaceStats: executed.workspaceStats || {},
+    };
+  },
+  lint(node, lintCtx = {}) {
+    const issues = [];
+    const label = node.data?.label || node.id;
+    const code = String(node.data?.code || '');
+    if (!code.trim()) issues.push({ level: 'error', message: `脚本节点「${label}」未配置代码` });
+    else if (Buffer.byteLength(code) > SCRIPT_LIMITS.maxCodeBytes) issues.push({ level: 'error', message: `脚本节点「${label}」源码超过 ${SCRIPT_LIMITS.maxCodeBytes} 字节上限` });
+    else if (!/\bfunction\s+main\s*\(/.test(code)) issues.push({ level: 'error', message: `脚本节点「${label}」必须声明 function main(input, workspace)` });
+    const timeout = Number(node.data?.scriptTimeoutMs ?? SCRIPT_LIMITS.defaultTimeoutMs);
+    if (!Number.isFinite(timeout) || timeout < SCRIPT_LIMITS.minTimeoutMs || timeout > SCRIPT_LIMITS.maxTimeoutMs) {
+      issues.push({ level: 'error', message: `脚本节点「${label}」超时必须在 ${SCRIPT_LIMITS.minTimeoutMs}-${SCRIPT_LIMITS.maxTimeoutMs}ms 之间` });
+    }
+    issues.push(...lintScriptInputs(node.data?.inputs || [], {
+      nodes: lintCtx.graph?.nodes || [],
+      incomingIds: lintCtx.incomingIds || [],
+    }));
+    try { getScriptOutputSchema(node.data?.outputSchema); }
+    catch (error) { issues.push({ level: 'error', message: `脚本节点「${label}」输出 Schema 无效：${error.message}` }); }
+    return issues;
+  },
+});
+
 // agent：执行体由宿主注入（index.js 的 runAgentNode——进程内 dsh agent 驱动）。
 // 注册成 kind 让试运行/统一分发路径可用；lint 检查提示词。
 registerKind({
@@ -760,7 +808,8 @@ export function lintGraph(graph) {
     if (!kind) {
       issues.push({ level: 'error', nodeId: n.id, message: `未知节点类型：${n.type || '(空)'}` });
     } else if (kind.lint) {
-      for (const iss of kind.lint(n) || []) issues.push({ nodeId: n.id, ...iss });
+      const lintCtx = lintContextFor(graph, nodes, labels, labelCount, incomingIds.get(n.id) || []);
+      for (const iss of kind.lint(n, lintCtx) || []) issues.push({ nodeId: n.id, ...iss });
     }
 
     const templateFields = [d.text, d.inputTemplate, d.url, d.headers, d.body];

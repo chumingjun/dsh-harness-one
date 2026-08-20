@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   constants as fsConstants,
   copyFileSync,
+  createReadStream,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -12,26 +13,96 @@ import { basename, extname, relative } from 'node:path';
 import { resolveInside, safeFileId } from './safe-path.js';
 
 export const RUN_DOCUMENT_VERSION = 3;
-export const REVIEW_STATUSES = new Set(['pending', 'accepted', 'rejected']);
 
 const MIME_TYPES = {
+  '.avif': 'image/avif',
   '.csv': 'text/csv; charset=utf-8',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.gif': 'image/gif',
   '.html': 'text/html; charset=utf-8',
   '.jpeg': 'image/jpeg',
   '.jpg': 'image/jpeg',
   '.json': 'application/json; charset=utf-8',
+  '.log': 'text/plain; charset=utf-8',
   '.md': 'text/markdown; charset=utf-8',
+  '.mdown': 'text/markdown; charset=utf-8',
   '.pdf': 'application/pdf',
   '.png': 'image/png',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   '.txt': 'text/plain; charset=utf-8',
   '.webp': 'image/webp',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
 
 const PREVIEWABLE = new Set([
-  'application/json; charset=utf-8', 'image/jpeg', 'image/png', 'image/webp',
-  'text/csv; charset=utf-8', 'text/html; charset=utf-8',
-  'text/markdown; charset=utf-8', 'text/plain; charset=utf-8',
+  'application/json', 'application/pdf', 'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'image/avif', 'image/gif', 'image/jpeg', 'image/png', 'image/webp',
+  'text/csv', 'text/html', 'text/markdown', 'text/plain',
 ]);
+
+const baseMediaType = (value) => String(value || '').split(';', 1)[0].trim().toLowerCase();
+
+export function mediaTypeFor(filename) {
+  return MIME_TYPES[extname(String(filename || '')).toLowerCase()] || 'application/octet-stream';
+}
+
+export function isPreviewableMediaType(mediaType) {
+  return PREVIEWABLE.has(baseMediaType(mediaType));
+}
+
+export function parseByteRange(rangeHeader, size) {
+  if (rangeHeader == null || String(rangeHeader).trim() === '') return null;
+  if (!Number.isSafeInteger(size) || size < 0) throw new TypeError('size must be a non-negative safe integer');
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(String(rangeHeader).trim());
+  if (!match || (!match[1] && !match[2]) || size === 0) return { unsatisfiable: true };
+
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return { unsatisfiable: true };
+    return { start: Math.max(0, size - suffixLength), end: size - 1 };
+  }
+
+  const start = Number(match[1]);
+  const requestedEnd = match[2] ? Number(match[2]) : size - 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start >= size || requestedEnd < start) {
+    return { unsatisfiable: true };
+  }
+  return { start, end: Math.min(requestedEnd, size - 1) };
+}
+
+export function streamArtifactResponse(req, res, { file, filename, mediaType, preview = false }) {
+  const size = statSync(file).size;
+  const range = parseByteRange(req.headers?.range, size);
+  const headers = {
+    'Accept-Ranges': 'bytes',
+    'Content-Type': mediaType || 'application/octet-stream',
+    'Content-Disposition': `${preview ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    'X-Content-Type-Options': 'nosniff',
+  };
+  if (preview && baseMediaType(mediaType) === 'text/html') {
+    headers['Content-Security-Policy'] = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'";
+  }
+  if (range?.unsatisfiable) {
+    res.writeHead(416, { ...headers, 'Content-Length': '0', 'Content-Range': `bytes */${size}` });
+    res.end();
+    return null;
+  }
+
+  const status = range ? 206 : 200;
+  const start = range?.start ?? 0;
+  const end = range?.end ?? Math.max(0, size - 1);
+  headers['Content-Length'] = String(range ? end - start + 1 : size);
+  if (range) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
+  res.writeHead(status, headers);
+  const stream = createReadStream(file, range ? { start, end } : undefined);
+  stream.on('error', (error) => res.destroy(error));
+  stream.pipe(res);
+  return stream;
+}
 
 const clone = (value) => value == null ? value : structuredClone(value);
 const nodeLabel = (run, nodeId) => (run.graph?.nodes || []).find((node) => node.id === nodeId)?.data?.label || nodeId;
@@ -41,17 +112,6 @@ const asIso = (value) => {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 };
-
-export function normalizeReview(value) {
-  const review = value && typeof value === 'object' ? value : {};
-  const status = REVIEW_STATUSES.has(review.status) ? review.status : 'pending';
-  return {
-    status,
-    by: review.by == null ? null : String(review.by).slice(0, 80),
-    comment: review.comment == null ? '' : String(review.comment).slice(0, 2000),
-    updatedAt: asIso(review.updatedAt),
-  };
-}
 
 export function normalizeRunDocument(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('运行文档必须是对象');
@@ -63,7 +123,7 @@ export function normalizeRunDocument(value) {
   const durationMs = Number.isFinite(Number(value.durationMs)) ? Math.max(0, Number(value.durationMs)) : null;
   const finishedAt = asIso(value.finishedAt)
     || (startedAt && durationMs != null ? new Date(new Date(startedAt).getTime() + durationMs).toISOString() : null);
-  return {
+  const document = {
     ...clone(value),
     schemaVersion: RUN_DOCUMENT_VERSION,
     startedAt,
@@ -74,8 +134,10 @@ export function normalizeRunDocument(value) {
     outputs: clone(value.outputs && typeof value.outputs === 'object' ? value.outputs : {}),
     structuredOutputs: clone(value.structuredOutputs && typeof value.structuredOutputs === 'object' ? value.structuredOutputs : {}),
     artifactIndex: Array.isArray(value.artifactIndex) ? clone(value.artifactIndex) : [],
-    review: normalizeReview(value.review),
   };
+  delete document.review;
+  delete document.acceptance;
+  return document;
 }
 
 export function snapshotRunArtifacts(runValue, { workspaceRoot, artifactRoot }) {
@@ -107,7 +169,7 @@ export function snapshotRunArtifacts(runValue, { workspaceRoot, artifactRoot }) 
         if (!target) throw new Error('快照路径非法');
         if (!existsSync(target)) copyFileSync(realSource, target, fsConstants.COPYFILE_EXCL);
         const stat = statSync(target);
-        const mediaType = MIME_TYPES[extname(relativePath).toLowerCase()] || 'application/octet-stream';
+        const mediaType = mediaTypeFor(relativePath);
         artifacts.push({
           id,
           nodeId,
@@ -116,7 +178,7 @@ export function snapshotRunArtifacts(runValue, { workspaceRoot, artifactRoot }) 
           relativePath: normalizedPath,
           size: stat.size,
           mediaType,
-          previewable: PREVIEWABLE.has(mediaType),
+          previewable: isPreviewableMediaType(mediaType),
           sha256: createHash('sha256').update(readFileSync(target)).digest('hex'),
           snapshot: `${safeFileId(run.runId, 'invalid')}/${id}`,
         });
@@ -138,27 +200,107 @@ export function resolveRunArtifact(artifactRoot, run, requestedId) {
   return resolveInside(root, real) === real ? { artifact, file: real } : null;
 }
 
-function resultRows(run) {
-  const order = Array.isArray(run.nodeOrder) ? run.nodeOrder : Object.keys(run.outputs);
-  return order.filter((nodeId) => Object.prototype.hasOwnProperty.call(run.outputs, nodeId)).map((nodeId) => ({
-    nodeId,
-    nodeLabel: nodeLabel(run, nodeId),
-    nodeType: (run.graph?.nodes || []).find((node) => node.id === nodeId)?.type || null,
-    status: run.nodeStates[nodeId]?.status || null,
-    output: run.outputs[nodeId],
-    structuredOutput: run.structuredOutputs[nodeId] || null,
-  }));
+function nodeType(node) {
+  return node?.type || node?.data?.nodeType || null;
+}
+
+function isRuntimeNode(node) {
+  return nodeType(node) !== 'note';
+}
+
+function orderedGraphNodes(run) {
+  const nodes = (Array.isArray(run.graph?.nodes) ? run.graph.nodes : []).filter(isRuntimeNode);
+  if (!nodes.length) {
+    const ids = [...new Set([...(run.nodeOrder || []), ...Object.keys(run.nodeStates), ...Object.keys(run.outputs)])];
+    return ids.map((id) => ({ id, type: null, data: { label: id } }));
+  }
+  const index = new Map(nodes.map((node, position) => [node.id, position]));
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const incoming = new Map(nodes.map((node) => [node.id, 0]));
+  const outgoing = new Map(nodes.map((node) => [node.id, []]));
+  for (const edge of run.graph?.edges || []) {
+    if (!byId.has(edge.source) || !byId.has(edge.target)) continue;
+    outgoing.get(edge.source).push(edge.target);
+    incoming.set(edge.target, incoming.get(edge.target) + 1);
+  }
+  const ready = nodes.filter((node) => incoming.get(node.id) === 0).sort((a, b) => index.get(a.id) - index.get(b.id));
+  const ordered = [];
+  while (ready.length) {
+    const node = ready.shift();
+    ordered.push(node);
+    for (const target of outgoing.get(node.id)) {
+      incoming.set(target, incoming.get(target) - 1);
+      if (incoming.get(target) === 0) {
+        ready.push(byId.get(target));
+        ready.sort((a, b) => index.get(a.id) - index.get(b.id));
+      }
+    }
+  }
+  if (ordered.length !== nodes.length) {
+    const seen = new Set(ordered.map((node) => node.id));
+    ordered.push(...nodes.filter((node) => !seen.has(node.id)));
+  }
+  return ordered;
+}
+
+function resultRow(run, node) {
+  const state = run.nodeStates[node.id] || {};
+  return {
+    nodeId: node.id,
+    nodeLabel: node.data?.label || node.id,
+    nodeType: nodeType(node),
+    status: state.status || 'pending',
+    output: Object.prototype.hasOwnProperty.call(run.outputs, node.id) ? run.outputs[node.id] : null,
+    structuredOutput: run.structuredOutputs[node.id] || null,
+    error: state.error || state.toleratedError || null,
+    durationMs: state.durationMs ?? null,
+  };
+}
+
+function processText(row) {
+  if (row.error) return row.error;
+  if (row.status === 'success') return '节点已完成';
+  if (row.status === 'running') return '节点正在执行';
+  if (row.status === 'queued' || row.status === 'pending') return '节点等待执行';
+  if (row.status === 'waiting') return '节点等待审批';
+  if (row.status === 'skipped') return '本次流程未执行该节点';
+  if (row.status === 'canceled') return '节点已取消';
+  return `节点状态：${row.status}`;
+}
+
+function extractHttpLinks(text) {
+  const matches = String(text || '').match(/https?:\/\/[^\s<>()\[\]"']+/gi) || [];
+  return [...new Set(matches)].map((url) => ({ type: 'output', url }));
 }
 
 export function createRunResults(value, { apiBase = '/wf1/api' } = {}) {
   const run = normalizeRunDocument(value);
-  const results = resultRows(run);
-  const primaryResult = [...results].reverse().find((item) => item.nodeType === 'output' && item.status === 'success')
-    || [...results].reverse().find((item) => item.status === 'success') || null;
+  const rows = orderedGraphNodes(run).map((node) => resultRow(run, node));
+  const configuredOutputs = rows.filter((row) => row.nodeType === 'output');
+  const successfulOutputs = configuredOutputs.filter((row) => row.status === 'success' && row.output != null);
+  const legacyResult = configuredOutputs.length === 0
+    ? [...rows].reverse().find((row) => row.status === 'success' && row.output != null) || null
+    : null;
+  const outputResults = configuredOutputs.length ? configuredOutputs : (legacyResult ? [{ ...legacyResult, legacyInferred: true }] : []);
+  const processResults = rows.filter((row) => row.nodeType !== 'output');
+  const finalStatus = configuredOutputs.length === 0
+    ? (legacyResult ? 'legacy-inferred' : 'unavailable')
+    : successfulOutputs.length === configuredOutputs.length
+      ? 'available'
+      : successfulOutputs.length > 0 ? 'partial' : 'unavailable';
+  const artifacts = run.artifactIndex.map((artifact) => ({
+    ...artifact,
+    downloadUrl: `${apiBase}/run-artifact?run=${encodeURIComponent(run.runId)}&artifact=${encodeURIComponent(artifact.id)}`,
+    previewUrl: artifact.previewable ? `${apiBase}/run-artifact?run=${encodeURIComponent(run.runId)}&artifact=${encodeURIComponent(artifact.id)}&preview=1` : null,
+  }));
+  const outputNodeIds = new Set(outputResults.map((row) => row.nodeId));
+  const finalArtifacts = artifacts.filter((artifact) => outputNodeIds.has(artifact.nodeId));
+  const processArtifacts = artifacts.filter((artifact) => !outputNodeIds.has(artifact.nodeId));
   const links = [];
-  for (const [nodeId, state] of Object.entries(run.nodeStates)) {
-    const url = state?.writeback?.url;
-    if (url) links.push({ type: 'writeback', nodeId, nodeLabel: nodeLabel(run, nodeId), url: String(url) });
+  for (const row of outputResults) {
+    for (const link of extractHttpLinks(row.output)) links.push({ ...link, nodeId: row.nodeId, nodeLabel: row.nodeLabel });
+    const url = run.nodeStates[row.nodeId]?.writeback?.url;
+    if (url) links.push({ type: 'writeback', nodeId: row.nodeId, nodeLabel: row.nodeLabel, url: String(url) });
   }
   const issues = [
     ...(Array.isArray(run.issues) ? run.issues : []),
@@ -174,16 +316,17 @@ export function createRunResults(value, { apiBase = '/wf1/api' } = {}) {
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
     durationMs: run.durationMs,
-    primaryResult,
-    results,
-    artifacts: run.artifactIndex.map((artifact) => ({
-      ...artifact,
-      downloadUrl: `${apiBase}/run-artifact?run=${encodeURIComponent(run.runId)}&artifact=${encodeURIComponent(artifact.id)}`,
-      previewUrl: artifact.previewable ? `${apiBase}/run-artifact?run=${encodeURIComponent(run.runId)}&artifact=${encodeURIComponent(artifact.id)}&preview=1` : null,
-    })),
+    finalStatus,
+    outputResults,
+    processResults,
+    nodeTimeline: rows.map((row) => ({ ...row, text: processText(row) })),
+    primaryResult: successfulOutputs[0] || legacyResult,
+    results: rows,
+    artifacts,
+    finalArtifacts,
+    processArtifacts,
     links,
     inputs: { triggerInput: run.triggerInput ?? '', runInputs: run.runInputs },
-    review: run.review,
     issues,
   };
 }

@@ -2,13 +2,18 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Writable } from 'node:stream';
 import {
   createRunExport,
   createRunResults,
+  isPreviewableMediaType,
+  mediaTypeFor,
   normalizeRunDocument,
+  parseByteRange,
   resolveRunArtifact,
   RUN_DOCUMENT_VERSION,
   snapshotRunArtifacts,
+  streamArtifactResponse,
 } from '../lib/run-results.js';
 
 let passed = 0;
@@ -33,55 +38,191 @@ const baseRun = () => ({
   triggerInput: 'ticket-1',
   runInputs: { region: 'cn' },
   nodeStates: {
+    input: { status: 'success' },
     agent: { status: 'success', artifacts: ['report.md'] },
     output: { status: 'success', writeback: { ok: true, url: 'https://example.test/doc' } },
   },
-  outputs: { agent: 'agent result', output: 'final result' },
+  outputs: { input: 'ticket-1', agent: 'agent result', output: 'final result' },
   structuredOutputs: {
+    input: { version: 1, type: 'text', value: { text: 'ticket-1' } },
     agent: { version: 1, type: 'text', value: 'agent result' },
     output: { version: 1, type: 'json', value: { ok: true } },
   },
-  nodeOrder: ['agent', 'output'],
+  nodeOrder: ['input', 'agent', 'output'],
   graph: {
     nodes: [
+      { id: 'input', type: 'input', data: { label: '输入' } },
       { id: 'agent', type: 'agent', data: { label: '分析器' } },
+      { id: 'note', type: 'note', data: { label: '画布注释' } },
       { id: 'output', type: 'output', data: { label: '最终成果' } },
     ],
-    edges: [{ source: 'agent', target: 'output' }],
+    edges: [{ source: 'input', target: 'agent' }, { source: 'agent', target: 'output' }],
   },
 });
 
 console.log('run results tests:');
 
-await test('v1/v2 run documents normalize to v3 without mutating source', () => {
-  const legacy = baseRun();
+await test('v1/v2 run documents normalize to v3, remove acceptance metadata, and do not mutate source', () => {
+  const legacy = { ...baseRun(), review: { status: 'accepted' }, acceptance: { decision: 'approved' } };
   const before = structuredClone(legacy);
   const normalized = normalizeRunDocument(legacy);
   assert.deepEqual(legacy, before);
   assert.equal(normalized.schemaVersion, RUN_DOCUMENT_VERSION);
   assert.equal(normalized.finishedAt, '2026-08-20T00:00:01.500Z');
   assert.deepEqual(normalized.artifactIndex, []);
-  assert.deepEqual(normalized.review, { status: 'pending', by: null, comment: '', updatedAt: null });
+  assert.equal(normalized.review, undefined);
+  assert.equal(normalized.acceptance, undefined);
   assert.throws(() => normalizeRunDocument({ ...legacy, schemaVersion: 4 }), /不支持/);
 });
 
-await test('run results expose the complete frontend contract and primary output', () => {
+await test('run results use output nodes as final results and include every runtime node', () => {
   const run = normalizeRunDocument({
     ...baseRun(),
-    artifactIndex: [{ id: 'a1', name: 'report.md', previewable: true }],
-    review: { status: 'accepted', by: 'qa', comment: 'ok', updatedAt: '2026-08-20T01:00:00Z' },
+    artifactIndex: [
+      { id: 'a1', nodeId: 'agent', nodeLabel: '分析器', name: 'report.md', relativePath: 'report.md', previewable: true },
+      { id: 'a2', nodeId: 'output', nodeLabel: '最终成果', name: 'final.pdf', relativePath: 'final.pdf', previewable: true },
+    ],
   });
   const result = createRunResults(run);
   assert.deepEqual(Object.keys(result), [
     'runId', 'status', 'workflowName', 'startedAt', 'finishedAt', 'durationMs',
-    'primaryResult', 'results', 'artifacts', 'links', 'inputs', 'review', 'issues',
+    'finalStatus', 'outputResults', 'processResults', 'nodeTimeline', 'primaryResult',
+    'results', 'artifacts', 'finalArtifacts', 'processArtifacts', 'links', 'inputs', 'issues',
   ]);
+  assert.equal(result.finalStatus, 'available');
+  assert.deepEqual(result.outputResults.map((row) => row.nodeId), ['output']);
+  assert.deepEqual(result.processResults.map((row) => row.nodeId), ['input', 'agent']);
+  assert.deepEqual(result.nodeTimeline.map((row) => row.nodeId), ['input', 'agent', 'output']);
+  assert.equal(result.results.some((row) => row.nodeId === 'note'), false);
   assert.equal(result.primaryResult.nodeId, 'output');
   assert.equal(result.primaryResult.output, 'final result');
-  assert.equal(result.artifacts[0].downloadUrl, '/wf1/api/run-artifact?run=run_test_1&artifact=a1');
-  assert.equal(result.artifacts[0].previewUrl, '/wf1/api/run-artifact?run=run_test_1&artifact=a1&preview=1');
+  assert.deepEqual(result.finalArtifacts.map((item) => item.id), ['a2']);
+  assert.deepEqual(result.processArtifacts.map((item) => item.id), ['a1']);
   assert.equal(result.links[0].url, 'https://example.test/doc');
-  assert.deepEqual(result.inputs, { triggerInput: 'ticket-1', runInputs: { region: 'cn' } });
+});
+
+await test('failed output is not replaced by a successful intermediate result', () => {
+  const run = baseRun();
+  delete run.outputs.output;
+  run.nodeStates.output = { status: 'skipped' };
+  const result = createRunResults(run);
+  assert.equal(result.finalStatus, 'unavailable');
+  assert.equal(result.primaryResult, null);
+  assert.equal(result.outputResults[0].status, 'skipped');
+  assert.equal(result.processResults.find((row) => row.nodeId === 'agent').output, 'agent result');
+});
+
+await test('timeline uses stable graph order and includes skipped branch nodes absent from nodeOrder', () => {
+  const run = baseRun();
+  run.graph.nodes.splice(2, 0, { id: 'branch', type: 'agent', data: { label: '未命中分支' } });
+  run.graph.edges = [
+    { source: 'input', target: 'agent' },
+    { source: 'input', target: 'branch' },
+    { source: 'agent', target: 'output' },
+    { source: 'branch', target: 'output' },
+  ];
+  run.nodeStates.branch = { status: 'skipped' };
+  const result = createRunResults(run);
+  assert.deepEqual(result.nodeTimeline.map((row) => row.nodeId), ['input', 'agent', 'branch', 'output']);
+  assert.equal(result.nodeTimeline.find((row) => row.nodeId === 'branch').text, '本次流程未执行该节点');
+});
+
+await test('preview MIME coverage includes safe text, Office documents, images, and PDF but excludes unknown binaries and SVG', () => {
+  assert.equal(mediaTypeFor('data.json'), 'application/json; charset=utf-8');
+  assert.equal(mediaTypeFor('photo.webp'), 'image/webp');
+  assert.equal(mediaTypeFor('document.pdf'), 'application/pdf');
+  assert.equal(mediaTypeFor('report.docx'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  assert.equal(mediaTypeFor('legacy.xls'), 'application/vnd.ms-excel');
+  assert.equal(mediaTypeFor('table.xlsx'), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  assert.equal(mediaTypeFor('slides.pptx'), 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  for (const filename of ['document.pdf', 'notes.txt', 'report.docx', 'legacy.xls', 'table.xlsx', 'slides.pptx']) {
+    assert.equal(isPreviewableMediaType(mediaTypeFor(filename)), true);
+  }
+  assert.equal(isPreviewableMediaType(mediaTypeFor('archive.zip')), false);
+  assert.equal(isPreviewableMediaType(mediaTypeFor('unsafe.svg')), false);
+});
+
+await test('byte range parser handles bounded, open, suffix, clamped, and invalid ranges', () => {
+  assert.equal(parseByteRange(undefined, 10), null);
+  assert.deepEqual(parseByteRange('bytes=2-5', 10), { start: 2, end: 5 });
+  assert.deepEqual(parseByteRange('bytes=7-', 10), { start: 7, end: 9 });
+  assert.deepEqual(parseByteRange('bytes=-3', 10), { start: 7, end: 9 });
+  assert.deepEqual(parseByteRange('bytes=-30', 10), { start: 0, end: 9 });
+  assert.deepEqual(parseByteRange('bytes=8-30', 10), { start: 8, end: 9 });
+  for (const value of ['bytes=10-', 'bytes=5-2', 'bytes=-0', 'bytes=', 'items=0-1', 'bytes=0-1,3-4']) {
+    assert.deepEqual(parseByteRange(value, 10), { unsatisfiable: true });
+  }
+  assert.deepEqual(parseByteRange('bytes=0-0', 0), { unsatisfiable: true });
+});
+
+function captureResponse() {
+  const chunks = [];
+  const response = new Writable({
+    write(chunk, _encoding, callback) {
+      chunks.push(Buffer.from(chunk));
+      callback();
+    },
+  });
+  response.writeHead = (status, headers) => {
+    response.status = status;
+    response.headers = headers;
+  };
+  response.body = () => Buffer.concat(chunks);
+  return response;
+}
+
+async function streamFixture(file, range, options = {}) {
+  const response = captureResponse();
+  const finished = new Promise((resolve, reject) => {
+    response.once('finish', resolve);
+    response.once('error', reject);
+  });
+  streamArtifactResponse({ headers: range ? { range } : {} }, response, {
+    file,
+    filename: options.filename || 'sample.txt',
+    mediaType: options.mediaType || 'text/plain; charset=utf-8',
+    preview: options.preview || false,
+  });
+  await finished;
+  return response;
+}
+
+await test('stream helper sends safe 200/206/416 responses', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'wf1-stream-'));
+  try {
+    const file = join(root, 'sample.txt');
+    writeFileSync(file, '0123456789');
+
+    const full = await streamFixture(file);
+    assert.equal(full.status, 200);
+    assert.equal(full.headers['Accept-Ranges'], 'bytes');
+    assert.equal(full.headers['Content-Length'], '10');
+    assert.equal(full.headers['Content-Disposition'], "attachment; filename*=UTF-8''sample.txt");
+    assert.equal(full.headers['X-Content-Type-Options'], 'nosniff');
+    assert.equal(full.body().toString(), '0123456789');
+
+    const partial = await streamFixture(file, 'bytes=2-5', {
+      filename: '报告.html',
+      mediaType: 'text/html; charset=utf-8',
+      preview: true,
+    });
+    assert.equal(partial.status, 206);
+    assert.equal(partial.headers['Content-Range'], 'bytes 2-5/10');
+    assert.equal(partial.headers['Content-Length'], '4');
+    assert.match(partial.headers['Content-Disposition'], /^inline;/);
+    assert.equal(partial.headers['Content-Security-Policy'], "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'");
+    assert.equal(partial.body().toString(), '2345');
+
+    const invalid = await streamFixture(file, 'bytes=20-');
+    assert.equal(invalid.status, 416);
+    assert.equal(invalid.headers['Content-Range'], 'bytes */10');
+    assert.equal(invalid.headers['Content-Length'], '0');
+    assert.equal(invalid.headers['Accept-Ranges'], 'bytes');
+    assert.equal(invalid.headers['X-Content-Type-Options'], 'nosniff');
+    assert.equal(invalid.body().length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 await test('artifact snapshots are immutable and reject paths outside the workspace', () => {

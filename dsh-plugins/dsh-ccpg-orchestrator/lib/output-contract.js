@@ -7,6 +7,7 @@ const RESERVED_RESULT_KEYS = new Set([
 ]);
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const FORBIDDEN_JSON_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
 function asText(value) {
   if (value == null) return '';
@@ -43,7 +44,10 @@ export function toJsonSafe(value, path = '$', seen = new WeakSet()) {
     }
     if (Array.isArray(value)) return value.map((item, index) => toJsonSafe(item, `${path}[${index}]`, seen));
     const out = {};
-    for (const key of Object.keys(value)) out[key] = toJsonSafe(value[key], `${path}.${key}`, seen);
+    for (const key of Object.keys(value)) {
+      if (FORBIDDEN_JSON_KEYS.has(key)) throw new OutputContractError('JSON 数据包含不安全字段', `${path}.${key}`);
+      out[key] = toJsonSafe(value[key], `${path}.${key}`, seen);
+    }
     return out;
   } finally {
     seen.delete(value);
@@ -156,5 +160,6 @@ export function describeNodeOutput(node) {
   else if (type === 'condition') data.fields = ['branch', 'source', 'include', 'exclude'];
   else if (type === 'input') data.fields = ['text', 'triggerInput', 'upstreamText'];
   else if (type === 'approval') data.fields = ['decision', 'by', 'comment', 'note', 'content'];
+  else if (type === 'script' && node?.data?.outputSchema) data.schema = node.data.outputSchema;
   return base;
 }

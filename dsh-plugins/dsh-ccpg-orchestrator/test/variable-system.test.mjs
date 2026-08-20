@@ -216,6 +216,27 @@ await test('无 recent value 的 agent schema 仍递归返回对象和数组字�
   assert.ok(schema.builtins.every((value) => value.source === 'builtin'));
 });
 
+await test('无 recent value 的 script outputSchema 仍递归返回字段', () => {
+  const graph = {
+    nodes: [
+      { id: 's', type: 'script', data: { outputSchema: {
+        type: 'object', properties: {
+          result: { type: 'object', properties: { count: { type: 'number' } } },
+          files: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' } } } },
+        },
+      } } },
+      { id: 't', type: 'output', data: {} },
+    ],
+    edges: [{ source: 's', target: 't' }],
+  };
+  const schema = buildVariableSchema({ graph, targetNodeId: 't', run: {} });
+  const flat = [];
+  const visit = (value) => { flat.push(value); value.children?.forEach(visit); };
+  schema.items.forEach(visit);
+  assert.ok(flat.some((value) => value.token === 'node["s"].data.result.count'));
+  assert.ok(flat.some((value) => value.token === 'node["s"].data.files[0].name'));
+});
+
 await test('无 recent value 仍返回 HTTP 静态字段', () => {
   const graph = { nodes: [{ id: 'h', type: 'http', data: {} }, { id: 't', type: 'output', data: {} }], edges: [{ source: 'h', target: 't' }] };
   const schema = buildVariableSchema({ graph, targetNodeId: 't', run: {} });

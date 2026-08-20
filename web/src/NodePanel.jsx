@@ -4,12 +4,19 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronRight, FlaskConical, Trash2, X } from 'lucide-react';
+import { ChevronRight, FlaskConical, Plus, Trash2, X } from 'lucide-react';
 import { apiUrl } from './api.js';
 import { TemplateEditor } from './TemplateEditor.jsx';
+import { ScriptCodeEditor } from './ScriptCodeEditor.jsx';
+import {
+  formatScriptConstant,
+  normalizeScriptInputs,
+  parseScriptConstant,
+  validateScriptInputs,
+} from './script-parameters.js';
 import { buildFallbackSchema, describeVariables } from './variables.js';
 import { buildVariableScopeSnapshot } from './variable-scope.js';
-import { AgentSchemaEditor } from './AgentSchemaEditor.jsx';
+import { AgentSchemaEditor, DEFAULT_AGENT_SCHEMA } from './AgentSchemaEditor.jsx';
 import { ArtifactLinks } from './ArtifactPreview.jsx';
 import MarkdownDocument from './MarkdownDocument.jsx';
 import { Modal } from './ui.jsx';
@@ -22,7 +29,7 @@ const TOOL_LABELS = {
   load_skill: '加载技能',
 };
 
-const TYPE_TEXT = { input: '输入', agent: '智能体', output: '输出', condition: '条件', approval: '审批', http: 'HTTP', note: '注释' };
+const TYPE_TEXT = { input: '输入', agent: '智能体', output: '输出', condition: '条件', approval: '审批', http: 'HTTP', script: '脚本', note: '注释' };
 
 /** 可折叠分区：open 受控（非受控时 defaultOpen 兜底），标题 + 提示 + 计数徽标 */
 function Section({ title, hint, count, defaultOpen = true, open, onToggle, children }) {
@@ -52,6 +59,62 @@ function Field({ label, hint, children, wide }) {
   );
 }
 
+function ScriptParameterRow({ input, index, error, templateProps, onChange, onRemove }) {
+  const expressionMode = Object.prototype.hasOwnProperty.call(input, 'expression');
+  const [constantText, setConstantText] = useState(() => formatScriptConstant(input.value));
+  const [constantError, setConstantError] = useState('');
+
+  useEffect(() => {
+    if (!expressionMode) setConstantText(formatScriptConstant(input.value));
+  }, [expressionMode, input.value]);
+
+  const changeMode = (nextMode) => {
+    setConstantError('');
+    onChange(nextMode === 'expression'
+      ? { name: input.name, expression: '' }
+      : { name: input.name, value: null });
+  };
+  const changeConstant = (text) => {
+    setConstantText(text);
+    const parsed = parseScriptConstant(text);
+    setConstantError(parsed.ok ? '' : parsed.error);
+    if (parsed.ok) onChange({ name: input.name, value: parsed.value });
+  };
+
+  return (
+    <div className="script-param-row">
+      <div className="script-param-head">
+        <input aria-label={`参数 ${index + 1} 名称`} value={input.name}
+          onChange={(event) => onChange({ ...input, name: event.target.value })} placeholder="parameterName" />
+        <div className="script-param-mode" role="group" aria-label={`参数 ${index + 1} 值模式`}>
+          <button type="button" className={expressionMode ? 'script-mode-on' : ''} onClick={() => changeMode('expression')}>表达式</button>
+          <button type="button" className={!expressionMode ? 'script-mode-on' : ''} onClick={() => changeMode('constant')}>常量</button>
+        </div>
+        <button type="button" className="btn-icon script-param-remove" title="删除参数" aria-label={`删除参数 ${index + 1}`} onClick={onRemove}><Trash2 size={14} /></button>
+      </div>
+      {error && <p className="script-param-error">{error}</p>}
+      {expressionMode ? (
+        <TemplateEditor
+          {...templateProps}
+          label="参数值" hint="从变量工作台插入规范表达式"
+          rows={1}
+          value={input.expression}
+          onChange={(expression) => onChange({ name: input.name, expression })}
+          placeholder={'{{node["input"].data}}'}
+          compact
+          singleLine
+        />
+      ) : (
+        <Field label="参数值" hint="JSON，保留字符串/数字/布尔/对象/数组/null" wide>
+          <textarea rows={3} spellCheck="false" className="script-json-input" value={constantText}
+            onChange={(event) => changeConstant(event.target.value)} />
+          {constantError && <span className="script-param-error">JSON 无效：{constantError}</span>}
+        </Field>
+      )}
+    </div>
+  );
+}
+
 export function NodePanel({ node, onChange, onDelete, onTest, onClose, availableTools = [], skills = [], feishuEnabled = false, feishuCreds = [], llmConfig = {}, upstreamNodes = [], upstreamPreviews = {}, graph, workflowId, runId, workflowVariables, inputSchema, runInputs, triggerInput, globalVariableEpoch, progress }) {
   if (!node) return null;
   const [copied, setCopied] = useState(false);
@@ -61,6 +124,8 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
   const set = (patch) => onChange(node.id, patch);
   const selectedTools = Array.isArray(d.tools) ? d.tools : [];
   const selectedSkills = Array.isArray(d.skills) ? d.skills : [];
+  const scriptInputs = normalizeScriptInputs(d.inputs);
+  const scriptInputErrors = validateScriptInputs(scriptInputs);
   const providers = Array.isArray(llmConfig.providers) ? llmConfig.providers : [];
   const effectiveProvider = d.channel || llmConfig.defaultProvider || '';
   const providerModels = providers.find((provider) => provider.id === effectiveProvider)?.models || [];
@@ -356,6 +421,61 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
         </>
       )}
 
+      {nodeType === 'script' && (
+        <>
+          <Section title="输入参数" hint="命名后传入 main(input, workspace)" count={scriptInputs.length || undefined}>
+            <div className="script-param-list">
+              {scriptInputs.map((input, index) => (
+                <ScriptParameterRow
+                  key={index}
+                  input={input}
+                  index={index}
+                  error={scriptInputErrors[index]}
+                  templateProps={templateProps}
+                  onChange={(nextInput) => set({ inputs: scriptInputs.map((item, itemIndex) => itemIndex === index ? nextInput : item) })}
+                  onRemove={() => set({ inputs: scriptInputs.filter((_, itemIndex) => itemIndex !== index) })}
+                />
+              ))}
+            </div>
+            <button type="button" className="btn btn-sm script-param-add"
+              onClick={() => set({ inputs: [...scriptInputs, { name: '', expression: '' }] })}>
+              <Plus size={14} />添加参数
+            </button>
+          </Section>
+
+          <Section title="JavaScript 代码" hint="入口函数 main(input, workspace)">
+            <Field label="代码" hint="按原文保存，不解析模板" wide>
+              <ScriptCodeEditor
+                value={d.code ?? 'function main(input, workspace) {\n  return input;\n}'}
+                onChange={(code) => set({ code })}
+              />
+            </Field>
+          </Section>
+
+          <Section title="输出 Schema" hint="可选" defaultOpen={Boolean(d.outputSchema)}>
+            <label className="check-row">
+              <input type="checkbox" checked={Boolean(d.outputSchema)}
+                onChange={(event) => set({ outputSchema: event.target.checked ? DEFAULT_AGENT_SCHEMA : undefined })} />
+              <span>校验结构化输出</span>
+            </label>
+            {d.outputSchema && (
+              <AgentSchemaEditor mode="structured" fixedMode value={d.outputSchema}
+                onChange={(outputSchema) => set({ outputSchema })} />
+            )}
+          </Section>
+
+          <Section title="脚本限制" hint="JavaScript" defaultOpen={false}>
+            <Field label="执行超时（毫秒）" hint="100 - 10000">
+              <input type="number" min="100" max="10000" step="100" value={d.scriptTimeoutMs ?? 1000}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  set({ scriptTimeoutMs: Math.max(100, Math.min(10000, Number.isFinite(value) ? value : 1000)) });
+                }} />
+            </Field>
+          </Section>
+        </>
+      )}
+
       {nodeType === 'agent' && (
         <>
           <Section title="提示词">
@@ -531,7 +651,7 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
 
       {nodeType !== 'note' && (
         <Section title="执行容错" hint="重试 / 失败继续 / 超时" defaultOpen={false}>
-          <div className="field-grid">
+          <div className={nodeType === 'script' ? '' : 'field-grid'}>
             <Field label="失败重试">
               <select value={String(d.retryCount ?? 0)} onChange={(e) => set({ retryCount: Number(e.target.value) || undefined })}>
                 <option value="0">不重试</option>
@@ -540,11 +660,13 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
                 <option value="3">重试 3 次</option>
               </select>
             </Field>
-            <Field label="超时（秒）">
-              <input type="number" min="5" max="3600" value={d.timeoutSec ?? ''}
-                onChange={(e) => set({ timeoutSec: e.target.value === '' ? undefined : Number(e.target.value) })}
-                placeholder="300" />
-            </Field>
+            {nodeType !== 'script' && (
+              <Field label="超时（秒）">
+                <input type="number" min="5" max="3600" value={d.timeoutSec ?? ''}
+                  onChange={(e) => set({ timeoutSec: e.target.value === '' ? undefined : Number(e.target.value) })}
+                  placeholder="300" />
+              </Field>
+            )}
           </div>
           {nodeType !== 'agent' && (
             <label className="check-row">

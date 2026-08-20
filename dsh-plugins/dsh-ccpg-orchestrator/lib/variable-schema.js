@@ -52,8 +52,8 @@ function item({ id, label, token, type, description = '', recentValue, hasValue,
   };
 }
 
-function parseAgentSchema(node) {
-  if (node.type !== 'agent' || node.data?.outputMode !== 'structured') return null;
+function parseDeclaredNodeSchema(node) {
+  if (node.type !== 'script' && (node.type !== 'agent' || node.data?.outputMode !== 'structured')) return null;
   let schema = node.data?.outputSchema;
   if (typeof schema === 'string') { try { schema = JSON.parse(schema); } catch { return null; } }
   return schema && typeof schema === 'object' && !Array.isArray(schema) ? schema : null;
@@ -104,7 +104,7 @@ function buildChildren(schema, value, token, nodeId, state, depth) {
 }
 
 function dataSchemaFor(node) {
-  return parseAgentSchema(node) || STATIC_DATA_SCHEMAS[node.type] || field('any', '节点结构化输出');
+  return parseDeclaredNodeSchema(node) || STATIC_DATA_SCHEMAS[node.type] || field('any', '节点结构化输出');
 }
 
 function declarationSchema(definition, value) {

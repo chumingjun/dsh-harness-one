@@ -84,6 +84,25 @@ test('wouldCreateCycle direct and transitive', () => {
   assert.equal(wouldCreateCycle(g.nodes, g.edges, 'n_input_1', 'n_agent_1'), false); // 已存在的边方向再连（重复边上层已挡）这里只测环
 });
 
+test('script node is accepted and summarized with execution contract fields', () => {
+  const added = validateGraphOps(baseGraph(), [{
+    op: 'addNode', type: 'script', label: '数据整理', after: 'n_agent_1',
+    data: {
+      inputs: [{ name: 'items', expression: '{{node["n_agent_1"].data.items}}' }],
+      code: 'function main(input) { return input; }',
+      scriptTimeoutMs: 1000,
+      outputSchema: { type: 'object' },
+    },
+  }]);
+  assert.equal(added.ok, true);
+  const summary = summarizeGraphForAI(added.graph);
+  const script = summary.nodes.find((node) => node.type === 'script');
+  assert.deepEqual(script.inputNames, ['items']);
+  assert.equal(script.language, 'javascript');
+  assert.equal(script.hasOutputSchema, true);
+  assert.ok(script.codeChars > 0);
+});
+
 test('summarizeGraphForAI keeps agent fields compact', () => {
   const s = summarizeGraphForAI(baseGraph());
   assert.equal(s.nodes.length, 2);
