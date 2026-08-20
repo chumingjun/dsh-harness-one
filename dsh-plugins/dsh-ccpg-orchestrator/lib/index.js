@@ -855,7 +855,13 @@ export function apply(ctx, config) {
       } catch (error) {
         return routeError(res, error);
       }
-      return json(res, 200, { ok: true, id: wf.id, name: wf.name, updatedAt: wf.updatedAt });
+      return json(res, 200, {
+        ok: true,
+        id: wf.id,
+        name: wf.name,
+        updatedAt: wf.updatedAt,
+        graphFingerprint: graphFingerprint(wf.graph),
+      });
     }
     if (req.method === 'PUT') {
       // 复制：{ id } → 新副本
@@ -912,6 +918,14 @@ export function apply(ctx, config) {
       if (!persisted) return json(res, 404, { error: '工作流不存在' });
       if (hasOwn(body, 'workflowVariableDefinitions') || hasOwn(body, 'workflowVariables') || hasOwn(body, 'variables') || hasOwn(body, 'inputSchema')) {
         return json(res, 400, { error: '命名工作流运行必须使用已保存的变量声明和输入 Schema', code: 'persisted-workflow-authority' });
+      }
+      const persistedFingerprint = graphFingerprint(persisted.graph);
+      if (!body.graphFingerprint || body.graphFingerprint !== persistedFingerprint) {
+        return json(res, 409, {
+          error: '画布内容尚未保存成功，请保存后重试',
+          code: 'workflow-graph-mismatch',
+          graphFingerprint: persistedFingerprint,
+        });
       }
       graph = persisted.graph;
       workflowName = persisted.name;
@@ -1093,7 +1107,7 @@ export function apply(ctx, config) {
         // 其余类型：真实执行（agent 会流式推 agent-progress；输出节点 wantsSink 在试运行中跳过写回）
         const r = await kind.execute({
           node, s: orchLike, engine: orchLike,
-          signal: null, emit: broadcast, runId,
+          signal: testAbort.signal, emit: broadcast, runId,
           render: (tpl) => renderTemplate(tpl || '', orchLike.templateCtx(node)),
         });
         const normalized = normalizeExecutionResult(r);
@@ -1105,13 +1119,20 @@ export function apply(ctx, config) {
         });
         return json(res, 200, {
           ok: true, output, structuredOutput: normalized.structuredOutput,
-          ...(typeof r === 'object' && r ? { turns: r.turns, model: r.model, artifacts: r.artifacts } : {}),
+          ...(typeof r === 'object' && r ? {
+            turns: r.turns, model: r.model, artifacts: r.artifacts,
+            ...(r.input !== undefined ? { input: r.input } : {}),
+            ...(r.workspaceStats !== undefined ? { workspaceStats: r.workspaceStats } : {}),
+          } : {}),
         });
       }
       json(res, 400, { error: `不支持试运行的节点类型: ${node.type}` });
     } catch (e) {
-      broadcast('node-status', { runId, nodeId: node.id, status: 'error', test: true, error: String(e.message || e) });
-      json(res, 200, { ok: false, error: String(e.message || e) });
+      const message = testTimedOut ? `节点超时（${Math.round(testTimeoutMs / 1000)}s）` : String(e.message || e);
+      broadcast('node-status', { runId, nodeId: node.id, status: 'error', test: true, error: message });
+      if (!res.writableEnded) json(res, 200, { ok: false, error: message });
+    } finally {
+      clearTimeout(testTimer);
     }
   } });
 
