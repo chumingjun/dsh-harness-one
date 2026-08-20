@@ -4,9 +4,10 @@ Workflow One（`mvp-canvas`）：物业智能体工作流编排，七个 dsh-ccp
 
 ## 环境前提
 
-- Node ≥ 20（macOS 系统 Node 不够时用 `DSH_NODE` 指向便携版，如 `/tmp/node-v22.20.0-darwin-arm64/bin/node`）
-- dsh 全局安装：`npm i -g --prefix ~/.local/npm-global @deepseek-ai/dsh`
-- LLM key 走环境变量（`GLM_API_KEY` 优先）；插件自身**不存任何模型 key**（架构定稿：模型/渠道恒用 dsh 数据源）
+- Node ≥ 20。系统自带 Node 版本不够时，用 `DSH_NODE` 环境变量指向任意 ≥ 20 的 node 可执行文件（setup/start/pack 脚本都认它）
+- dsh 全局安装：`npm i -g @deepseek-ai/dsh`
+- LLM key 一律经环境变量注入：变量名由 dsh profile 的 provider 配置（`cordis.patch.yml` 的 `apiKeyEnv`）声明，配什么 provider 就用什么变量，文档与代码里不要写死某个 key 名；插件与仓库**不存任何 key**（架构定稿：模型/渠道恒用 dsh 数据源）
+- 构建脚本为 POSIX sh：macOS / Linux 原生可用，Windows 走 WSL 或 Git Bash
 
 ## 常用命令
 
@@ -54,7 +55,7 @@ sh dsh-plugins/pack.sh <tag>
 - 插件里 `@deepseek-ai/*` 依赖不会从 dsh 主安装解析——`bootstrap-deps.sh` 软链解决，勿用 registry 版本
 - dsh 进程内 `fetch 127.0.0.1` 自请求 404，用 LAN IP
 - 官方 UI 特权页（settings/credentials 等）远程必 403（PRIVILEGED_METHODS 钉 loopback），属安全设计不是 bug；插件自有路由不受限
-- dsh HMR 会缓存插件模块：改插件代码后 `pkill` 全杀再重启，半重启不生效
+- dsh HMR 会缓存插件模块：改插件代码后必须彻底结束 dsh 进程再重启（macOS `pkill`、Linux 同理，Windows/WSL 下用任务管理器或 `taskkill`），半重启不生效
 
 ## 前端坑
 
