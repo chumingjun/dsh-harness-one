@@ -284,6 +284,7 @@ export class Orchestrator {
         ...(result.structuredOutput.mediaType ? { mediaType: result.structuredOutput.mediaType } : {}),
         ...(extra?.trace ? { hasTrace: true, sessionId: extra.sessionId } : {}),
         ...(extra?.input !== undefined ? { hasInput: true } : {}),
+        ...(extra?.turns != null ? { turns: extra.turns } : {}),
       });
       this._onNodeDone(s, node.id, false);
     } catch (err) {
@@ -324,6 +325,7 @@ export class Orchestrator {
       this.emit('node-status', {
         runId: run.runId, nodeId: node.id, status: canceled ? 'canceled' : 'error', error: canceled ? '运行已取消' : msg,
         ...(errDetails.trace ? { hasTrace: true, sessionId: errDetails.sessionId } : {}),
+        ...(errDetails.turns != null ? { turns: errDetails.turns } : {}),
       });
       this._onNodeDone(s, node.id, !canceled);
     } finally {

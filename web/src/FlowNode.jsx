@@ -25,6 +25,10 @@ const CHILD_TYPES = NODE_REGISTRY.map((k) => ({ type: k.type, icon: k.icon, labe
 export function FlowNode({ data, selected, id, onAddChild }) {
   const meta = kindOf(data.nodeType);
   const status = data.runStatus || 'idle';
+  const turns = status === 'running' ? data.liveTurns : data.runTurns;
+  const statusText = status === 'success'
+    ? `✓ ${data.runChars ?? 0} 字${turns != null ? ` · ${turns} 轮` : ''}`
+    : `${STATUS_TEXT[status] || ''}${status === 'running' && turns != null ? ` 第 ${turns} 轮` : ''}${status !== 'running' && turns != null ? ` · ${turns} 轮` : ''}`;
   const badges = [
     ...extraBadges(data),
     ...((meta.badges || (() => []))(data) || []),
@@ -35,9 +39,7 @@ export function FlowNode({ data, selected, id, onAddChild }) {
       <Handle type="target" position={Position.Left} className="flow-handle flow-handle-target" />
       <div className="flow-node-head" style={{ background: meta.color }}>
         <span className="flow-node-title"><span dangerouslySetInnerHTML={{ __html: meta.icon }} />{data.label || meta.label}</span>
-        <span className="flow-node-badge">
-          {status === 'success' ? `✓ ${data.runChars ?? 0} 字` : (STATUS_TEXT[status] || '')}
-        </span>
+        <span className="flow-node-badge">{statusText}</span>
       </div>
       <div className="flow-node-body">
         <p className="flow-node-hint">{clip(meta.summary(data), 60)}</p>

@@ -27,7 +27,7 @@ export const NODE_REGISTRY = [
     preset: () => ({ label: '新智能体', prompt: '', tools: [] }),
     summary: (d) => `提示词：${d.prompt || '(默认助手)'}`,
     badges: (d) => [
-      d.model && { text: shortModel(d.model), cls: 'badge-model' },
+      d.model && { text: shortModel(d.model), cls: 'badge-model', title: `模型：${d.model}` },
       d.maxRounds && { text: `↻${d.maxRounds}` },
       (d.tools || []).length > 0 && { text: '工具' },
       (d.skills || []).length > 0 && { text: `技能 ${d.skills.length}` },
@@ -79,5 +79,5 @@ export const kindOf = (type) => NODE_REGISTRY.find((k) => k.type === type) || {
 
 function shortModel(m) {
   const parts = String(m).split(':');
-  return parts[parts.length - 1].replace(/^glm-/, 'GLM ').slice(0, 16);
+  return parts[parts.length - 1].replace(/^glm-/, 'GLM ');
 }

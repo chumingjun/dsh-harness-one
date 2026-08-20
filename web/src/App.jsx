@@ -202,6 +202,7 @@ export default function App() {
           if (n.id !== p.nodeId) return n;
           const data = { ...n.data, runStatus: p.status };
           if (p.status === 'success') { data.runChars = p.chars; data.runError = null; data.durationMs = p.durationMs; }
+          if (p.turns != null) data.runTurns = p.turns;
           if (p.status === 'error' || p.status === 'canceled') data.runError = p.error;
           if (p.outputPreview != null) data.runOutput = p.outputPreview;
           if (p.hasTrace) data.hasTrace = true;
@@ -238,7 +239,7 @@ export default function App() {
     es.addEventListener('agent-progress', (e) => {
       const p = JSON.parse(e.data);
       setProgress((prev) => ({ ...prev, [p.nodeId]: p }));
-      setNodes((nds) => nds.map((n) => (n.id === p.nodeId ? { ...n, data: { ...n.data, livePreview: p.preview } } : n)));
+      setNodes((nds) => nds.map((n) => (n.id === p.nodeId ? { ...n, data: { ...n.data, livePreview: p.preview, liveTurns: p.turns } } : n)));
     });
     es.addEventListener('assistant-patch', (e) => {
       const p = JSON.parse(e.data);
@@ -318,6 +319,7 @@ export default function App() {
           if (n.id !== nodeId) return n;
           const data = { ...n.data, runStatus: st.status };
           if (st.chars != null) data.runChars = st.chars;
+          if (st.turns != null) data.runTurns = st.turns;
           if (st.error) data.runError = st.error;
           if (st.durationMs != null) data.durationMs = st.durationMs;
           if (st.model) data.runtimeModel = st.model;
@@ -538,7 +540,7 @@ export default function App() {
       return;
     }
     setProgress({});
-    setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, runStatus: 'idle', runError: null, runOutput: undefined, runtimeStructuredOutput: undefined, livePreview: undefined } })));
+    setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, runStatus: 'idle', runError: null, runOutput: undefined, runtimeStructuredOutput: undefined, livePreview: undefined, liveTurns: undefined, runTurns: undefined } })));
     const res = await fetch(apiUrl('/run'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

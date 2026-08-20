@@ -475,7 +475,7 @@ body {
   background: var(--bg-raised);
   border: 1.5px solid var(--border-strong);
   border-radius: var(--radius);
-  min-width: 210px; max-width: 280px;
+  min-width: 210px; max-width: 340px;
   box-shadow: var(--shadow-1);
   transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
@@ -510,7 +510,10 @@ body {
   border: 1px solid var(--border);
   display: inline-flex; align-items: center; gap: 3px;
 }
-.badge-model { font-family: var(--font-mono); background: rgba(245,158,11,.1); color: #FBBF24; border-color: rgba(245,158,11,.25); }
+.badge-model {
+  font-family: var(--font-mono); background: rgba(245,158,11,.1); color: #FBBF24; border-color: rgba(245,158,11,.25);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .badge-plan { background: rgba(236,72,153,.12); color: #F9A8D4; border-color: rgba(236,72,153,.25); }
 .badge-cond { background: rgba(245,158,11,.1); color: #FBBF24; border-color: rgba(245,158,11,.25); }
 .badge-approval { background: rgba(236,72,153,.12); color: #F9A8D4; border-color: rgba(236,72,153,.25); }
