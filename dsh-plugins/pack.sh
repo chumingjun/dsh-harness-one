@@ -138,6 +138,9 @@ try {
 NODE
 echo "✓ QuickJS WASM 归档 smoke 通过"
 
+# 说明：dsh-better-sidebar（侧边栏工作台宿主）不打进 tarball —— 它是 registry npm 包，
+# setup.sh 安装时从 npm 拉取（canvasui 软依赖它，失败仅损失「对话记录」tab）。
+
 # ---- 4. 打包 ----
 cd "$OUT"
 tar -czf "$TAR" dsh-plugins

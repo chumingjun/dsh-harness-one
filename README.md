@@ -4,6 +4,7 @@
 
 - 画布入口：`http://127.0.0.1:4021/wf1/`（dsh web profile）
 - 官方 dsh Web UI：`http://127.0.0.1:4021/`（同进程同端口；画布注册为 conversation.view 一等视图，侧边栏 🧩 进入）
+- 右侧工作台侧边栏：官方 UI 右侧为 [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（setup.sh 默认从 npm 安装）；我们的「对话记录」tab 排在其 + 菜单第一位，切到工作流视图时自动展开
 - 旧 Express 兼容入口：`http://127.0.0.1:4020/`（仅保留演示，不再扩展）
 
 > 远程访问：setup.sh 里 webserver host 默认 `127.0.0.1`，局域网/Tailscale 需改 `0.0.0.0`（dsh agent 有 bash 能力，仅在可信网络开放）。官方 UI 的 settings/credentials 等特权页仅限 loopback（远程 403 属安全设计），插件自有路由不受影响。
@@ -37,7 +38,7 @@ GLM_API_KEY=xxx sh start.sh [profile]    # 3. 启动
 
 ## 画布 AI 助手
 
-官方 dsh Web UI 的聊天里直接改图（同 session，经 canvas_* 工具落图）：`canvas_get_graph` / `canvas_graph_summary` / `canvas_graph_patch`（批量原子操作，含 script 节点契约）/ `canvas_lint_graph` / `canvas_run_workflow` / `canvas_run_status`。聊天记录栏实时显示该 session 的消息与工具调用流。
+官方 dsh Web UI 的聊天里直接改图（同 session，经 canvas_* 工具落图）：`canvas_get_graph` / `canvas_graph_summary` / `canvas_graph_patch`（批量原子操作，含 script 节点契约）/ `canvas_lint_graph` / `canvas_run_workflow` / `canvas_run_status`。聊天记录在右侧 better-sidebar 的「对话记录」tab 实时显示该 session 的消息与工具调用流（不可见时自动暂停轮询）。
 
 ## 飞书
 
@@ -52,7 +53,7 @@ GLM_API_KEY=xxx sh start.sh [profile]    # 3. 启动
 | `dsh-ccpg-tools` | feishu_doc_read / feishu_doc_write / load_skill 注册 `ctx.tools` |
 | `dsh-ccpg-orchestrator` | DAG 调度 + 节点级 `ctx.agents` 进程内 agent + QuickJS 脚本节点 + `/wf1/api/*` HTTP/SSE |
 | `dsh-ccpg-web` | 画布静态托管 `/wf1/`（SPA fallback） |
-| `dsh-ccpg-canvasui` | 官方 dsh Web UI 画布视图（conversation.view tab）+ canvas_* 工具 |
+| `dsh-ccpg-canvasui` | 官方 dsh Web UI 画布视图（conversation.view tab）+ canvas_* 工具 + better-sidebar「对话记录」tab（软依赖） |
 | `dsh-ccpg-document-preview` | 文档全屏预览（pdfjs / docx-preview / sheetjs / @file-viewer/pptx，inline workers、无第三方上传） |
 | `dsh-ccpg-larkauth` | 飞书扫码登录（启动自举、token 续约、技能种子）；官方设置面板「飞书账号」section |
 | `dsh-ccpg-brand` | 品牌定制（CCPG logo + 聊天 hero 标题） |

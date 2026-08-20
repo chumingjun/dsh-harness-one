@@ -7,7 +7,7 @@
 | `dsh-ccpg-tools` | feishu_doc_read / feishu_doc_write / load_skill 注册 `ctx.tools` |
 | `dsh-ccpg-orchestrator` | DAG 编排 + 节点级 `ctx.agents` 进程内 agent + QuickJS 脚本节点 + `/wf1/api/*` HTTP/SSE |
 | `dsh-ccpg-web` | 画布静态托管 `/wf1/` |
-| `dsh-ccpg-canvasui` | 官方 dsh Web UI 的画布视图（conversation.view tab，iframe 载 /wf1/；聊天记录栏源片段在 `shared/chat-pane.js` 构建期内联） |
+| `dsh-ccpg-canvasui` | 官方 dsh Web UI 的画布视图（conversation.view tab，iframe 载 /wf1/）+ better-sidebar「对话记录」tab（软依赖，`shared/chat-pane.js` 构建期内联） |
 | `dsh-ccpg-document-preview` | PDF/DOCX/XLS(X)/PPTX 本地全屏预览（pdfjs/docx-preview/sheetjs/@file-viewer/pptx，inline workers、无第三方上传）；旧 DOC/PPT 走下载 |
 | `dsh-ccpg-larkauth` | 飞书账号扫码登录（lark-cli Device Flow）；启动自举安装 lark-cli、user token 后台续约、feishu-cli 技能种子 |
 | `dsh-ccpg-brand` | 品牌定制（CCPG logo + 聊天 hero 标题） |
@@ -35,6 +35,7 @@ GLM_API_KEY=xxx sh start.sh [profile名]            # 3. 启动
 6. `dsh plugin add` 七插件（失败即中止，不再留半成品 profile）
 7. 依赖引导：dsh SDK 是 dsh 包内层 bundled deps，registry 版本滞后且插件解析路径够不到——`bootstrap-deps.sh` 软链进插件源码目录
 8. 写 `cordis.patch.yml`（GLM provider 示例 + 七插件行 + webserver 端口）
+9. 装 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（npm 包，自带 bundle patch 一步挂载）：官方 UI 右侧工作台侧边栏——canvasui 往它注册「对话记录」tab（+ 菜单第一位，切工作流视图自动展开）。软依赖：装不上仅损失该 tab，画布不受影响；不打入分发包，装包机器从 npm 拉取
 
 换模型：改 patch 里 `llm-pi-ai.providers`（openai-completions / anthropic-messages 均可），key 用对应环境变量。
 

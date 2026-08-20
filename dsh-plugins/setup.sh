@@ -155,6 +155,8 @@ else
       name: 'dsh-ccpg-larkauth'
     - id: ccpg-brand
       name: 'dsh-ccpg-brand'
+# 注意：dsh-better-sidebar 不在这里手写挂载行——它走 npm 包自带的
+# dsh.bundle.patch（dsh plugin add 一步完成安装+挂载），手写会双挂载。
 # webserver：dsh-web-app bundle 已挂该行（默认 127.0.0.1:3080），这里只覆盖端口。
 # host 127.0.0.1=本机访问；局域网/Tailscale 远程改 host 为 0.0.0.0（注意 dsh agent 有 bash 能力，仅在可信网络开放）。
 - id: webserver
@@ -181,6 +183,15 @@ const updated = source.replace(anchor, "$1\n    - id: dsh-ccpg-document-preview\
 fs.writeFileSync(file, updated);
 NODE
   echo "✓ document-preview 已按序插入 profile patch"
+fi
+
+# 4.5 DSH-better-sidebar（社区侧边栏工作台，npm 安装）——「对话记录」tab 的宿主。
+# canvasui 对它是软依赖：装不上只损失聊天记录 tab，工作流画布不受影响，故失败仅告警。
+# 走 registry npm 包（自带 dsh.bundle.patch，dsh plugin add 一步完成安装+挂载）。
+if ! node "$DSH_BIN" plugin --profile "$PROFILE" add dsh-better-sidebar@latest >/dev/null 2>&1; then
+  echo "⚠ dsh-better-sidebar 安装失败（侧边栏「对话记录」tab 不可用；可稍后手动：dsh plugin --profile $PROFILE add dsh-better-sidebar）"
+else
+  echo "✓ dsh-better-sidebar 已安装（侧边栏工作台 + 对话记录 tab）"
 fi
 
 # 5. lark-cli（飞书官方 CLI）——飞书账号扫码登录与 agent 飞书操作依赖它。
