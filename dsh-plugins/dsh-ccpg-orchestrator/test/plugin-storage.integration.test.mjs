@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { apply } from '../lib/index.js';
 
 function responseCapture() {
@@ -34,6 +35,28 @@ function request(method, url, body) {
 const dshHome = mkdtempSync(join(tmpdir(), 'wf1-plugin-home-'));
 const original = process.env.DSH_HOME;
 process.env.DSH_HOME = dshHome;
+// legacy 数据是 gitignore 的本机运行时目录：本地碰巧有历史数据测试才过，
+// CI 干净检出是空的。测试自播种最小 legacy 数据，保证任何环境可复现。
+const legacyDataDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
+const seedLegacy = () => {
+  mkdirSync(join(legacyDataDir, 'workflows'), { recursive: true });
+  mkdirSync(join(legacyDataDir, 'runs'), { recursive: true });
+  const workflowFile = join(legacyDataDir, 'workflows', 'wf_it_legacy.json');
+  const runFile = join(legacyDataDir, 'runs', 'run_it_legacy.json');
+  if (!existsSync(workflowFile)) {
+    writeFileSync(workflowFile, JSON.stringify({
+      id: 'wf_it_legacy', name: 'IT 遗留工作流', createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+      graph: { nodes: [], edges: [] },
+    }));
+  }
+  if (!existsSync(runFile)) {
+    writeFileSync(runFile, JSON.stringify({
+      runId: 'run_it_legacy', startedAt: '2026-08-01T00:00:00.000Z', finishedAt: '2026-08-01T00:00:01.000Z',
+      status: 'success', triggerInput: '', outputs: {}, structuredOutputs: {}, nodeStates: {}, nodeOrder: [], schemaVersion: 3,
+    }));
+  }
+};
+seedLegacy();
 try {
   const routes = [];
   const sessions = { get: () => undefined, flush: async () => {} };
