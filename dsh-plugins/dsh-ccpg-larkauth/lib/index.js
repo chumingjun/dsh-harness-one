@@ -11,7 +11,7 @@
 // 启动时自举（不阻塞加载）：
 //   1) 未安装 lark-cli → 后台 npm 全局安装到 ~/.local/npm-global
 //   2) 默认身份固定为 user（config default-as user）
-//   3) feishu-cli 技能种子到 ~/.dsh/skills 与 workflow-one-skills；官方 lark-* 技能缺则 npx 补装
+//   3) feishu-cli 技能种子到 ~/.dsh/skills（dsh 原生技能根）；官方 lark-* 技能缺则 npx 补装
 //   4) 后台定时续约 user token（20min 一轮，临期才真正刷新；refresh_token 轮换=授权永久续期）
 // 插件不落任何凭据文件：token 由 lark-cli 自己管（~/.lark-cli + keychain）。
 

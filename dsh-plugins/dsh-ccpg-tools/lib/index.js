@@ -1,14 +1,13 @@
 // dsh-ccpg-tools：物业编排的模型工具插件（Cordis plugin）。
 // 在 dsh 进程内注册到 ctx.tools：
 //   - feishu_doc_read / feishu_doc_write：飞书文档读写
-//   - load_skill：技能渐进加载（目录常驻提示词，正文按需取）
 // 工作区文件能力由 dsh 自带 fs 工具承担（节点 cwd 即工作区），不再重复注册。
+// 技能加载由 dsh 原生 skill 工具（dsh-tool-skill + ctx.skills）承担，无自研 load_skill。
 
 import z from '@deepseek-ai/schemastery';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { createFeishu, FeishuClient } from './feishu.js';
 import { getFeishuCredOrEnv } from './credentials.js';
-import { listSkills, getSkill } from './skills.js';
 
 export const name = 'dsh-ccpg-tools';
 export const inject = ['tools'];
@@ -82,22 +81,6 @@ export function apply(ctx, config) {
       } catch (e) {
         return `写入失败: ${e.message}`;
       }
-    },
-  }));
-
-  ctx.tools.register(textTool({
-    name: 'load_skill',
-    description: '加载一个技能的详细规范。系统提示词里的技能目录列出了可用 name；需要哪个规范再加载哪个，不要一次全部加载。',
-    parameters: {
-      name: { type: 'string', required: true, description: '技能 name（来自技能目录清单）' },
-    },
-    execute(args) {
-      const skill = getSkill(args.name);
-      if (!skill) {
-        const available = listSkills().map((s) => s.id).join(', ');
-        return `没有技能 "${args.name}"。可用技能：${available || '(无)'}`;
-      }
-      return `【技能：${skill.name}】\n${skill.body}`;
     },
   }));
 }

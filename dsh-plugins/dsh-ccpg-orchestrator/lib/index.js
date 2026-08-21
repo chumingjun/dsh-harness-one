@@ -83,7 +83,7 @@ const atomicWrite = (file, data) => {
 const atomicJson = (file, value) => atomicWrite(file, JSON.stringify(value, null, 2));
 
 export const name = 'dsh-ccpg-orchestrator';
-export const inject = ['agents', 'agentDefaultModel', 'sessions', 'tools', 'webServer', 'agentPresets', 'sessionPersistence', 'llm'];
+export const inject = ['agents', 'agentDefaultModel', 'sessions', 'tools', 'webServer', 'agentPresets', 'sessionPersistence', 'llm', 'skills'];
 
 export const Config = z.object({
   staticDir: z.string().default(''),
@@ -441,12 +441,12 @@ export function apply(ctx, config) {
 
 你是一个独立运行的智能体，自主决定步骤完成下面的任务：
 - 当前目录是你的工作区，交付物（报告/工单/回复稿等）必须写成文件落盘；中间产物也建议落盘。
-- 有可用的技能目录时，先用 load_skill 加载对应规范再动手，输出遵守规范。
+- 会话技能目录里匹配任务的技能，先用 skill 工具加载对应规范再动手，输出遵守规范。
 - 完成后在最终回复里给出交付物文件清单（文件名 + 一句话说明），不要复述全文。`;
     const skillIds = Array.isArray(d.skills) ? d.skills.slice() : [];
-    // feishu-cli 默认对所有 agent 可用（lark-cli 已装时）：索引带上，agent 自行决定 load_skill
+    // feishu-cli 默认对所有 agent 可用（lark-cli 已装时）：索引带上，agent 自行决定加载
     if (larkCliAvailable() && !skillIds.includes('feishu-cli')) skillIds.push('feishu-cli');
-    const idx = skillIndexPromptSafe(skillIds);
+    const idx = await skillIndexPromptSafe(skillIds);
     if (idx) systemPrompt += `\n\n${idx}`;
     const outputConfig = getAgentOutputConfig(d);
     if (outputConfig.mode === 'structured') {
@@ -1562,23 +1562,13 @@ export function apply(ctx, config) {
     return streamArtifactResponse(req, res, { file: realFull, filename: file, mediaType, preview });
   } });
 
-  // ---- 技能目录 ----
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/skills', handler(_req, res) {
+  // ---- 技能目录：dsh 原生 ctx.skills（skill-filesystem 发现 ~/.dsh/skills 等根）----
+  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/skills', async handler(_req, res) {
     try {
-      const dir = process.env.WF1_SKILLS_DIR || join(homedir(), '.dsh', 'workflow-one-skills');
-      const skills = existsSync(dir)
-        ? readdirSync(dir).filter((f) => f.endsWith('.md')).map((f) => {
-            const id = f.replace(/\.md$/, '');
-            const meta = {};
-            const raw = readFileSync(join(dir, f), 'utf8');
-            const m = raw.match(/^---\n([\s\S]*?)\n---/);
-            if (m) for (const line of m[1].split('\n')) {
-              const kv = line.match(/^(\w+):\s*(.+)$/);
-              if (kv) meta[kv[1]] = kv[2].trim();
-            }
-            return { id, name: meta.name || id, description: meta.description || '' };
-          })
-        : [];
+      const all = await ctx.skills.list();
+      const skills = all
+        .filter((s) => s.invocation?.modelInvocable !== false)
+        .map((s) => ({ id: s.name, name: s.name, description: s.description || '', provider: s.provider, source: s.source }));
       json(res, 200, { skills });
     } catch (e) {
       json(res, 200, { skills: [], error: String(e.message) });
@@ -1848,26 +1838,19 @@ function larkCliAvailable() {
   return _larkCliCache;
 }
 
-function skillIndexPromptSafe(ids) {
+async function skillIndexPromptSafe(ids) {
   try {
-    const dir = process.env.WF1_SKILLS_DIR || join(homedir(), '.dsh', 'workflow-one-skills');
-    if (!existsSync(dir)) return null;
+    const skills = await ctxRef?.skills?.list();
+    if (!skills?.length) return null;
+    // dsh 原生 skill 工具已注入会话技能目录（skill-catalog），这里只做画布节点勾选的定向提示
     const lines = [];
-    for (const f of readdirSync(dir).filter((f) => f.endsWith('.md'))) {
-      const id = f.replace(/\.md$/, '');
-      const meta = {};
-      const raw = readFileSync(join(dir, f), 'utf8');
-      const m = raw.match(/^---\n([\s\S]*?)\n---/);
-      if (m) for (const line of m[1].split('\n')) {
-        const kv = line.match(/^(\w+):\s*(.+)$/);
-        if (kv) meta[kv[1]] = kv[2].trim();
-      }
-      if (ids.includes(id) || ids.includes(meta.name)) {
-        lines.push(`- ${meta.name || id}（load_skill 参数 name="${id}"）：${meta.description || ''}`);
+    for (const s of skills) {
+      if (ids.includes(s.name)) {
+        lines.push(`- ${s.name}：${s.description || ''}`);
       }
     }
     if (!lines.length) return null;
-    return `可用技能目录（用 load_skill 按需加载，不要一次全加载）：\n${lines.join('\n')}`;
+    return `本节点指定优先使用以下技能（用 skill 工具加载规范后按规范执行）：\n${lines.join('\n')}`;
   } catch { return null; }
 }
 

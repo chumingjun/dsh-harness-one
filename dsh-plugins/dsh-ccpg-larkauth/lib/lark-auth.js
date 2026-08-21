@@ -4,7 +4,7 @@
 //   1) ensureLarkCli        未安装时自动 npm 全局安装到 ~/.local/npm-global
 //   2) setDefaultIdentityUser  默认身份固定为 user（config default-as user）
 //   3) renewUserToken       后台定时触发 uat-client 刷新（refresh_token 轮换=授权永久续期）
-//   4) ensureSkillFiles     feishu-cli 技能种子到 ~/.dsh/skills 与 workflow-one-skills
+//   4) ensureSkillFiles     feishu-cli 技能种子到 ~/.dsh/skills（dsh 原生技能根）
 
 import { spawn, spawnSync } from 'node:child_process';
 import { statSync, mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -248,15 +248,13 @@ function seedSkillFile(targetDir) {
 }
 
 /**
- * 把 feishu-cli 技能种子到 dsh 的技能发现根：
- *   ~/.dsh/skills/            官方 UI 聊天 agent 与所有 preset 的全局根
- *   ~/.dsh/workflow-one-skills/  画布 agent 节点的技能索引目录
+ * 把 feishu-cli 技能种子到 dsh 的用户级技能发现根 ~/.dsh/skills/
+ * （dsh-skill-filesystem 自动发现，官方聊天 agent 与画布 agent 共用）。
  * 另：~/.agents/skills 缺官方 lark-* 技能时后台 npx skills add 补齐（best-effort，不阻塞）。
  */
 export function ensureSkillFiles({ log } = {}) {
   const written = [];
   const dirs = [join(homedir(), '.dsh', 'skills')];
-  dirs.push(process.env.WF1_SKILLS_DIR || join(homedir(), '.dsh', 'workflow-one-skills'));
   for (const dir of dirs) {
     try {
       const w = seedSkillFile(dir);
