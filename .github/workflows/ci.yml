@@ -33,7 +33,12 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm --prefix web install --no-audit --no-fund
-          # document-preview 依赖由 build-document-preview.sh 内自装（有 lock 用 ci，无则 install）
+          # orchestrator 自有依赖（ajv/cron-parser/quickjs）+ 单测可达的 SDK 包。
+          # 完整 SDK（dsh-tools/dsh-llm/dsh-session）是 dsh bundled deps，本地经
+          # bootstrap-deps.sh 软链，registry 版本滞后；单测只 import schemastery，
+          # registry 版即可满足。document-preview 依赖由 build-document-preview.sh 自装。
+          npm --prefix dsh-plugins/dsh-ccpg-orchestrator install --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund @deepseek-ai/schemastery
 
       - name: test
         run: npm test
