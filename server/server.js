@@ -95,6 +95,8 @@ app.post('/api/workflows', (req, res) => {
     graph,
   };
   writeFileSync(wfFile(wid), JSON.stringify(wf, null, 2));
+  // 与 dsh 插件同语义：保存命名工作流后镜像到草稿图并写入绑定指针
+  writeFileSync(GRAPH_FILE, JSON.stringify({ nodes: graph.nodes, edges: graph.edges, workflowId: wid }, null, 2));
   res.json({ ok: true, id: wf.id, name: wf.name, updatedAt: wf.updatedAt });
 });
 

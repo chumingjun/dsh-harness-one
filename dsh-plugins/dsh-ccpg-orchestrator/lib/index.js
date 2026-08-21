@@ -855,6 +855,8 @@ export function apply(ctx, config) {
       } catch (error) {
         return routeError(res, error);
       }
+      // 命名工作流保存后镜像到草稿图并写入绑定指针：刷新/重开页面时画布恢复到该工作流。
+      atomicJson(GRAPH_FILE, { nodes: wf.graph.nodes, edges: wf.graph.edges, workflowId: wf.id });
       return json(res, 200, {
         ok: true,
         id: wf.id,

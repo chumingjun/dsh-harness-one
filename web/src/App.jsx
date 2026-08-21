@@ -144,19 +144,35 @@ export default function App() {
 
   // 初始加载
   useEffect(() => {
-    fetch(apiUrl('/graph'))
-      .then((r) => r.json())
-      .then((g) => {
-        setNodes(g.nodes.map(toFlowNode));
-        setEdges(g.edges.map(toFlowEdge));
-        // 图加载完成后补报 AI 助手（bind 若发生在加载前会拿到空图）。
-        // 直接用加载到的 g 而非 toGraph()——setNodes 后 nodesRef 要到下一次渲染才刷新，
-        // 同步读还是空图；g 就是画布此刻的真图。
-        fetch(apiUrl('/assistant/canvas-state'), {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ canvasId: canvasIdRef.current, graph: g, workflowId: null }),
-        }).catch(() => {});
-      });
+    (async () => {
+      const g = await fetch(apiUrl('/graph')).then((r) => r.json()).catch(() => null);
+      if (!g) return;
+      let graphDoc = g;
+      let bound = null;
+      // 草稿图带绑定指针 → 恢复对应工作流（其文件内容为权威）；指针失效（工作流已删）则回退草稿并清指针。
+      if (g.workflowId) {
+        const res = await fetch(apiUrl(`/workflows/detail?id=${encodeURIComponent(g.workflowId)}`)).catch(() => null);
+        if (res?.ok) {
+          bound = normalizeWorkflowDocument(await res.json());
+          graphDoc = bound.graph;
+          setCurrentWf(bound);
+        } else if (res?.status === 404) {
+          fetch(apiUrl('/graph'), {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nodes: g.nodes, edges: g.edges }),
+          }).catch(() => {});
+        }
+      }
+      setNodes(graphDoc.nodes.map(toFlowNode));
+      setEdges(graphDoc.edges.map(toFlowEdge));
+      // 图加载完成后补报 AI 助手（bind 若发生在加载前会拿到空图）。
+      // 直接用加载到的 graphDoc 而非 toGraph()——setNodes 后 nodesRef 要到下一次渲染才刷新，
+      // 同步读还是空图；graphDoc 就是画布此刻的真图。
+      fetch(apiUrl('/assistant/canvas-state'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ canvasId: canvasIdRef.current, graph: graphDoc, workflowId: bound?.id || null }),
+      }).catch(() => {});
+    })();
     (async () => {
       const j = (p) => fetch(apiUrl(p)).then((r) => r.json()).catch(() => null);
       // 并行拉取全部初始数据（原先逐条 await 串行，首屏时间被逐段叠加）
@@ -479,6 +495,11 @@ export default function App() {
     setSelectedId(null);
     setView('canvas');
     setDirty(false);
+    // 镜像到草稿图并写入绑定指针：刷新/重开页面后仍恢复到该工作流。
+    fetch(apiUrl('/graph'), {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodes: data.graph.nodes, edges: data.graph.edges, workflowId: data.id }),
+    }).catch(() => {});
     toast(`已打开「${data.name}」`);
   }, [setNodes, setEdges, toast]);
 
@@ -492,6 +513,11 @@ export default function App() {
     setSelectedId(null);
     setView('canvas');
     setDirty(false);
+    // 同 openWorkflow：镜像草稿图并写入绑定指针。
+    fetch(apiUrl('/graph'), {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodes: document.graph.nodes, edges: document.graph.edges, workflowId: document.id }),
+    }).catch(() => {});
     setTemplateOpen(true); // 空画布 → 弹模板库引导
   }, [setNodes, setEdges]);
 
