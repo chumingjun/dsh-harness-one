@@ -2,7 +2,12 @@
 node_modules/
 
 # build output
+# 构建产物一律不入库（源码安装跑 setup.sh 前先 build-web.sh；分发包由 pack.sh 现场构建）：
+#   web-dist = build-web.sh 产物（vite /wf1/ base，插件静态托管用）
+#   canvasui lib/client.js = build-canvasui.sh 产物（src/client.js 内联 shared/ 片段）
 dist/
+dsh-plugins/dsh-ccpg-web/web-dist/
+dsh-plugins/dsh-ccpg-canvasui/lib/client.js
 
 # macOS
 .DS_Store
