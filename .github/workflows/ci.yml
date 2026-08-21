@@ -33,12 +33,12 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm --prefix web install --no-audit --no-fund
-          # orchestrator 自有依赖（ajv/cron-parser/quickjs）+ 单测可达的 SDK 包。
-          # 完整 SDK（dsh-tools/dsh-llm/dsh-session）是 dsh bundled deps，本地经
-          # bootstrap-deps.sh 软链，registry 版本滞后；单测只 import schemastery，
-          # registry 版即可满足。document-preview 依赖由 build-document-preview.sh 自装。
+          # orchestrator 自有依赖（ajv/cron-parser/quickjs）+ 单测可达的 dsh SDK。
+          # 本地完整 SDK 经 bootstrap-deps.sh 从 dsh 安装软链；CI 用 registry rc 版
+          # （lib/index.js import 四个 SDK 包，集成测试真实加载 apply()）。
+          # document-preview 依赖由 build-document-preview.sh 自装。
           npm --prefix dsh-plugins/dsh-ccpg-orchestrator install --no-audit --no-fund
-          npm install --no-save --no-audit --no-fund @deepseek-ai/schemastery
+          npm install --no-save --no-audit --no-fund @deepseek-ai/schemastery @deepseek-ai/dsh-llm @deepseek-ai/dsh-tools @deepseek-ai/dsh-session
 
       - name: test
         run: npm test
