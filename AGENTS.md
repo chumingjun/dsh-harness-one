@@ -55,16 +55,20 @@
 ### 常用命令
 
 ```sh
+npm test                                   # 全量单测聚合（scripts/run-tests.sh：web 10 套 + orchestrator 13 套 + shared + document-preview）
 sh dsh-plugins/build-web.sh                 # 画布双构建（/wf1/ base + 根 base），改前端后必跑（产物不入库，仅落工作区）
 sh dsh-plugins/setup.sh [profile] [端口]    # 安装（默认 dsh-ccpg / 4021）
 sh dsh-plugins/start.sh <profile>           # 启动
 sh dsh-plugins/pack.sh <tag>                # 打包 release（CI 同源）
 
-cd web && npm test                          # 前端 9 套
-cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # 引擎 10 套
-node dsh-plugins/shared/chat-pane.test.mjs                       # 7 例
+# 分套运行（改哪跑哪）
+cd web && npm test                          # 前端 10 套
+cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # 引擎 13 套
+node dsh-plugins/shared/chat-pane.test.mjs                       # 10 例
 node dsh-plugins/dsh-ccpg-document-preview/test/index.test.mjs  # 4 例
 ```
+
+CI：`.github/workflows/ci.yml` 在 PR 与 main push 上跑 `npm test` + `build-web.sh`（产物不入库，仅验证可构建）；发版仍走 `release.yml`。
 
 ### 架构铁律（Workflow One 专属）
 
@@ -84,5 +88,5 @@ node dsh-plugins/dsh-ccpg-document-preview/test/index.test.mjs  # 4 例
 ### 测试与验证
 
 - 单测全部是零依赖 node 断言脚本（`node:assert` + 自写 runner），直接 `node <file>` 运行；新插件照此约定写测试
-- 改引擎跑 orchestrator 10 套；改前端跑 web 9 套；改 shared 跑 chat-pane 7 例；改预览跑 document-preview 4 例
+- 改引擎跑 orchestrator 13 套；改前端跑 web 10 套；改 shared 跑 chat-pane 10 例；改预览跑 document-preview 4 例
 - E2E 用 CDP（chrome-devtools）跑真实浏览器验证；dsh 官方 UI 首载慢，等待时间放宽（画布就绪 3.5s→6s），wait text 偶超时先多等几秒再判失败

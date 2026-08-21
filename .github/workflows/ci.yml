@@ -1,0 +1,44 @@
+name: ci
+
+# PR 与 main push 的门禁：全量单测 + 前端双构建验证。
+# 单测 = scripts/run-tests.sh（根 npm test 同源，零依赖 node:assert）；
+# 构建只验证能产出（产物不入库，release 打包仍走 release.yml 的 pack.sh）。
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    name: test + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+            dsh-plugins/*/package-lock.json
+
+      - name: install
+        run: |
+          npm ci --no-audit --no-fund
+          npm --prefix web install --no-audit --no-fund
+          # document-preview 依赖由 build-document-preview.sh 内自装（有 lock 用 ci，无则 install）
+
+      - name: test
+        run: npm test
+
+      - name: build
+        run: sh dsh-plugins/build-web.sh
+        env:
+          DSH_NODE: node # 构建链认 DSH_NODE 指向 ≥20 的 node；CI 里就是 node 本身
