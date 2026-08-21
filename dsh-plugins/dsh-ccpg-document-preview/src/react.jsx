@@ -1,6 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Download, Expand, Eye, Minimize, X } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { documentPreviewKind, loadPreviewText, normalizePreviewDocument } from './index.js';
 import './styles.css';
 
@@ -40,18 +42,20 @@ function TextRenderer({ document, kind, maxTextBytes }) {
   return <div className="dsh-doc-preview-scroll"><pre className={`dsh-doc-preview-text is-${kind}`}>{text}</pre></div>;
 }
 
+// react-markdown + GFM：完整表格/任务列表/删除线/脚注等；此前手写解析器只会
+// 标题/代码块/列表/段落，表格、粗体、行内代码、链接、引用全部原样漏出。
 function Markdown({ text }) {
-  const blocks = text.replace(/\r\n/g, '\n').split(/\n{2,}/);
-  return <article className="dsh-doc-preview-scroll dsh-doc-preview-markdown">{blocks.map((block, index) => {
-    const heading = /^(#{1,6})\s+(.+)$/.exec(block);
-    if (heading) {
-      const Tag = `h${heading[1].length}`;
-      return <Tag key={index}>{heading[2]}</Tag>;
-    }
-    if (block.startsWith('```') && block.endsWith('```')) return <pre key={index}><code>{block.replace(/^```[^\n]*\n?/, '').replace(/\n?```$/, '')}</code></pre>;
-    if (/^(?:[-*+] |\d+\. )/m.test(block)) return <ul key={index}>{block.split('\n').map((line, lineIndex) => <li key={lineIndex}>{line.replace(/^(?:[-*+] |\d+\. )/, '')}</li>)}</ul>;
-    return <p key={index}>{block}</p>;
-  })}</article>;
+  return (
+    <article className="dsh-doc-preview-scroll dsh-doc-preview-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>,
+          table: ({ node, ...props }) => <div className="md-table-wrap"><table {...props} /></div>,
+        }}
+      >{text}</ReactMarkdown>
+    </article>
+  );
 }
 
 function parseCsv(text) {

@@ -11,7 +11,10 @@
     "./styles.css": "./dist/document-preview.css",
     "./package.json": "./package.json"
   },
-  "files": ["src", "dist"],
+  "files": [
+    "src",
+    "dist"
+  ],
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node --test test/*.test.mjs",
@@ -22,15 +25,21 @@
     "docx-preview": "0.4.0",
     "lucide-react": "^1.32.0",
     "pdfjs-dist": "5.6.205",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "*",
     "react": ">=18",
-    "react-dom": ">=18"
+    "react-dom": ">=18",
+    "react-markdown": ">=9",
+    "remark-gfm": ">=4"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/schemastery": { "optional": true }
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@vitejs/plugin-react": "4.3.4",
@@ -41,7 +50,9 @@
   "dsh": {
     "client": {
       "platform": "web",
-      "inject": ["@deepseek-ai/dsh-client-runtime"]
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime"
+      ]
     }
   }
 }

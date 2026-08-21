@@ -17,7 +17,7 @@ await build({
     cssCodeSplit: false,
     lib: { entry: resolve(root, 'src/react.jsx'), formats: ['es'], fileName: () => 'react.js' },
     rollupOptions: {
-      external: ['react', 'react-dom', 'react-dom/client'],
+      external: ['react', 'react-dom', 'react-dom/client', 'react-markdown', 'remark-gfm'],
       output: {
         assetFileNames: (asset) => asset.name?.endsWith('.css') ? 'document-preview.css' : 'assets/[name]-[hash][extname]',
         chunkFileNames: 'renderers/[name]-[hash].js',
