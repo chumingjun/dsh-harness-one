@@ -1,8 +1,4 @@
-<<<<<<<< HEAD:dsh-plugins/dsh-ccpg-web/web-dist/assets/sheet-B76mvMVJ-DFrggTk7.js
-import{r as S,w as N,s as Z,B as h}from"./index-CTjkNy7o.js";/**
-========
-import{r as S,w as N,s as Z,B as h}from"./index-ChxvykmE.js";/**
->>>>>>>> a8c1b32 (feat(web): 技能勾选适配原生 ctx.skills + setup 注释同步):dsh-plugins/dsh-ccpg-web/web-dist/assets/sheet-B76mvMVJ-CCfuRsCh.js
+import{r as S,w as N,s as Z,B as h}from"./index-C530yvRZ.js";/**
  * @license lucide-react v1.33.0 - ISC
  *
  * This source code is licensed under the ISC license.
