@@ -162,13 +162,18 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
     });
     const data = await res.json();
     if (!res.ok) { alert(data.error || '上传失败'); return; }
-    set({ attachments: [...(d.attachments || []), { filename: data.filename, size: data.size }] });
+    set({ attachments: [...(d.attachments || []), { id: data.id, filename: data.filename, size: data.size }] });
     e.target.value = '';
   };
 
-  const removeAttachment = (filename) => {
-    fetch(apiUrl(`/attachments?filename=${encodeURIComponent(filename)}`), { method: 'DELETE' }).catch(() => {});
-    set({ attachments: (d.attachments || []).filter((a) => a.filename !== filename) });
+  const removeAttachment = (attachment) => {
+    const query = attachment.id
+      ? `id=${encodeURIComponent(attachment.id)}`
+      : `filename=${encodeURIComponent(attachment.filename)}`;
+    fetch(apiUrl(`/attachments?${query}`), { method: 'DELETE' }).catch(() => {});
+    set({ attachments: (d.attachments || []).filter((item) => (
+      attachment.id ? item.id !== attachment.id : item.filename !== attachment.filename
+    )) });
   };
 
   const runtimeContext = useMemo(() => {
@@ -300,10 +305,10 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
               <input type="file" onChange={uploadAttachment} className="file-input" />
             </div>
             {(d.attachments || []).map((a) => (
-              <div key={a.filename} className="attachment-row">
+              <div key={a.id || a.filename} className="attachment-row">
                 <span className="att-name">{a.filename}</span>
                 <span className="att-size">{(a.size / 1024).toFixed(1)}KB</span>
-                <button className="btn btn-sm" onClick={() => removeAttachment(a.filename)}>移除</button>
+                <button className="btn btn-sm" onClick={() => removeAttachment(a)}>移除</button>
               </div>
             ))}
           </Section>

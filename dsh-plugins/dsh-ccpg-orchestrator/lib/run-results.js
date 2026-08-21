@@ -140,10 +140,24 @@ export function normalizeRunDocument(value) {
   return document;
 }
 
-export function snapshotRunArtifacts(runValue, { workspaceRoot, artifactRoot }) {
+function runArtifactDirectory(run, { artifactRoot, artifactRunDir, runArtifactDir }) {
+  const directRunDir = artifactRunDir || runArtifactDir;
+  if (directRunDir) return directRunDir;
+  const runDir = artifactRoot && resolveInside(artifactRoot, safeFileId(run.runId, 'invalid'));
+  if (!runDir) throw new Error(artifactRoot ? '非法 runId' : '缺少 artifactRoot 或 artifactRunDir');
+  return runDir;
+}
+
+export function snapshotRunArtifacts(runValue, {
+  workspaceRoot,
+  workspaceForNode,
+  artifactRoot,
+  artifactRunDir,
+  runArtifactDir,
+}) {
   const run = normalizeRunDocument(runValue);
-  const runDir = resolveInside(artifactRoot, safeFileId(run.runId, 'invalid'));
-  if (!runDir) throw new Error('非法 runId');
+  const directRunDir = artifactRunDir || runArtifactDir;
+  const runDir = runArtifactDirectory(run, { artifactRoot, artifactRunDir, runArtifactDir });
   mkdirSync(runDir, { recursive: true });
   const artifacts = [];
   const issues = [];
@@ -151,7 +165,14 @@ export function snapshotRunArtifacts(runValue, { workspaceRoot, artifactRoot }) 
 
   for (const [nodeId, state] of Object.entries(run.nodeStates)) {
     const files = Array.isArray(state?.artifacts) ? state.artifacts : [];
-    const workspace = resolveInside(workspaceRoot, safeFileId(nodeLabel(run, nodeId), 'agent'));
+    const workspace = typeof workspaceForNode === 'function'
+      ? workspaceForNode({
+        workflowId: run.workflowId,
+        runId: run.runId,
+        nodeId,
+        nodeLabel: nodeLabel(run, nodeId),
+      })
+      : workspaceRoot && resolveInside(workspaceRoot, safeFileId(nodeLabel(run, nodeId), 'agent'));
     for (const relativePath of files) {
       if (!relativePath || String(relativePath).endsWith('/')) continue;
       const source = workspace && resolveInside(workspace, relativePath);
@@ -180,7 +201,7 @@ export function snapshotRunArtifacts(runValue, { workspaceRoot, artifactRoot }) 
           mediaType,
           previewable: isPreviewableMediaType(mediaType),
           sha256: createHash('sha256').update(readFileSync(target)).digest('hex'),
-          snapshot: `${safeFileId(run.runId, 'invalid')}/${id}`,
+          snapshot: directRunDir ? id : `${safeFileId(run.runId, 'invalid')}/${id}`,
         });
       } catch (error) {
         issues.push({ code: 'artifact-snapshot-failed', nodeId, path: String(relativePath), message: String(error.message || error) });
@@ -190,14 +211,46 @@ export function snapshotRunArtifacts(runValue, { workspaceRoot, artifactRoot }) 
   return { artifacts, issues };
 }
 
+function artifactRoots(value) {
+  if (Array.isArray(value)) return value.flatMap(artifactRoots);
+  if (!value) return [];
+  if (typeof value === 'string') return [value];
+  if (typeof value !== 'object') return [];
+  return [
+    ...artifactRoots(value.artifactRoots),
+    ...artifactRoots(value.artifactRoot),
+    ...artifactRoots(value.artifactRunDirs),
+    ...artifactRoots(value.artifactRunDir),
+    ...artifactRoots(value.runArtifactDirs),
+    ...artifactRoots(value.runArtifactDir),
+  ];
+}
+
+function artifactCandidates(run, artifact) {
+  const snapshot = String(artifact.snapshot || '');
+  const runId = safeFileId(run.runId, 'invalid');
+  return [...new Set([
+    snapshot,
+    `${runId}/${artifact.id}`,
+    artifact.id,
+    basename(snapshot),
+  ].filter(Boolean))];
+}
+
 export function resolveRunArtifact(artifactRoot, run, requestedId) {
   const artifact = run.artifactIndex.find((item) => item.id === requestedId);
   if (!artifact?.snapshot) return null;
-  const full = resolveInside(artifactRoot, artifact.snapshot);
-  if (!full || !existsSync(full) || !statSync(full).isFile()) return null;
-  const root = realpathSync(artifactRoot);
-  const real = realpathSync(full);
-  return resolveInside(root, real) === real ? { artifact, file: real } : null;
+  for (const candidateRoot of artifactRoots(artifactRoot)) {
+    if (!existsSync(candidateRoot) || !statSync(candidateRoot).isDirectory()) continue;
+    const root = realpathSync(candidateRoot);
+    for (const candidate of artifactCandidates(run, artifact)) {
+      const full = resolveInside(root, candidate);
+      if (!full || !existsSync(full) || !statSync(full).isFile()) continue;
+      const real = realpathSync(full);
+      if (resolveInside(root, real) === real) return { artifact, file: real };
+    }
+  }
+  return null;
 }
 
 function nodeType(node) {
@@ -289,13 +342,27 @@ export function createRunResults(value, { apiBase = '/wf1/api' } = {}) {
       ? 'available'
       : successfulOutputs.length > 0 ? 'partial' : 'unavailable';
   const artifacts = run.artifactIndex.map((artifact) => ({
-    ...artifact,
+    id: artifact.id,
+    nodeId: artifact.nodeId,
+    nodeLabel: artifact.nodeLabel,
+    name: artifact.name,
+    size: artifact.size,
+    mediaType: artifact.mediaType,
+    previewable: Boolean(artifact.previewable),
+    sha256: artifact.sha256,
     downloadUrl: `${apiBase}/run-artifact?run=${encodeURIComponent(run.runId)}&artifact=${encodeURIComponent(artifact.id)}`,
     previewUrl: artifact.previewable ? `${apiBase}/run-artifact?run=${encodeURIComponent(run.runId)}&artifact=${encodeURIComponent(artifact.id)}&preview=1` : null,
   }));
-  const outputNodeIds = new Set(outputResults.map((row) => row.nodeId));
-  const finalArtifacts = artifacts.filter((artifact) => outputNodeIds.has(artifact.nodeId));
-  const processArtifacts = artifacts.filter((artifact) => !outputNodeIds.has(artifact.nodeId));
+  const outputNodeIds = new Set(configuredOutputs.map((row) => row.nodeId));
+  const outputArtifacts = artifacts.filter((artifact) => outputNodeIds.has(artifact.nodeId));
+  const isTechnicalArtifact = (artifact) => Number(artifact.size) === 0
+    || /^fetch_err[^/]*\.json$/i.test(String(artifact.name || ''))
+    || /\.log$/i.test(String(artifact.name || ''));
+  const finalArtifacts = outputArtifacts.length
+    ? outputArtifacts
+    : artifacts.filter((artifact) => !isTechnicalArtifact(artifact));
+  const finalArtifactIds = new Set(finalArtifacts.map((artifact) => artifact.id));
+  const processArtifacts = artifacts.filter((artifact) => !finalArtifactIds.has(artifact.id));
   const links = [];
   for (const row of outputResults) {
     for (const link of extractHttpLinks(row.output)) links.push({ ...link, nodeId: row.nodeId, nodeLabel: row.nodeLabel });

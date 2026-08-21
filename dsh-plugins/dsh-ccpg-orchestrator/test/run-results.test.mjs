@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Writable } from 'node:stream';
@@ -98,7 +98,41 @@ await test('run results use output nodes as final results and include every runt
   assert.equal(result.primaryResult.output, 'final result');
   assert.deepEqual(result.finalArtifacts.map((item) => item.id), ['a2']);
   assert.deepEqual(result.processArtifacts.map((item) => item.id), ['a1']);
+  assert.equal(Object.hasOwn(result.artifacts[0], 'snapshot'), false);
+  assert.equal(Object.hasOwn(result.artifacts[0], 'relativePath'), false);
   assert.equal(result.links[0].url, 'https://example.test/doc');
+});
+
+await test('non-technical generated artifacts become final when output nodes have no files', () => {
+  const run = normalizeRunDocument({
+    ...baseRun(),
+    artifactIndex: [
+      { id: 'report', nodeId: 'agent', nodeLabel: '分析器', name: 'report.md', size: 12, relativePath: 'report.md', snapshot: 'run/report' },
+      { id: 'empty', nodeId: 'agent', nodeLabel: '分析器', name: 'empty.txt', size: 0, relativePath: 'empty.txt', snapshot: 'run/empty' },
+      { id: 'fetch', nodeId: 'agent', nodeLabel: '分析器', name: 'fetch_err2.json', size: 20, relativePath: 'fetch_err2.json', snapshot: 'run/fetch' },
+      { id: 'log', nodeId: 'agent', nodeLabel: '分析器', name: 'debug.log', size: 20, relativePath: 'debug.log', snapshot: 'run/log' },
+    ],
+  });
+  const result = createRunResults(run);
+  assert.deepEqual(result.finalArtifacts.map((item) => item.id), ['report']);
+  assert.deepEqual(result.processArtifacts.map((item) => item.id), ['empty', 'fetch', 'log']);
+});
+
+await test('legacy workflows without output nodes promote only non-technical artifacts', () => {
+  const run = baseRun();
+  run.graph.nodes = run.graph.nodes.filter((node) => node.type !== 'output');
+  run.graph.edges = run.graph.edges.filter((edge) => edge.source !== 'output' && edge.target !== 'output');
+  delete run.nodeStates.output;
+  delete run.outputs.output;
+  delete run.structuredOutputs.output;
+  run.artifactIndex = [
+    { id: 'report', nodeId: 'agent', nodeLabel: '分析器', name: 'report.md', size: 12, relativePath: 'report.md', snapshot: 'run/report' },
+    { id: 'log', nodeId: 'agent', nodeLabel: '分析器', name: 'debug.log', size: 20, relativePath: 'debug.log', snapshot: 'run/log' },
+  ];
+  const result = createRunResults(run);
+  assert.equal(result.finalStatus, 'legacy-inferred');
+  assert.deepEqual(result.finalArtifacts.map((item) => item.id), ['report']);
+  assert.deepEqual(result.processArtifacts.map((item) => item.id), ['log']);
 });
 
 await test('failed output is not replaced by a successful intermediate result', () => {
@@ -252,6 +286,34 @@ await test('artifact snapshots are immutable and reject paths outside the worksp
   }
 });
 
+await test('artifact snapshots accept run-scoped workspace and direct artifact directory callbacks', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wf1-scoped-results-'));
+  try {
+    const workspace = join(root, 'workflow-key', 'run-key', 'nodes', 'node-key', 'workspace');
+    const artifactRunDir = join(root, 'workflow-key', 'run-key', 'artifacts');
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(workspace, 'report.md'), 'scoped result');
+    const run = { ...baseRun(), workflowId: 'workflow-id' };
+    const calls = [];
+    const snapshot = snapshotRunArtifacts(run, {
+      workspaceForNode: (scope) => {
+        calls.push(scope);
+        return workspace;
+      },
+      artifactRunDir,
+    });
+    assert.deepEqual(calls.find((call) => call.nodeId === 'agent'), {
+      workflowId: 'workflow-id', runId: 'run_test_1', nodeId: 'agent', nodeLabel: '分析器',
+    });
+    assert.equal(snapshot.artifacts[0].snapshot, snapshot.artifacts[0].id);
+    const persisted = normalizeRunDocument({ ...run, artifactIndex: snapshot.artifacts });
+    assert.equal(resolveRunArtifact([join(root, 'missing'), artifactRunDir], persisted, snapshot.artifacts[0].id)?.file,
+      realpathSync(join(artifactRunDir, snapshot.artifacts[0].id)));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 await test('ZIP export contains result index and immutable artifacts with UTF-8 names', () => {
   const root = mkdtempSync(join(tmpdir(), 'wf1-export-'));
   try {
@@ -268,6 +330,32 @@ await test('ZIP export contains result index and immutable artifacts with UTF-8 
     assert.equal(zip.readUInt32LE(zip.length - 22), 0x06054b50);
     assert.match(zip.toString('utf8'), /run-results\.json/);
     assert.match(zip.toString('utf8'), /artifacts\/分析器\/report\.md/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await test('artifact resolution and ZIP export fall back across multiple roots', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wf1-export-roots-'));
+  try {
+    const oldRoot = join(root, 'old-artifacts');
+    const newRoot = join(root, 'new-artifacts');
+    const runDir = join(oldRoot, 'run_test_1');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, 'artifact-id'), 'legacy artifact');
+    mkdirSync(newRoot, { recursive: true });
+    const run = normalizeRunDocument({
+      ...baseRun(),
+      artifactIndex: [{
+        id: 'artifact-id', nodeId: 'agent', nodeLabel: '分析器', name: 'legacy.md',
+        relativePath: 'legacy.md', snapshot: 'run_test_1/artifact-id', size: 15,
+      }],
+    });
+    assert.equal(resolveRunArtifact({ artifactRoots: [newRoot, oldRoot] }, run, 'artifact-id')?.file,
+      realpathSync(join(runDir, 'artifact-id')));
+    const zip = createRunExport(run, [newRoot, oldRoot]);
+    assert.match(zip.toString('utf8'), /artifacts\/分析器\/legacy\.md/);
+    assert.match(zip.toString('utf8'), /legacy artifact/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

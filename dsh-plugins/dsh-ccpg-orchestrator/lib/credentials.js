@@ -5,22 +5,30 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CRED_FILE = join(__dirname, '..', 'data', 'credentials.json');
+const LEGACY_CRED_FILE = join(__dirname, '..', 'data', 'credentials.json');
+const credentialFile = () => join(
+  process.env.DSH_HOME || join(homedir(), '.dsh'),
+  'plugin-data', 'dsh-ccpg-orchestrator', 'state', 'credentials.json',
+);
 
 function load() {
-  try {
-    const d = JSON.parse(readFileSync(CRED_FILE, 'utf8'));
-    if (Array.isArray(d.feishu)) return d;
-  } catch { /* 首次或损坏 → 空 */ }
+  for (const file of [credentialFile(), LEGACY_CRED_FILE]) {
+    try {
+      const d = JSON.parse(readFileSync(file, 'utf8'));
+      if (Array.isArray(d.feishu)) return d;
+    } catch { /* 新位置不存在时兼容旧文件 */ }
+  }
   return { feishu: [] };
 }
 
 function save(doc) {
-  mkdirSync(dirname(CRED_FILE), { recursive: true });
-  writeFileSync(CRED_FILE, JSON.stringify(doc, null, 2), { mode: 0o600 });
+  const file = credentialFile();
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, JSON.stringify(doc, null, 2), { mode: 0o600 });
 }
 
 const mask = (s) => (s ? `${String(s).slice(0, 6)}****${String(s).slice(-4)}` : '');
