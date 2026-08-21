@@ -16,7 +16,7 @@
 # 前提：node>=20、npm i -g @deepseek-ai/dsh
 cd dsh-plugins
 
-sh build-web.sh                          # 1. 构建画布（含 document-preview）
+sh build-web.sh                          # 1. 构建画布（含 document-preview）——产物不入库，源码安装必跑
 sh setup.sh [profile] [端口]             # 2. 一条龙安装（默认 dsh-ccpg / 4021）
 sh start.sh [profile]                    # 3. 启动
 ```
@@ -27,15 +27,15 @@ sh start.sh [profile]                    # 3. 启动
 
 ## 画布能力
 
-**8 种节点类型**：输入 / 智能体 / **脚本（QuickJS 沙箱）** / 条件分支 / 人工审批 / HTTP 请求 / 输出 / 注释。
+**7 种节点类型**：输入 / 智能体 / **脚本（QuickJS 沙箱）** / 条件分支 / HTTP 请求 / 输出 / 注释。
 
 - **可拖拽画布**（React Flow）：连线（禁自环/环检测）、缩放、小地图、框选、快捷键（Cmd+S 保存 / Cmd+Z 撤销 / Delete 删除 / Cmd+D 复制 / F 定位错误）
 - **智能体节点**：提示词 + 工具勾选（read_file / web_fetch / feishu_doc_read / feishu_doc_write）；节点级模型与渠道（GLM anthropic 订阅 / openai 按量、DeepSeek），同图不同节点可组队；工具循环轮数上限；Plan-Execute 三阶段模式（规划→逐步执行→总结，planTrace 全程记录）；技能 = dsh 原生 skill 工具（`ctx.skills` 目录，节点可勾选定向提示）
 - **脚本节点**：QuickJS 沙箱执行同步 `function main(input, workspace)` 返回 JSON。命名参数支持「表达式」（完整变量，仅直接上游）或「JSON 常量」；workspace 仅可 list/read/write/remove 本节点目录（拒绝穿越/反斜杠/符号链接）；超时 100–10000ms；可选 outputSchema 校验（失败即节点失败）；返回值进变量树
 - **变量系统**：模板编辑器（输入 `{{` 或 `/变量` 搜索字段树）覆盖全部模板位；稳定 ID 引用 `{{node["n_http_1"].data.json.customer.name}}`、缺省值 `| default("x")`、`{{$trigger}}` / `{{$upstream}}`；改名联动全图替换；旧 `{{节点名}}` 语法兼容
-- **运行与调试**：SSE 实时状态（queued/running/success/error/skipped）；就绪即发并发调度；分支容错（单支失败不拖垮其余）；节点重试 / 失败继续 / 超时；运行取消 / 重放 / 导出；试运行（手填假输入、审批模拟、关闭即中断）；节点级运行详情（实际输入、产物、token 用量、trace）
+- **运行与调试**：SSE 实时状态（queued/running/success/error/skipped）；就绪即发并发调度；分支容错（单支失败不拖垮其余）；节点重试 / 失败继续 / 超时；运行取消 / 重放 / 导出；试运行（手填假输入、关闭即中断）；节点级运行详情（实际输入、产物、token 用量、trace）
 - **结果面板**：时间线按图拓扑稳定排序（跳过分支也可见）；最终结果取输出节点、失败不被中间结果顶替；过程产物折叠分组；产物流式下载（Range 206 / 统一 MIME / HTML sandbox CSP）与全屏预览（PDF/DOCX/XLS(X)/PPTX 本地渲染）
-- **触发与集成**：webhook（token 鉴权）、cron 定时、飞书写回（输出节点可选）、审批人/意见记录
+- **触发与集成**：webhook（token 鉴权）、cron 定时、飞书写回（输出节点可选）
 - **持久化**：工作流库（命名工作流 CRUD）、运行历史（含 graph 快照）、重启恢复（触发器落盘 + 链式定时等待）
 - **可靠性**：保存失败 toast 报错并中止运行；命名工作流运行带 graphFingerprint 指纹校验（409 拒绝跑错版本）
 
@@ -72,7 +72,7 @@ sh start.sh [profile]                    # 3. 启动
 | 运行 | `POST /run`、`POST /run/cancel`、`GET /runs`、`GET /runs/detail`、`GET /runs/export`、`POST /runs/replay`、`GET /run-results`、`GET /run-artifact` |
 | 节点 | `POST /node/test`（试运行）、`GET /node-detail` |
 | 产物 | `GET /artifact`（节点工作区文件，支持 preview/Range）、`GET/POST /attachments` |
-| 触发 | `GET/POST/DELETE /hooks`（webhook，token 鉴权）、`GET/POST/DELETE /schedule`（cron）、`GET /approvals`（审批） |
+| 触发 | `GET/POST/DELETE /hooks`（webhook，token 鉴权）、`GET/POST/DELETE /schedule`（cron） |
 | 变量/模板 | `GET /variables/describe`、`GET/POST /global-variables`、`POST /template/render`、`POST /template/validate` |
 | 配置 | `GET /tools`、`GET /skills`、`GET /llm-config`、`GET/POST /runtime-config`、`GET/POST/DELETE /feishu-credentials`、`GET/POST /lark-auth` |
 | AI 助手 | `POST /assistant/bind` / `unbind`、`GET /assistant/canvas-state` |
@@ -97,7 +97,7 @@ dsh-plugins/
   shared/chat-pane.js     聊天记录栏源片段（构建期内联进各插件 client bundle）
 ```
 
-双端节点注册表：引擎 NodeKind（调度/审批/超时/重试）+ 前端 registry（图标/表单/徽标），新节点两处注册即得全部能力。agent 节点 = `ctx.agents.create` 进程内真实 dsh agent（followup → whenIdle → session events 聚合，同官方 headless 驱动）。
+双端节点注册表：引擎 NodeKind（调度/超时/重试）+ 前端 registry（图标/表单/徽标），新节点两处注册即得全部能力。agent 节点 = `ctx.agents.create` 进程内真实 dsh agent（followup → whenIdle → session events 聚合，同官方 headless 驱动）。
 
 ## 已知 dsh 插件开发事实（踩坑记录）
 

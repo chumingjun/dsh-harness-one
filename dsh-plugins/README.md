@@ -18,7 +18,7 @@
 # 前提：node>=20、npm i -g @deepseek-ai/dsh
 cd dsh-plugins
 
-sh build-web.sh                                    # 1. 构建画布
+sh build-web.sh                                    # 1. 构建画布——产物不入库，源码安装必跑（分发包已带成品，可跳过）
 sh setup.sh [profile名] [端口]                     # 2. 一条龙安装（默认 dsh-ccpg / 4021）
 sh start.sh [profile名]                            # 3. 启动
 ```
@@ -29,9 +29,9 @@ sh start.sh [profile名]                            # 3. 启动
 
 ## setup.sh 做了什么
 
-1. 校验七插件分发目录完整（package name 逐一核对）
+1. 校验七插件分发目录完整（package name 逐一核对）+ 画布产物存在性（web-dist 缺失即提示先跑 build-web.sh）
 2. 装 orchestrator 真依赖（ajv/cron-parser/QuickJS WASM）并跑 QuickJS smoke
-3. canvasui bundle 校验（`build-canvasui.sh --check`，不一致则重建——`lib/client.js` 是 `src/client.js` 内联 `shared/` 片段的构建产物）
+3. canvasui bundle 校验（`build-canvasui.sh --check`，不一致则重建——`lib/client.js` 是 `src/client.js` 内联 `shared/` 片段的构建产物，不入库）
 4. 装 lark-cli（飞书官方 CLI，`~/.local/npm-global`）并固定默认身份 user
 5. 建 `~/.dsh/profiles/<name>`（dsh-base bundle）
 6. `dsh plugin add` 七插件（失败即中止，不再留半成品 profile）

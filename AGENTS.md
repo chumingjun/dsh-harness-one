@@ -40,7 +40,7 @@
 ### 常用命令
 
 ```sh
-sh dsh-plugins/build-web.sh                 # 画布双构建（/wf1/ base + 根 base），改前端后必跑
+sh dsh-plugins/build-web.sh                 # 画布双构建（/wf1/ base + 根 base），改前端后必跑（产物不入库，仅落工作区）
 sh dsh-plugins/setup.sh [profile] [端口]    # 安装（默认 dsh-ccpg / 4021）
 sh dsh-plugins/start.sh <profile>           # 启动
 sh dsh-plugins/pack.sh <tag>                # 打包 release（CI 同源）
@@ -54,10 +54,10 @@ node dsh-plugins/dsh-ccpg-document-preview/test/index.test.mjs  # 4 例
 ### 架构铁律（Workflow One 专属）
 
 1. **双端节点注册表**：新增节点类型必须两处注册——引擎 `orchestrator/lib/engine.js` 的 `registerKind({execute, lint, edgeTaken, wantsSink})` + 前端 `web/src/registry.jsx`（icon/色/preset/summary/badges）。AI 助手侧同步 `lib/assistant.js`（NODE_TYPES + persona 契约）与 `lib/variable-schema.js`（变量树）。两处注册即得调度/审批/超时/重试/UI 全部能力，不要另起旁路。
-2. **canvasui bundle 是构建产物**：`lib/client.js` 由 `src/client.js` 内联 `shared/` 片段生成，直接改会被覆盖；改后重跑 `build-canvasui.sh`（`--check` 逐字比对防漂移）。
+2. **canvasui bundle 是构建产物**：`lib/client.js` 由 `src/client.js` 内联 `shared/` 片段生成（gitignore 不入库），直接改会被覆盖；改后重跑 `build-canvasui.sh`（`--check` 逐字比对防漂移）。
 3. **4020 Express 回退能力冻结**：新功能只做插件路径（`/wf1/api/*`）；`server/` 仅修 bug。同语义端点双入口实现时以插件端为准。
 4. **存储 = 每实体一 JSON 文件**（`data/workflows|runs|attachments|workspaces`）；运行时产物（runs/run-artifacts/workspaces/credentials）全部 gitignore，**绝不提交**。
-5. **web-dist 是构建产物但入库**（release「拿到即装」约定）：改前端后必须 `build-web.sh` 再提交，否则分发包与源码漂移。
+5. **构建产物一律不入库**（`web-dist/`、`canvasui lib/client.js`、`document-preview/dist/`、`web/dist/` 全部 gitignore）：分发包「拿到即装」由 `pack.sh` 现场重跑构建保证；源码安装先 `build-web.sh` 再 `setup.sh`（setup 已前置校验）。绝不为省一步构建把产物提交进仓库。
 
 ### 前端坑
 

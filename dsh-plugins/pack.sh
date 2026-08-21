@@ -2,8 +2,8 @@
 # 打包 dsh-ccpg-* 插件为可分发 tarball（release 用，CI 与本地同源）。
 #
 # 产物：dsh-ccpg-plugins-<tag>.tar.gz，内容 = dsh-plugins/ 里七个插件 + setup/start/build/bootstrap 脚本，
-# 且满足"拿到即装"：
-#   - 画布已构建：dsh-ccpg-web/web-dist/ 已生成（build-web.sh 产物），无需再跑构建
+# 且满足"拿到即装"（产物不入库，本脚本现场构建）：
+#   - 画布已构建：dsh-ccpg-web/web-dist/ 由第 1 步 build-web.sh 现场生成，装包机无需再跑构建
 #   - orchestrator 真依赖已装：ajv/cron-parser 在 dsh-ccpg-orchestrator/node_modules/（本地 setup.sh 直接
 #     dsh plugin add 源码目录，依赖必须随包）
 #   - 不含 @deepseek-ai/* SDK 软链：它们是 dsh 主安装内层 bundled deps 的软链，换机器无效，装包后由

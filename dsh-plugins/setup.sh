@@ -43,8 +43,16 @@ try {
 NODE
 echo "✓ QuickJS 脚本运行时可用"
 
+# 画布产物前置校验：web-dist 不入库（gitignore），源码安装必须先跑 build-web.sh。
+# 分发包自带成品，此校验自然通过。
+if [ ! -f "$HERE/dsh-ccpg-web/web-dist/index.html" ]; then
+  echo "✗ 画布未构建（dsh-ccpg-web/web-dist 缺 index.html）——先跑: sh $HERE/build-web.sh"
+  exit 1
+fi
+echo "✓ 画布产物就绪"
+
 # canvasui 客户端 bundle 兜底构建：lib/client.js 是 src/client.js 内联 shared/ 片段的
-# 拼接产物。分发包里已带成品；源码安装或改过 shared/ 后以 --check 校验，不一致则重建。
+# 拼接产物（gitignore，不入库）。源码安装或改过 shared/ 后以 --check 校验，不一致则重建。
 if ! sh "$HERE/build-canvasui.sh" --check >/dev/null 2>&1; then
   echo "· canvasui bundle 缺失或与源不一致，重建…"
   sh "$HERE/build-canvasui.sh"
