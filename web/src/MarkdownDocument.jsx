@@ -11,6 +11,8 @@ export default function MarkdownDocument({ content, files = [] }) {
       remarkPlugins={[remarkGfm]}
       components={{
         a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>,
+        // 窄面板里表格列被挤压错位：套一层横向滚动容器，表格保持自然宽度
+        table: ({ node, ...props }) => <div className="md-table-wrap"><table {...props} /></div>,
         code: ({ node, className, children, ...props }) => {
           const text = String(children ?? '');
           const inline = !className && !text.includes('\n');

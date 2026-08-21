@@ -50,6 +50,8 @@ import { FeishuClient } from './feishu.js';
 import { listFeishuCreds, addFeishuCred, removeFeishuCred, setDefaultFeishuCred, getFeishuCredOrEnv } from './credentials.js';
 import { Orchestrator, lintGraph, getKind } from './engine.js';
 import { createWorkflowExportManifest, importWorkflowDocument, normalizeWorkflowDocument } from './workflow-document.js';
+import { saveArtifactsToWorkspace } from './artifact-save.js';
+import { createStoragePaths } from './storage-paths.js';
 import {
   canvasAssistantPersona, checkPatchResult, summarizeGraphForAI, validateGraphOps,
 } from './assistant.js';
@@ -63,21 +65,16 @@ const parseCronExpression = cronParser.parseExpression?.bind(cronParser)
   ?? cronParser.default?.parseExpression?.bind(cronParser.default);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, '..', 'data');
-const GRAPH_FILE = join(DATA_DIR, 'graph.json');
-const WS_ROOT = join(DATA_DIR, 'workspaces');
-const RUNS_DIR = join(DATA_DIR, 'runs');
-const RUN_ARTIFACTS_DIR = join(DATA_DIR, 'run-artifacts');
-const TRIGGERS_FILE = join(DATA_DIR, 'triggers.json');
-const GLOBAL_VARIABLES_FILE = join(DATA_DIR, 'global-variables.json');
+const LEGACY_DATA_DIR = join(__dirname, '..', 'data');
 const RUNS_KEEP = 100; // 运行历史保留条数（按开始时间新→旧）
 let runIdSeq = 0;
 let ctxRef = null;
 
 // 原子写入：临时文件 + rename，进程中途挂掉不会留截断 JSON
 const atomicWrite = (file, data) => {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.tmp-${process.pid}-${Date.now().toString(36)}`;
-  writeFileSync(tmp, data);
+  writeFileSync(tmp, data, { mode: 0o600 });
   renameSync(tmp, file);
 };
 const atomicJson = (file, value) => atomicWrite(file, JSON.stringify(value, null, 2));
@@ -90,11 +87,31 @@ export const Config = z.object({
 });
 
 export function apply(ctx, config) {
+  const STORAGE = createStoragePaths({ legacyRoot: LEGACY_DATA_DIR });
+  const DATA_DIR = STORAGE.root;
+  const STATE_DIR = STORAGE.state;
+  const GRAPH_FILE = join(STATE_DIR, 'graph.json');
+  const LEGACY_GRAPH_FILE = join(STORAGE.legacy.state, 'graph.json');
+  const RUNS_DIR = STORAGE.runs;
+  const LEGACY_RUNS_DIR = STORAGE.legacy.runs;
+  const TRIGGERS_FILE = join(STATE_DIR, 'triggers.json');
+  const LEGACY_TRIGGERS_FILE = join(STORAGE.legacy.state, 'triggers.json');
+  const GLOBAL_VARIABLES_FILE = join(STATE_DIR, 'global-variables.json');
+  const LEGACY_GLOBAL_VARIABLES_FILE = join(STORAGE.legacy.state, 'global-variables.json');
+  const WORKFLOW_TOMBSTONE_DIR = join(STATE_DIR, 'tombstones', 'workflows');
   ctxRef = ctx; // replayTrace 需要在路由 handler 里拿到 ctx.sessionPersistence
-  mkdirSync(WS_ROOT, { recursive: true });
-  mkdirSync(DATA_DIR, { recursive: true });
-  mkdirSync(RUNS_DIR, { recursive: true });
-  mkdirSync(RUN_ARTIFACTS_DIR, { recursive: true });
+  for (const dir of [DATA_DIR, STATE_DIR, STORAGE.workflows, STORAGE.attachments, RUNS_DIR, STORAGE.runtime, WORKFLOW_TOMBSTONE_DIR]) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  for (const [target, legacy] of [
+    [GRAPH_FILE, LEGACY_GRAPH_FILE],
+    [TRIGGERS_FILE, LEGACY_TRIGGERS_FILE],
+    [GLOBAL_VARIABLES_FILE, LEGACY_GLOBAL_VARIABLES_FILE],
+  ]) {
+    if (!existsSync(target) && existsSync(legacy)) {
+      try { copyFileSync(legacy, target); } catch (error) { ctx.logger?.warn?.(`dsh-ccpg 兼容数据复制失败：${error.message}`); }
+    }
+  }
 
   const json = (res, code, body) => {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -107,10 +124,13 @@ export function apply(ctx, config) {
   });
 
   // ---- SSE ----
-  const sseClients = new Set();
+  const sseClients = new Map();
   const broadcast = (event, payload) => {
     const frame = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
-    for (const res of sseClients) { try { res.write(frame); } catch { /* 断开的连接 */ } }
+    for (const [res, subscribedRunId] of sseClients) {
+      if (subscribedRunId && payload?.runId && subscribedRunId !== payload.runId) continue;
+      try { res.write(frame); } catch { /* 断开的连接 */ }
+    }
   };
 
   // ---- 画布 AI 助手（官方 UI 工作流 tab + 聊天同 session 改图）----
@@ -192,7 +212,8 @@ export function apply(ctx, config) {
           atomicJson(GRAPH_FILE, r.graph);
         }
         const check = checkPatchResult(r.graph);
-        broadcast('assistant-patch', { canvasId: exec.canvasId, version: cv.version, patch: r.patch, graph: r.graph });
+        // workflowId 一并广播：切换工作流的瞬间若有在飞 patch，画布侧据此丢弃，避免旧图的改动落到新工作流上
+        broadcast('assistant-patch', { canvasId: exec.canvasId, version: cv.version, patch: r.patch, graph: r.graph, workflowId: cv.workflowId || null });
         return `已应用 ${r.patch.length} 个操作到画布。\nlint: ${check.lintOk ? '通过' : '有告警'}\n${check.issues.slice(0, 20).join('\n')}`;
       },
     },
@@ -218,11 +239,11 @@ export function apply(ctx, config) {
         const lint = lintGraph(graph);
         if (!lint.ok) return `图有错误不能运行：\n${lint.issues.filter((x) => x.level === 'error').map((x) => x.message).join('\n')}`;
         const globals = (() => { try { return globalContext(); } catch { return { globalVariables: {} }; } })();
-        const runId = `run_${Date.now().toString(36)}_${++runIdSeq}`;
-        orch.run(graph, {
-          triggerInput: args.triggerInput ?? '', workflowName: null, workflowId: cv.workflowId, runId,
+        const { runId } = startRun(graph, {
+          triggerInput: args.triggerInput ?? '', workflowName: null, workflowId: cv.workflowId,
           globalVariables: globals.globalVariables,
-        }).then((run) => persistRun(run, graph, null, cv.workflowId)).catch(() => {});
+          source: 'assistant',
+        });
         return JSON.stringify({ started: true, runId });
       },
     },
@@ -282,13 +303,19 @@ export function apply(ctx, config) {
   // ---- 运行历史（持久化 + 内存缓存）----
   const runHistory = []; // 新 → 旧，内存前 50
   const hydrateHistory = () => {
-    try {
-      const files = readdirSync(RUNS_DIR).filter((f) => f.endsWith('.json'));
-      const rows = files.map((f) => {
-        try { return normalizeRunDocument(JSON.parse(readFileSync(join(RUNS_DIR, f), 'utf8'))); } catch { return null; }
-      }).filter(Boolean).sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
-      runHistory.push(...rows.slice(0, 50));
-    } catch { /* 目录空 */ }
+    const byId = new Map();
+    for (const dir of [RUNS_DIR, LEGACY_RUNS_DIR]) {
+      try {
+        for (const file of readdirSync(dir).filter((name) => name.endsWith('.json'))) {
+          try {
+            const run = normalizeRunDocument(JSON.parse(readFileSync(join(dir, file), 'utf8')));
+            if (!byId.has(run.runId)) byId.set(run.runId, run);
+          } catch { /* 单条损坏不阻塞其他历史 */ }
+        }
+      } catch { /* 目录空 */ }
+    }
+    const rows = [...byId.values()].sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+    runHistory.push(...rows.slice(0, 50));
   };
   const persistRun = (run, graph, workflowName, workflowId) => {
     try {
@@ -305,19 +332,34 @@ export function apply(ctx, config) {
         graphFingerprint: run.graphFingerprint || (graph ? graphFingerprint(graph) : null),
         graph: graphSnapshot,
       });
-      const snapshot = snapshotRunArtifacts(base, { workspaceRoot: WS_ROOT, artifactRoot: RUN_ARTIFACTS_DIR });
+      const scope = { workflowId: base.workflowId || 'draft', runId: base.runId };
+      const snapshot = snapshotRunArtifacts(base, {
+        workspaceForNode: ({ nodeId }) => STORAGE.workspaceForNode({ ...scope, nodeId }),
+        artifactRunDir: STORAGE.artifactRunDir(scope),
+      });
       const document = normalizeRunDocument({
         ...base,
         artifactIndex: snapshot.artifacts,
         issues: [...(Array.isArray(base.issues) ? base.issues : []), ...snapshot.issues],
       });
-      atomicJson(join(RUNS_DIR, `${run.runId}.json`), document);
+      atomicJson(join(RUNS_DIR, `${safeFileId(run.runId, 'invalid')}.json`), document);
       const historyRun = { ...document, graph: graphSnapshot };
       const idx = runHistory.findIndex((r) => r.runId === run.runId);
       if (idx >= 0) runHistory[idx] = historyRun;
       else runHistory.unshift(historyRun);
       pruneRuns();
-    } catch { /* 持久化失败不影响运行 */ }
+      broadcast('run-results-ready', {
+        runId: document.runId,
+        status: document.status,
+        resultCount: createRunResults(document).finalArtifacts.length,
+        artifactCount: document.artifactIndex.length,
+      });
+      return document;
+    } catch (error) {
+      ctx.logger?.error?.(`dsh-ccpg 运行成果持久化失败（${run?.runId || 'unknown'}）：${error.message}`);
+      broadcast('run-persist-error', { runId: run?.runId || null, error: String(error.message || error) });
+      return null;
+    }
   };
   // 保留策略：超过 RUNS_KEEP 的旧运行文件删除（内存列表同步裁剪）
   const pruneRuns = () => {
@@ -327,14 +369,21 @@ export function apply(ctx, config) {
         .map((f) => ({ f, t: statSync(join(RUNS_DIR, f)).mtimeMs }))
         .sort((a, b) => b.t - a.t);
       for (const { f } of files.slice(RUNS_KEEP)) {
+        try {
+          const run = normalizeRunDocument(JSON.parse(readFileSync(join(RUNS_DIR, f), 'utf8')));
+          rmSync(STORAGE.runRoot({ workflowId: run.workflowId || 'draft', runId: run.runId }), { recursive: true, force: true });
+        } catch { /* 单条记录损坏或并发删除 */ }
         try { unlinkSync(join(RUNS_DIR, f)); } catch { /* 并发删除 */ }
-        try { rmSync(join(RUN_ARTIFACTS_DIR, f.replace(/\.json$/, '')), { recursive: true, force: true }); } catch { /* 并发删除 */ }
       }
       if (runHistory.length > RUNS_KEEP) runHistory.length = RUNS_KEEP;
     } catch { /* 目录不可读 */ }
   };
   const readRun = (runId) => {
-    try { return normalizeRunDocument(JSON.parse(readFileSync(join(RUNS_DIR, `${safeFileId(runId, 'invalid')}.json`), 'utf8'))); } catch { return null; }
+    const filename = `${safeFileId(runId, 'invalid')}.json`;
+    for (const dir of [RUNS_DIR, LEGACY_RUNS_DIR]) {
+      try { return normalizeRunDocument(JSON.parse(readFileSync(join(dir, filename), 'utf8'))); } catch { /* 回退下一位置 */ }
+    }
+    return null;
   };
   const writeRun = (run) => {
     const document = normalizeRunDocument(run);
@@ -347,16 +396,33 @@ export function apply(ctx, config) {
   hydrateHistory();
 
   // ---- 工作流库 ----
-  const WF_DIR = join(DATA_DIR, 'workflows');
-  mkdirSync(WF_DIR, { recursive: true });
-  const wfFile = (id) => join(WF_DIR, `${safeFileId(id, 'invalid')}.json`);
+  const WF_DIR = STORAGE.workflows;
+  const LEGACY_WF_DIR = STORAGE.legacy.workflows;
+  const wfFile = (id, dir = WF_DIR) => join(dir, `${safeFileId(id, 'invalid')}.json`);
+  const wfTombstone = (id) => join(WORKFLOW_TOMBSTONE_DIR, safeFileId(id, 'invalid'));
   const readWf = (id) => {
-    try { return normalizeWorkflowDocument(JSON.parse(readFileSync(wfFile(id), 'utf8'))); } catch { return null; }
+    if (existsSync(wfTombstone(id))) return null;
+    for (const dir of [WF_DIR, LEGACY_WF_DIR]) {
+      try { return normalizeWorkflowDocument(JSON.parse(readFileSync(wfFile(id, dir), 'utf8'))); } catch { /* 回退下一位置 */ }
+    }
+    return null;
   };
   const writeWf = (wf) => {
     const document = normalizeWorkflowDocument(wf);
     atomicJson(wfFile(document.id), document);
+    try { unlinkSync(wfTombstone(document.id)); } catch { /* 未删除过 */ }
     return document;
+  };
+
+  const resolveAttachmentFile = (attachment) => {
+    if (attachment?.id) {
+      const dir = resolveInside(STORAGE.attachments, safeFileId(attachment.id, 'invalid'));
+      const file = dir && resolveInside(dir, safeFilename(attachment.filename));
+      if (file && existsSync(file) && statSync(file).isFile()) return file;
+    }
+    const filename = safeFilename(attachment?.filename || attachment);
+    const legacy = resolveInside(STORAGE.legacy.attachments, filename);
+    return legacy && existsSync(legacy) && statSync(legacy).isFile() ? legacy : null;
   };
 
   const globalVariableStore = new GlobalVariableStore(GLOBAL_VARIABLES_FILE);
@@ -399,30 +465,34 @@ export function apply(ctx, config) {
   // ---- 引擎 ----
   const orch = new Orchestrator(ctx, { onEvent: broadcast, renderTemplate });
   orch.nodeRunner = async (node, run, s, ctl) => runAgentNode(ctx, node, run, s, ctl);
-  orch.scriptRunner = async ({ node, input, signal, timeoutMs }) => {
-    const ws = workspaceFor(node);
+  orch.scriptRunner = async ({ node, input, signal, timeoutMs, workflowId, runId }) => {
+    const ws = workspaceFor(node, { workflowId: workflowId || 'draft', runId });
     const result = await runScript({ code: node.data?.code, input, workspaceDir: ws, signal, timeoutMs });
     return { ...result, artifacts: safeWsList(ws) };
   };
 
-  const startRun = async (graph, {
+  const startRun = (graph, {
     triggerInput, workflowName, workflowId, source,
-    globalVariables = {}, workflowVariables = {}, runInputs = {},
+    globalVariables = {}, workflowVariables = {}, runInputs = {}, runId: providedRunId, replayOf,
   } = {}) => {
-    // 预生成 runId：调用方（HTTP/webhook）能立刻拿到可取消的句柄
-    const runId = `run_${Date.now().toString(36)}_${++runIdSeq}`;
-    const p = orch.run(graph, {
+    const runId = providedRunId || `run_${Date.now().toString(36)}_${++runIdSeq}`;
+    const promise = orch.run(graph, {
       triggerInput, workflowName, workflowId, runId, globalVariables, workflowVariables, runInputs,
     }).then((run) => {
+      if (source) run.source = source;
+      if (replayOf) run.replayOf = replayOf;
       persistRun(run, graph, workflowName, workflowId);
       return run;
-    }).catch(() => {});
-    return p;
+    }).catch((error) => {
+      ctx.logger?.error?.(`dsh-ccpg 运行失败（${runId}）：${error.message}`);
+      return null;
+    });
+    return { runId, promise };
   };
 
   // ---- agent 节点执行（升级版）----
   async function runAgentNode(ctx, node, run, s, { signal, emit, runId }) {
-    const ws = workspaceFor(node);
+    const ws = workspaceFor(node, { workflowId: run.workflowId || 'draft', runId });
     const d = node.data || {};
 
     // 系统提示词支持显式变量，但不会隐式拼入上游；业务输入统一由 inputTemplate 承载。
@@ -470,14 +540,17 @@ export function apply(ctx, config) {
     const rendered = renderTemplate(d.inputTemplate || '', tctx);
     let userPrompt = rendered.text || '(无上游输入)';
     const attachments = (s.graph?.nodes || []).filter((n) => n.type === 'input').flatMap((n) => n.data?.attachments || []);
+    const inputFiles = [];
     if (attachments.length) {
-      const ATTACH_DIR = join(DATA_DIR, 'attachments');
       for (const att of attachments) {
         try {
           const filename = safeFilename(att.filename);
-          const src = resolveInside(ATTACH_DIR, filename);
+          const src = resolveAttachmentFile(att);
           const dest = resolveInside(ws, filename);
-          if (src && dest && existsSync(src)) copyFileSync(src, dest);
+          if (src && dest && existsSync(src)) {
+            copyFileSync(src, dest);
+            inputFiles.push(filename);
+          }
         } catch { /* 单个附件失败不阻塞 */ }
       }
       userPrompt += `\n\n可用附件（已放入你的工作区，用 read 工具读取）：${attachments.map((a) => a.filename).join(', ')}`;
@@ -615,7 +688,8 @@ export function apply(ctx, config) {
           reason = { kind: 'error', error: err };
         }
       }
-      const artifacts = safeWsList(ws);
+      const inputFileSet = new Set(inputFiles);
+      const artifacts = safeWsList(ws).filter((file) => !inputFileSet.has(file));
       const usage = sumUsage(agent.session.events, firstSeq);
       const details = {
         model: `${provider}:${model}`,
@@ -817,8 +891,13 @@ export function apply(ctx, config) {
   // ---- 工作流库 ----
   ctx.webServer.register({ kind: 'exact', path: '/wf1/api/workflows', async handler(req, res) {
     if (req.method === 'GET') {
-      const list = readdirSync(WF_DIR).filter((f) => f.endsWith('.json')).map((f) => {
-        const wf = readWf(f.replace(/\.json$/, ''));
+      const ids = new Set();
+      for (const dir of [WF_DIR, LEGACY_WF_DIR]) {
+        try { for (const file of readdirSync(dir).filter((name) => name.endsWith('.json'))) ids.add(file.replace(/\.json$/, '')); }
+        catch { /* 目录空 */ }
+      }
+      const list = [...ids].map((id) => {
+        const wf = readWf(id);
         if (!wf) return null;
         return {
           id: wf.id, name: wf.name, updatedAt: wf.updatedAt,
@@ -887,8 +966,10 @@ export function apply(ctx, config) {
       return json(res, 200, wf);
     }
     if (req.method === 'DELETE') {
-      try { unlinkSync(wfFile(id)); return json(res, 200, { ok: true }); }
-      catch { return json(res, 404, { error: '工作流不存在' }); }
+      if (!readWf(id)) return json(res, 404, { error: '工作流不存在' });
+      try { unlinkSync(wfFile(id)); } catch { /* 可能仅存在旧目录 */ }
+      atomicWrite(wfTombstone(id), new Date().toISOString());
+      return json(res, 200, { ok: true });
     }
     if (req.method === 'PATCH') {
       const body = await readBody(req);
@@ -937,13 +1018,13 @@ export function apply(ctx, config) {
     if (!graph || !Array.isArray(graph.nodes)) return json(res, 400, { error: '缺少 graph' });
     const lint = lintGraph(graph);
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });
-    const runId = `run_${Date.now().toString(36)}_${++runIdSeq}`;
-    orch.run(graph, {
-      triggerInput: body.triggerInput ?? '', workflowName, workflowId, runId,
+    const { runId } = startRun(graph, {
+      triggerInput: body.triggerInput ?? '', workflowName, workflowId,
       globalVariables: globals.globalVariables,
       workflowVariables: variableDefinitionsToValues(definitions),
       runInputs,
-    }).then((run) => persistRun(run, graph, workflowName, workflowId)).catch(() => {});
+      source: 'manual',
+    });
     json(res, 200, { started: true, runId });
   } });
 
@@ -1121,6 +1202,13 @@ export function apply(ctx, config) {
     return json(res, 200, createRunResults(run));
   } });
 
+  const artifactLocationsForRun = (run) => ({
+    artifactRunDirs: [
+      STORAGE.artifactRunDir({ workflowId: run.workflowId || 'draft', runId: run.runId }),
+      STORAGE.legacy.runArtifacts,
+    ],
+  });
+
   ctx.webServer.register({ kind: 'exact', path: '/wf1/api/run-artifact', async handler(req, res) {
     if (req.method !== 'GET') return json(res, 405, { error: 'method' });
     const url = new URL(req.url, 'http://x');
@@ -1128,7 +1216,7 @@ export function apply(ctx, config) {
     const artifactId = url.searchParams.get('artifact') || '';
     if (!runId || !artifactId) return json(res, 400, { error: '需要 run 和 artifact' });
     const run = readRun(runId);
-    const resolved = run && resolveRunArtifact(RUN_ARTIFACTS_DIR, run, artifactId);
+    const resolved = run && resolveRunArtifact(artifactLocationsForRun(run), run, artifactId);
     if (!resolved) return json(res, 404, { error: '产物不存在' });
     const mediaType = resolved.artifact.mediaType || mediaTypeFor(resolved.artifact.name);
     const preview = url.searchParams.get('preview') === '1'
@@ -1142,6 +1230,36 @@ export function apply(ctx, config) {
     });
   } });
 
+  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/run-artifacts/save', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    const body = await readBody(req);
+    const runId = String(body?.runId || '');
+    const sessionId = String(body?.sessionId || '');
+    const requestedIds = [...new Set(Array.isArray(body?.artifactIds) ? body.artifactIds.map(String) : [])];
+    if (!runId || !sessionId || requestedIds.length === 0) return json(res, 400, { error: '需要运行、成果和当前会话' });
+    if (!sessionCanvas.has(sessionId)) return json(res, 403, { error: '当前会话未绑定工作流画布' });
+    const session = ctx.get('sessions')?.get?.(SessionId(sessionId));
+    const cwd = session?.header?.cwd;
+    if (!cwd) return json(res, 409, { error: '当前会话没有可用的工作目录' });
+    const run = readRun(runId);
+    if (!run) return json(res, 404, { error: '运行记录不存在' });
+    const results = createRunResults(run);
+    const allowed = new Map(results.artifacts.map((artifact) => [artifact.id, artifact]));
+    const artifacts = requestedIds.map((id) => allowed.get(id)).filter(Boolean);
+    if (artifacts.length !== requestedIds.length) return json(res, 400, { error: '包含无效成果' });
+    try {
+      const saved = saveArtifactsToWorkspace({
+        cwd,
+        run,
+        artifacts,
+        resolveArtifact: (artifactId) => resolveRunArtifact(artifactLocationsForRun(run), run, artifactId),
+      });
+      return json(res, 200, { ok: true, ...saved });
+    } catch (error) {
+      return json(res, 400, { error: String(error.message || error) });
+    }
+  } });
+
   ctx.webServer.register({ kind: 'exact', path: '/wf1/api/runs/export', async handler(req, res) {
     if (req.method !== 'GET') return json(res, 405, { error: 'method' });
     const url = new URL(req.url, 'http://x');
@@ -1149,7 +1267,7 @@ export function apply(ctx, config) {
     if (!id) return json(res, 400, { error: '缺少 id' });
     const run = readRun(id);
     if (!run) return json(res, 404, { error: '运行记录不存在' });
-    const archive = createRunExport(run, RUN_ARTIFACTS_DIR);
+    const archive = createRunExport(run, artifactLocationsForRun(run));
     const filename = safeFilename(`${run.workflowName || run.runId}-${run.runId}.zip`);
     res.writeHead(200, {
       'Content-Type': 'application/zip',
@@ -1216,15 +1334,11 @@ export function apply(ctx, config) {
     const workflowVariables = variableDefinitionsToValues(persistedWorkflow?.variables || []);
     const lint = lintGraph(graph);
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });
-    const runId = `run_${Date.now().toString(36)}_${++runIdSeq}`;
-    orch.run(graph, {
-      triggerInput, workflowName: prev.workflowName || null, workflowId: prev.workflowId || null, runId,
+    const { runId } = startRun(graph, {
+      triggerInput, workflowName: prev.workflowName || null, workflowId: prev.workflowId || null,
       globalVariables: globals.globalVariables, workflowVariables, runInputs,
-    })
-      .then((run) => {
-        run.replayOf = prev.runId;
-        persistRun(run, graph, prev.workflowName || null, prev.workflowId || null);
-      }).catch(() => {});
+      source: 'replay', replayOf: prev.runId,
+    });
     json(res, 200, { started: true, runId, replayOf: prev.runId });
   } });
 
@@ -1349,14 +1463,13 @@ export function apply(ctx, config) {
       }
     } catch (error) { return routeError(res, error); }
     let globals; try { globals = globalContext(); } catch (error) { return routeError(res, error); }
-    const runId = `run_${Date.now().toString(36)}_${++runIdSeq}`;
-    orch.run(wf.graph, {
-      triggerInput, workflowName: wf.name, workflowId: wf.id, runId,
+    const { runId } = startRun(wf.graph, {
+      triggerInput, workflowName: wf.name, workflowId: wf.id,
       globalVariables: globals.globalVariables,
       workflowVariables: variableDefinitionsToValues(wf.variables),
       runInputs,
-    })
-      .then((run) => persistRun(run, wf.graph, wf.name, wf.id)).catch(() => {});
+      source: 'webhook',
+    });
     json(res, 200, { ok: true, triggered: wf.name, runId });
   } });
 
@@ -1459,8 +1572,7 @@ export function apply(ctx, config) {
   if (schedulerMeta.size) ctx.logger?.info?.(`dsh-ccpg 恢复 ${schedulerMeta.size} 条定时调度`);
 
   // ---- 附件 ----
-  const ATTACH_DIR = join(DATA_DIR, 'attachments');
-  mkdirSync(ATTACH_DIR, { recursive: true });
+  const ATTACH_DIR = STORAGE.attachments;
   ctx.webServer.register({ kind: 'exact', path: '/wf1/api/attachments', async handler(req, res) {
     if (req.method === 'POST') {
       const body = await readBody(req);
@@ -1469,30 +1581,44 @@ export function apply(ctx, config) {
       const safe = safeFilename(filename);
       const buf = Buffer.from(contentBase64, 'base64');
       if (buf.length > 5 * 1024 * 1024) return json(res, 413, { error: '附件超过 5MB' });
-      writeFileSync(join(ATTACH_DIR, safe), buf);
-      return json(res, 200, { ok: true, filename: safe, size: buf.length });
+      const id = `att_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      const dir = resolveInside(ATTACH_DIR, id);
+      const file = dir && resolveInside(dir, safe);
+      if (!dir || !file) return json(res, 400, { error: '附件名称无效' });
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      writeFileSync(file, buf, { mode: 0o600 });
+      atomicJson(join(dir, 'meta.json'), { id, filename: safe, size: buf.length, uploadedAt: new Date().toISOString() });
+      return json(res, 200, { ok: true, id, filename: safe, size: buf.length });
     }
     if (req.method === 'GET') {
+      const files = [];
       try {
-        const files = readdirSync(ATTACH_DIR).map((filename) => {
-          const st = statSync(join(ATTACH_DIR, filename));
-          return { filename, size: st.size, uploadedAt: st.mtime.toISOString() };
-        });
-        return json(res, 200, { attachments: files });
-      } catch {
-        return json(res, 200, { attachments: [] });
-      }
+        for (const id of readdirSync(ATTACH_DIR)) {
+          try {
+            const meta = JSON.parse(readFileSync(join(ATTACH_DIR, id, 'meta.json'), 'utf8'));
+            files.push(meta);
+          } catch { /* 损坏条目跳过 */ }
+        }
+      } catch { /* 新目录为空 */ }
+      try {
+        for (const filename of readdirSync(STORAGE.legacy.attachments)) {
+          const st = statSync(join(STORAGE.legacy.attachments, filename));
+          if (st.isFile()) files.push({ filename, size: st.size, uploadedAt: st.mtime.toISOString(), legacy: true });
+        }
+      } catch { /* 旧目录为空 */ }
+      return json(res, 200, { attachments: files });
     }
     if (req.method === 'DELETE') {
       const url = new URL(req.url, 'http://x');
-      const f = url.searchParams.get('filename') || '';
-      try {
-        const target = resolveInside(ATTACH_DIR, safeFilename(f));
-        if (!target) throw new Error('unsafe path');
-        unlinkSync(target);
-        return json(res, 200, { ok: true });
+      const id = url.searchParams.get('id') || '';
+      if (id) {
+        const target = resolveInside(ATTACH_DIR, safeFileId(id, 'invalid'));
+        if (target && existsSync(target)) {
+          rmSync(target, { recursive: true, force: true });
+          return json(res, 200, { ok: true });
+        }
       }
-      catch { return json(res, 404, { error: '附件不存在' }); }
+      return json(res, 404, { error: '附件不存在' });
     }
     json(res, 405, { error: 'method' });
   } });
@@ -1503,7 +1629,7 @@ export function apply(ctx, config) {
     const nodeLabel = safeFileId(url.searchParams.get('node') || '', '');
     const file = url.searchParams.get('file') || '';
     if (!nodeLabel || !file) return json(res, 400, { error: '需要 node 和 file' });
-    const dir = resolveInside(WS_ROOT, nodeLabel);
+    const dir = resolveInside(STORAGE.legacy.workspaces, nodeLabel);
     const full = dir && resolveInside(dir, file);
     if (!dir || !full || !existsSync(full) || !statSync(full).isFile()) {
       return json(res, 404, { error: '产物不存在' });
@@ -1588,7 +1714,9 @@ export function apply(ctx, config) {
     cv.boundSessions.add(String(sessionId));
     applyCanvasGraph(cv, body.graph, body.version);
     if (body.workflowId) cv.workflowId = body.workflowId;
-    json(res, 200, { ok: true, version: cv.version, graph: cv.graph, persona: canvasAssistantPersona() });
+    const hostSession = ctx.get('sessions')?.get?.(SessionId(String(sessionId)));
+    const canSaveToWorkspace = Boolean(hostSession?.header?.cwd);
+    json(res, 200, { ok: true, version: cv.version, graph: cv.graph, persona: canvasAssistantPersona(), canSaveToWorkspace });
   } });
 
   ctx.webServer.register({ kind: 'exact', path: '/wf1/api/assistant/unbind', async handler(req, res) {
@@ -1624,6 +1752,7 @@ export function apply(ctx, config) {
 
   // SSE 端点（含快照：连接即推送最近一次运行状态）
   ctx.webServer.register({ kind: 'exact', path: '/wf1/api/events', handler(req, res) {
+    const requestedRunId = new URL(req.url, 'http://wf1.local').searchParams.get('runId') || null;
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -1632,11 +1761,11 @@ export function apply(ctx, config) {
     });
     res.write('retry: 2000\n\n');
     // 只恢复进行中运行；完成历史必须由带作用域的历史/详情接口读取，避免跨工作流串台。
-    const live = [...orch.runs.values()][0];
+    const live = requestedRunId ? orch.runs.get(requestedRunId) : [...orch.runs.values()][0];
     if (live) {
       res.write(`event: snapshot\ndata: ${JSON.stringify({ runId: live.run.runId, schemaVersion: live.run.schemaVersion, status: 'running', nodeStates: summarizeNodeStates(live.run.nodeStates), outputs: summarizeOutputs(live.run.outputs, live.run.structuredOutputs), structuredOutputSummary: summarizeStructuredOutputs(live.run.structuredOutputs) })}\n\n`);
     }
-    sseClients.add(res);
+    sseClients.set(res, requestedRunId);
     const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 15000);
     req.on('close', () => { clearInterval(ping); sseClients.delete(res); });
   } });
@@ -1752,28 +1881,41 @@ function sumUsage(events, firstSeq) {
   return has ? { inputTokens: input, outputTokens: output, cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite } : null;
 }
 
-function workspaceFor(node) {
-  const label = safeFileId(node.data?.label || node.id, 'agent');
-  const dir = join(WS_ROOT, label);
-  mkdirSync(dir, { recursive: true });
+function workspaceFor(node, { workflowId, runId } = {}) {
+  const dir = STORAGE.workspaceForNode({
+    workflowId: workflowId || 'draft',
+    runId: runId || `test-${Date.now().toString(36)}`,
+    nodeId: node.id,
+  });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
 }
 
-function safeWsList(dir) {
-  try {
-    const out = [];
-    const walk = (cur, depth) => {
-      if (depth > 2) return;
-      for (const name of readdirSync(cur, { withFileTypes: true })) {
-        const full = join(cur, name.name);
-        const rel = full.slice(dir.length + 1);
-        if (name.isDirectory()) { out.push(`${rel}/`); walk(full, depth + 1); }
-        else out.push(rel);
+function safeWsList(dir, { maxFiles = 1000, maxFileBytes = 50 * 1024 * 1024, maxTotalBytes = 500 * 1024 * 1024 } = {}) {
+  const out = [];
+  let totalBytes = 0;
+  const realRoot = realpathSync(dir);
+  const walk = (cur) => {
+    for (const entry of readdirSync(cur, { withFileTypes: true })) {
+      const full = join(cur, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
       }
-    };
-    walk(dir, 0);
-    return out.slice(0, 30);
-  } catch { return []; }
+      if (!entry.isFile()) continue;
+      const real = realpathSync(full);
+      if (resolveInside(realRoot, real) !== real) continue;
+      const stat = statSync(real);
+      if (stat.size > maxFileBytes) throw new Error(`文件“${entry.name}”超过 50MB，未保存为成果`);
+      totalBytes += stat.size;
+      if (totalBytes > maxTotalBytes) throw new Error('本节点生成文件总量超过 500MB，请减少文件后重试');
+      out.push(real.slice(realRoot.length + 1).replace(/\\/g, '/'));
+      if (out.length > maxFiles) throw new Error('本节点生成文件超过 1000 个，请整理后重试');
+    }
+  };
+  walk(realRoot);
+  return out;
 }
 
 // lark-cli 可能由 larkauth 插件在启动后自动安装完成 —— 缓存带 15s TTL，免重启生效

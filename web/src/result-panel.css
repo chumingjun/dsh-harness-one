@@ -47,6 +47,15 @@
 .result-load-error { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 10px; padding: 8px 10px; border-left: 2px solid var(--danger); background: rgba(239,68,68,.08); color: #F87171; font-size: 11px; }
 .result-load-error button { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-decoration: underline; }
 .result-summary { margin: 0 0 10px; padding: 9px 10px; border-left: 2px solid var(--accent); background: rgba(6,182,212,.07); color: var(--fg-muted); font-size: 12px; line-height: 1.55; }
+.result-save-area { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px 10px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.result-save-button { min-width: 0; justify-content: center; }
+.result-save-hint, .result-save-success, .result-save-error { grid-column: 1 / -1; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.result-save-hint { color: var(--fg-faint); }
+.result-save-success { color: var(--success); }
+.result-save-error { color: var(--danger); }
+.result-zip-action { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-muted); font-size: 10px; text-decoration: none; white-space: nowrap; }
+.result-zip-action:hover { color: var(--fg); text-decoration: underline; }
+.result-zip-action:focus-visible { outline: none; border-radius: 4px; box-shadow: var(--shadow-glow); }
 
 .result-viewer { display: flex; flex-direction: column; gap: 14px; }
 .result-block { min-width: 0; }
@@ -54,7 +63,8 @@
 .result-output-selector button { min-height: 28px; flex: none; padding: 0 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-raised); color: var(--fg-muted); font: 600 11px/1 var(--font-ui); cursor: pointer; }
 .result-output-selector button.result-output-on { border-color: var(--accent); color: var(--fg); background: var(--bg-hover); }
 .result-partial { width: 100%; margin-bottom: 10px; padding: 7px 9px; border: 1px solid rgba(245,158,11,.3); border-radius: 6px; background: rgba(245,158,11,.08); color: #FBBF24; font: 11px/1.4 var(--font-ui); cursor: pointer; text-align: left; }
-.result-legacy-badge { margin-left: auto; color: var(--warn); font-size: 9px; }
+.result-legacy-badge { color: var(--warn); font-size: 9px; }
+.result-expand-btn { margin-left: auto; }
 .result-final-empty { padding: 12px; border: 1px dashed var(--border-strong); border-radius: 7px; background: var(--bg); }
 .result-process-artifacts { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
 .result-process-artifacts > summary { display: flex; align-items: center; justify-content: space-between; color: var(--fg-muted); font-size: 11px; font-weight: 650; cursor: pointer; }
@@ -66,6 +76,8 @@
 .result-section-head { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; color: var(--fg-muted); }
 .result-section-head h4 { margin: 0; color: var(--fg); font-size: 12px; font-weight: 650; }
 .result-count { margin-left: auto; padding: 1px 6px; border-radius: 999px; background: var(--bg-raised); color: var(--fg-faint); font-size: 9px; }
+.result-deliverables { padding: 10px; border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--success) 6%, var(--bg)); }
+.result-deliverables .result-section-head { color: var(--success); }
 .result-core { min-width: 0; }
 .result-markdown.markdown-preview { min-height: 0; margin: 0; padding: 10px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: 12px; line-height: 1.65; }
 .result-markdown.markdown-preview h1 { font-size: 19px; }
@@ -169,3 +181,8 @@
 @media (max-width: 680px) {
   .result-panel { position: absolute; inset: 0 0 0 auto; z-index: 30; width: min(390px, 100vw); max-width: 100vw; box-shadow: var(--shadow-2); }
 }
+
+/* 最终成果放大预览：宽弹窗 + 阅读字号 */
+.result-expand-modal .modal-box { width: min(880px, 94vw); max-width: 94vw; max-height: 88vh; }
+.result-expand-modal .modal-body { padding: 20px 24px; }
+.result-expand-body { font-size: 14px; line-height: 1.75; }

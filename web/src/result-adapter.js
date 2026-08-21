@@ -1,5 +1,7 @@
 const URL_PATTERN = /https?:\/\/[^\s<>()\[\]"']+/gi;
 
+export const RUN_ARTIFACT_SAVE_PATH = '/run-artifacts/save';
+
 const asArray = (value) => value == null ? [] : (Array.isArray(value) ? value : [value]);
 const asObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const first = (...values) => values.find((value) => value !== undefined && value !== null && value !== '');
@@ -20,6 +22,10 @@ function uniqueBy(items, keyOf) {
     seen.add(key);
     return true;
   });
+}
+
+function basename(value) {
+  return String(value || '').split(/[\\/]/).filter(Boolean).at(-1) || String(value || '');
 }
 
 function graphNodes(runDetail) {
@@ -79,14 +85,14 @@ function stableNodeOrder(runDetail) {
 
 function normalizeFile(file, fallback = {}) {
   if (typeof file === 'string') {
-    return { name: file.split('/').filter(Boolean).at(-1) || file, path: file, ...fallback };
+    return { name: basename(file), path: file, ...fallback };
   }
   const value = asObject(file);
   const path = first(value.path, value.relativePath, value.file, value.filename, value.name, value.key);
   if (!path) return null;
   return {
-    id: value.id,
-    name: first(value.name, value.filename, String(path).split('/').filter(Boolean).at(-1), path),
+    id: first(value.id, value.artifactId),
+    name: basename(first(value.name, value.filename, path)),
     path: String(path),
     url: first(value.url, value.href, value.downloadUrl),
     downloadUrl: first(value.downloadUrl, value.url, value.href),
@@ -96,6 +102,44 @@ function normalizeFile(file, fallback = {}) {
     size: value.size,
     mimeType: first(value.mimeType, value.mediaType, value.contentType),
   };
+}
+
+export function getArtifactIds(files = []) {
+  return [...new Set(asArray(files).map((file) => (
+    typeof file === 'string' || typeof file === 'number' ? file : first(file?.id, file?.artifactId)
+  )).filter(Boolean).map(String))];
+}
+
+export function buildArtifactSavePayload({ runId, artifactIds, files, sessionId } = {}) {
+  return {
+    runId: String(runId || ''),
+    artifactIds: getArtifactIds(artifactIds || files),
+    sessionId: String(sessionId || ''),
+  };
+}
+
+export async function saveRunArtifacts(url, payload, fetchImpl = globalThis.fetch) {
+  const response = await fetchImpl(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(buildArtifactSavePayload(payload)),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok !== true) throw new Error(data.error || `保存失败（HTTP ${response.status}）`);
+  return {
+    ...data,
+    savedCount: Number(data.savedCount) || 0,
+    names: savedArtifactNames(data.names),
+  };
+}
+
+export function savedArtifactNames(names = []) {
+  return [...new Set(asArray(names).map(basename).filter(Boolean))];
+}
+
+export function isRunResultsReady(model, hasLoadedResults = true) {
+  if (!hasLoadedResults || !model?.runId) return false;
+  return !['idle', 'queued', 'pending', 'running', 'waiting'].includes(model.status);
 }
 
 function normalizeLink(link) {

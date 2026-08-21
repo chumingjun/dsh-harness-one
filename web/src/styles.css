@@ -823,10 +823,12 @@ body {
 }
 .dsh-doc-preview-button.md-file-link code { transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease); }
 .dsh-doc-preview-button.md-file-link:hover code { color: var(--accent); border-color: var(--accent); text-decoration: underline; }
-.markdown-preview table { width: 100%; margin: 1em 0; border-collapse: collapse; font-size: 13px; }
+.markdown-preview .md-table-wrap { max-width: 100%; margin: 1em 0; overflow-x: auto; border: 1px solid var(--border-strong); border-radius: var(--radius); }
+.markdown-preview table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .markdown-preview th,
-.markdown-preview td { padding: 8px 10px; border: 1px solid var(--border-strong); text-align: left; vertical-align: top; }
-.markdown-preview th { background: var(--bg-raised); color: var(--fg); font-weight: 650; }
+.markdown-preview td { padding: 8px 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.markdown-preview td { border-top: 1px solid var(--border); }
+.markdown-preview th { background: var(--bg-raised); color: var(--fg); font-weight: 650; white-space: nowrap; }
 .markdown-preview tr:nth-child(even) td { background: color-mix(in srgb, var(--bg-raised) 48%, transparent); }
 .markdown-preview a { color: var(--accent); text-underline-offset: 3px; }
 .markdown-preview hr { margin: 1.5em 0; border: 0; border-top: 1px solid var(--border-strong); }
@@ -835,7 +837,6 @@ body {
 @media (max-width: 720px) {
   .artifact-preview-modal .modal-box { width: 96vw; max-width: 96vw; max-height: 92vh; }
   .markdown-preview { padding: 22px 18px 36px; font-size: 13px; }
-  .markdown-preview table { display: block; overflow-x: auto; white-space: nowrap; }
 }
 
 /* ============ 历史抽屉 ============ */

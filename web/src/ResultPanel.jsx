@@ -1,7 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Archive, Check, ChevronRight, Clock3, History, LoaderCircle, RefreshCw, Timer } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Archive, Check, ChevronRight, Clock3, FolderDown, History, LoaderCircle, RefreshCw, Timer } from 'lucide-react';
 import { apiUrl } from './api.js';
-import { adaptRunResults, formatClock, formatDuration, getRunId } from './result-adapter.js';
+import {
+  adaptRunResults,
+  formatClock,
+  formatDuration,
+  getArtifactIds,
+  getRunId,
+  isRunResultsReady,
+  RUN_ARTIFACT_SAVE_PATH,
+  saveRunArtifacts,
+} from './result-adapter.js';
 import { deriveRunViewState, RESULT_TABS } from './run-view-state.js';
 import ResultViewer, { ProcessArtifacts } from './ResultViewer.jsx';
 import './result-panel.css';
@@ -109,6 +118,9 @@ export function ResultPanel({
   onOpenHistory,
   onFocusNode,
   onOpenNodeDetail,
+  sessionId = '',
+  resultsReadyToken,
+  canSaveToWorkspace = false,
   className = '',
 }) {
   const runId = getRunId(runDetail, status, results);
@@ -117,16 +129,27 @@ export function ResultPanel({
   const [selectedOutputId, setSelectedOutputId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [savedNames, setSavedNames] = useState([]);
+  const initialReadyTokenRef = useRef(resultsReadyToken);
+  const readyTokenRunRef = useRef(runId);
 
   const loadResults = async (signal) => {
     if (!runId) return;
     setLoading(true);
     setLoadError('');
     try {
-      const response = await fetch(apiUrl(`/run-results?id=${encodeURIComponent(runId)}`), { signal });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || `加载成果失败（HTTP ${response.status}）`);
-      setRemoteResults(data);
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+        const response = await fetch(apiUrl(`/run-results?id=${encodeURIComponent(runId)}`), { signal });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok) {
+          setRemoteResults(data);
+          return;
+        }
+        if (response.status !== 404 || attempt === 7) throw new Error(data.error || `加载成果失败（HTTP ${response.status}）`);
+      }
     } catch (error) {
       if (error?.name !== 'AbortError') setLoadError(error?.message || String(error));
     } finally {
@@ -138,11 +161,26 @@ export function ResultPanel({
     setRemoteResults(undefined);
     setSelectedOutputId(null);
     setActiveTab('result');
+    setSaveError('');
+    setSavedNames([]);
     if (!runId || results !== undefined) return undefined;
     const controller = new AbortController();
     loadResults(controller.signal);
     return () => controller.abort();
   }, [runId, results]);
+
+  useEffect(() => {
+    if (readyTokenRunRef.current !== runId) {
+      readyTokenRunRef.current = runId;
+      initialReadyTokenRef.current = resultsReadyToken;
+      return undefined;
+    }
+    if (resultsReadyToken === initialReadyTokenRef.current) return undefined;
+    if (!runId || results !== undefined || resultsReadyToken === undefined) return undefined;
+    const controller = new AbortController();
+    loadResults(controller.signal);
+    return () => controller.abort();
+  }, [resultsReadyToken, runId, results]);
 
   const source = results !== undefined ? results : remoteResults;
   const model = useMemo(
@@ -153,11 +191,33 @@ export function ResultPanel({
   const selectedOutput = successfulOutputs.find((row) => row.nodeId === selectedOutputId) || successfulOutputs[0] || null;
   const selectedLinks = selectedOutput
     ? model.links.filter((link) => !link.nodeId || link.nodeId === selectedOutput.nodeId)
-    : [];
+    : model.links;
   const selectedFiles = selectedOutput
-    ? model.finalFiles.filter((file) => file.nodeId === selectedOutput.nodeId)
-    : [];
+    ? model.finalFiles.filter((file) => !file.nodeId || file.nodeId === selectedOutput.nodeId)
+    : model.finalFiles;
   const viewState = deriveRunViewState(model, activeTab);
+  const resultsReady = isRunResultsReady(model, source !== undefined);
+  const finalArtifactIds = getArtifactIds(model.finalFiles);
+  const canSave = Boolean(canSaveToWorkspace && sessionId && resultsReady && finalArtifactIds.length);
+
+  const saveToWorkspace = async () => {
+    if (!canSave || saving) return;
+    setSaving(true);
+    setSaveError('');
+    setSavedNames([]);
+    try {
+      const data = await saveRunArtifacts(apiUrl(RUN_ARTIFACT_SAVE_PATH), {
+        runId: model.runId,
+        artifactIds: finalArtifactIds,
+        sessionId,
+      });
+      setSavedNames(data.names);
+    } catch (error) {
+      setSaveError(error?.message || String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const refresh = () => {
     if (!runId) return;
@@ -176,11 +236,6 @@ export function ResultPanel({
         <div className="result-head-actions">
           <button className="btn-icon" title="刷新成果" aria-label="刷新成果" onClick={refresh} disabled={!runId || loading}><RefreshCw size={15} className={loading ? 'result-spin' : ''} /></button>
           <button className="btn-icon" title="运行历史" aria-label="打开运行历史" onClick={onOpenHistory}><History size={15} /></button>
-          <a className={`btn-icon ${viewState.canExport ? '' : 'result-action-disabled'}`} title="下载 ZIP" aria-label="下载全部成果 ZIP"
-            aria-disabled={!viewState.canExport} tabIndex={viewState.canExport ? 0 : -1}
-            href={viewState.canExport ? apiUrl(`/runs/export?id=${encodeURIComponent(model.runId)}`) : undefined} download>
-            <Archive size={15} />
-          </a>
         </div>
       </header>
 
@@ -200,11 +255,29 @@ export function ResultPanel({
 
       <div className="result-panel-body">
         {loadError && <div className="result-load-error"><span>{loadError}</span><button onClick={refresh}>重试</button></div>}
-        {loading && !source && <div className="result-loading"><LoaderCircle className="result-spin" size={17} />正在整理运行成果</div>}
+        {activeTab === 'result' && model.runId && !resultsReady && (
+          <div className="result-loading"><LoaderCircle className="result-spin" size={17} />正在整理成果</div>
+        )}
         {!loading && !model.runId && <p className="result-empty result-empty-run">运行工作流后，成果、过程和问题会显示在这里。</p>}
 
-        {model.runId && activeTab === 'result' && (
+        {model.runId && activeTab === 'result' && resultsReady && (
           <>
+            <div className="result-save-area">
+              <button className="btn btn-primary result-save-button" onClick={saveToWorkspace} disabled={!canSave || saving}>
+                {saving ? <LoaderCircle size={15} className="result-spin" /> : savedNames.length ? <Check size={15} /> : <FolderDown size={15} />}
+                {saving ? '正在保存' : savedNames.length ? '已保存到工作目录' : '保存到工作目录'}
+              </button>
+              {!canSaveToWorkspace && <span className="result-save-hint">连接工作目录后可保存</span>}
+              {canSaveToWorkspace && !sessionId && <span className="result-save-hint">工作目录尚未就绪</span>}
+              {canSaveToWorkspace && finalArtifactIds.length === 0 && <span className="result-save-hint">没有可保存的成果文件</span>}
+              {savedNames.length > 0 && <span className="result-save-success">已保存 {savedNames.length} 个文件</span>}
+              {saveError && <span className="result-save-error">{saveError}</span>}
+              {viewState.canExport && (
+                <a className="result-zip-action" href={apiUrl(`/runs/export?id=${encodeURIComponent(model.runId)}`)} download>
+                  <Archive size={13} />下载 ZIP
+                </a>
+              )}
+            </div>
             {model.summary && <p className="result-summary">{model.summary}</p>}
             {model.input && <details className="result-input-snapshot"><summary>本次输入</summary><pre>{model.input}</pre></details>}
             {successfulOutputs.length > 1 && (

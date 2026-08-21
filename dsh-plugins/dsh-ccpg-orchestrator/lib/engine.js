@@ -228,6 +228,7 @@ export class Orchestrator {
       const execCtx = {
         node, s, engine: this, signal: ac.signal,
         emit: this.emit.bind(this), runId: run.runId,
+        workflowId: run.workflowId,
         render: (tpl, options = {}) => this.renderTemplate(tpl || '', { ...this.templateCtx(node, s), ...options }),
       };
       let result;
@@ -260,6 +261,10 @@ export class Orchestrator {
         ...(extra?.trace ? { hasTrace: true, sessionId: extra.sessionId } : {}),
         ...(extra?.input !== undefined ? { hasInput: true } : {}),
         ...(extra?.turns != null ? { turns: extra.turns } : {}),
+        ...(extra?.durationMs != null ? { durationMs: extra.durationMs } : {}),
+        ...(extra?.model ? { model: extra.model } : {}),
+        ...(extra?.artifacts ? { artifacts: extra.artifacts } : {}),
+        ...(extra?.sessionId ? { sessionId: extra.sessionId } : {}),
       });
       this._onNodeDone(s, node.id, false);
     } catch (err) {
@@ -603,7 +608,7 @@ registerKind({
 
 registerKind({
   type: 'script',
-  async execute({ node, s, engine, signal }) {
+  async execute({ node, s, engine, signal, runId, workflowId }) {
     if (!engine.scriptRunner) throw new Error('script 执行器未注入（宿主初始化异常）');
     const input = resolveScriptInputs(node.data?.inputs || [], engine.templateCtx(node, s));
     const schema = getScriptOutputSchema(node.data?.outputSchema);
@@ -611,6 +616,8 @@ registerKind({
       node,
       input,
       signal,
+      runId,
+      workflowId,
       timeoutMs: normalizeScriptTimeout(node.data?.scriptTimeoutMs),
     });
     validateScriptOutput(executed.value, schema);

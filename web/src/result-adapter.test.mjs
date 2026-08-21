@@ -1,6 +1,19 @@
 import assert from 'node:assert/strict';
 import { artifactPreviewKind } from './artifact-preview.js';
-import { adaptRunResults, formatClock, formatDuration, getRunId, isTechnicalArtifact, normalizeRunEvent } from './result-adapter.js';
+import {
+  adaptRunResults,
+  buildArtifactSavePayload,
+  formatClock,
+  formatDuration,
+  getArtifactIds,
+  getRunId,
+  isRunResultsReady,
+  isTechnicalArtifact,
+  normalizeRunEvent,
+  RUN_ARTIFACT_SAVE_PATH,
+  saveRunArtifacts,
+  savedArtifactNames,
+} from './result-adapter.js';
 import { deriveRunViewState, getRunStatusMeta } from './run-view-state.js';
 
 const runDetail = {
@@ -173,5 +186,40 @@ assert.equal(withTechnical.files.length, 4);
 assert.equal(isTechnicalArtifact({ name: 'fetch_err.json' }), true);
 assert.equal(isTechnicalArtifact({ name: 'FETCH_ERR2.JSON' }), true);
 assert.equal(isTechnicalArtifact({ name: 'notes.md' }), false);
+
+assert.equal(RUN_ARTIFACT_SAVE_PATH, '/run-artifacts/save');
+assert.deepEqual(getArtifactIds([
+  { id: 'a1' }, { artifactId: 'a2' }, { id: 'a1' }, 'a3', null,
+]), ['a1', 'a2', 'a3']);
+assert.deepEqual(buildArtifactSavePayload({
+  runId: 'run-save',
+  files: [{ id: 'final-1' }, { id: 'final-1' }, { id: 'final-2' }],
+  sessionId: 'session-9',
+}), { runId: 'run-save', artifactIds: ['final-1', 'final-2'], sessionId: 'session-9' });
+assert.deepEqual(savedArtifactNames(['/Users/demo/report.pdf', 'folder\\slides.pptx', 'report.pdf']), ['report.pdf', 'slides.pptx']);
+assert.equal(isRunResultsReady({ runId: 'r1', status: 'running' }, true), false);
+assert.equal(isRunResultsReady({ runId: 'r1', status: 'success' }, false), false);
+assert.equal(isRunResultsReady({ runId: 'r1', status: 'success' }, true), true);
+
+let saveRequest;
+const saveResponse = await saveRunArtifacts('/wf1/api/run-artifacts/save', {
+  runId: 'run-save', artifactIds: ['a1', 'a2', 'a1'], sessionId: 'session-9',
+}, async (url, request) => {
+  saveRequest = { url, request };
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, savedCount: 2, names: ['/tmp/report.pdf', 'slides.pptx'] }),
+  };
+});
+assert.equal(saveRequest.url, '/wf1/api/run-artifacts/save');
+assert.equal(saveRequest.request.method, 'POST');
+assert.deepEqual(JSON.parse(saveRequest.request.body), {
+  runId: 'run-save', artifactIds: ['a1', 'a2'], sessionId: 'session-9',
+});
+assert.deepEqual(saveResponse, { ok: true, savedCount: 2, names: ['report.pdf', 'slides.pptx'] });
+await assert.rejects(() => saveRunArtifacts('/save', { runId: 'r' }, async () => ({
+  ok: false, status: 409, json: async () => ({ error: '工作目录不可用' }),
+})), /工作目录不可用/);
 
 console.log('result adapter frontend tests: all pass');

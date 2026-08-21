@@ -45,13 +45,20 @@ export default function App() {
   const [view, setView] = useState('canvas'); // 'canvas' | 'workflows'
   const [historyOpen, setHistoryOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
-  const [currentWf, setCurrentWf] = useState(null); // normalized workflow document, including id/name
+  const [currentWf, setCurrentWfRaw] = useState(null); // normalized workflow document, including id/name
+  const currentWfIdRef = useRef(null); // SSE 监听器（只建一次）经 ref 读当前工作流 id
+  const setCurrentWf = useCallback((wf) => {
+    currentWfIdRef.current = wf?.id || null;
+    setCurrentWfRaw(wf);
+  }, []);
   const [runStatus, setRunStatus] = useState({ running: false, mode: '?', last: null, runId: null, done: 0, total: 0 });
   const [triggerInput, setTriggerInput] = useState('');
   const [runInputs] = useState({});
   const [eventsByRunId, setEventsByRunId] = useState({});
   const [runDetails, setRunDetails] = useState({});
   const [inspectedRunId, setInspectedRunId] = useState(null);
+  const [resultsReadyByRunId, setResultsReadyByRunId] = useState({});
+  const [hostSession, setHostSession] = useState({ id: null, canSaveToWorkspace: false });
   const terminalNodesByRunRef = useRef(new Map());
   const [canvasMenu, setCanvasMenu] = useState(null); // 双击画布 { x, y } 弹加节点菜单
   const [catalog, setCatalog] = useState({ tools: [], feishuEnabled: false });
@@ -176,6 +183,7 @@ export default function App() {
       const [catalogData, skillsData, llmData, runtimeData, credsData, larkData, runsData] = await Promise.all([
         j('/tools'), j('/skills'), j('/llm-config'), j('/runtime-config'), j('/feishu-credentials'), j('/lark-auth'), j('/runs'),
       ]);
+      const graphData = await fetch(apiUrl('/graph')).then((r) => r.json()).catch(() => null);
       if (catalogData) setCatalog(catalogData);
       if (skillsData) setSkills(skillsData.skills || []);
       if (llmData) setLLMConfig(llmData);
@@ -183,18 +191,23 @@ export default function App() {
       if (credsData) setFeishuCreds(credsData.credentials || []);
       if (larkData) setLarkStatus(larkData.status || null);
       const latest = runsData?.runs?.[0];
-      if (latest?.runId) {
+      // 初次恢复也要按工作流对齐：草稿图带着 workflowId 时优先取该工作流的最近运行
+      const draftWorkflowId = graphData?.workflowId;
+      const aligned = draftWorkflowId
+        ? (runsData?.runs || []).find((row) => row.workflowId === draftWorkflowId)
+        : latest;
+      if (aligned?.runId) {
         try {
-          const response = await fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(latest.runId)}`));
+          const response = await fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(aligned.runId)}`));
           if (response.ok) {
             const detail = await response.json();
-            setInspectedRunId(latest.runId);
-            setRunDetails((current) => ({ ...current, [latest.runId]: detail }));
+            setInspectedRunId(aligned.runId);
+            setRunDetails((current) => ({ ...current, [aligned.runId]: detail }));
             setRunStatus((current) => ({
               ...current,
-              running: Boolean(latest.live),
-              runId: latest.runId,
-              last: latest.status,
+              running: Boolean(aligned.live),
+              runId: aligned.runId,
+              last: aligned.status,
             }));
           }
         } catch { /* 详情拉取失败不阻塞首屏 */ }
@@ -204,7 +217,9 @@ export default function App() {
 
   // SSE：事件 → 节点状态 + 进度 + 结构化日志
   useEffect(() => {
-    const es = new EventSource(apiUrl('/events'));
+    const eventRunId = runStatus.runId;
+    const eventPath = eventRunId ? `/events?runId=${encodeURIComponent(eventRunId)}` : '/events';
+    const es = new EventSource(apiUrl(eventPath));
     // 结构化运行事件：按 runId 隔离，右侧成果/过程/问题面板以此为实时数据源。
     const pushEntry = (entry) => {
       const timed = { t: Date.now(), ...entry };
@@ -214,7 +229,9 @@ export default function App() {
         [runId]: [...(current[runId] || []).slice(-299), timed],
       }));
     };
+    const appliesToCurrentRun = (payload) => !payload?.runId || Boolean(eventRunId && payload.runId === eventRunId);
     const applyStatus = (p) => {
+      if (!appliesToCurrentRun(p)) return;
       setNodes((nds) =>
         nds.map((n) => {
           if (n.id !== p.nodeId) return n;
@@ -250,12 +267,16 @@ export default function App() {
     es.addEventListener('node-status', (e) => applyStatus(JSON.parse(e.data)));
     es.addEventListener('agent-progress', (e) => {
       const p = JSON.parse(e.data);
+      if (!appliesToCurrentRun(p)) return;
       setProgress((prev) => ({ ...prev, [p.nodeId]: p }));
       setNodes((nds) => nds.map((n) => (n.id === p.nodeId ? { ...n, data: { ...n.data, livePreview: p.preview, liveTurns: p.turns } } : n)));
     });
     es.addEventListener('assistant-patch', (e) => {
       const p = JSON.parse(e.data);
       if (p.canvasId && p.canvasId !== canvasIdRef.current) return;
+      // 旧工作流的在飞 patch：切换工作流瞬间版本闸门挡不住（cv.version 递增是合法的），
+      // 按 workflowId 丢弃；草稿（null）不过滤，保持原行为。
+      if (p.workflowId && currentWfIdRef.current && p.workflowId !== currentWfIdRef.current) return;
       const version = Number(p.version) || 0;
       if (version && version <= assistantVersionRef.current) return;
       if (version && version !== assistantVersionRef.current + 1 && p.graph) {
@@ -274,6 +295,7 @@ export default function App() {
     });
     es.addEventListener('run-end', (e) => {
       const p = JSON.parse(e.data);
+      if (!appliesToCurrentRun(p)) return;
       runningRef.current = false;
       setRunStatus((s) => ({ ...s, running: false, last: p.status }));
       pushEntry({ kind: 'run', runId: p.runId, status: p.status, text: `运行结束：${STATUS_CN[p.status] || p.status}${p.durationMs ? ` · ${(p.durationMs / 1000).toFixed(1)}s` : ''}` });
@@ -306,6 +328,21 @@ export default function App() {
       else if (p.status === 'canceled') toast('运行已取消', 'warn');
       else toast('运行结束：有节点失败', 'error');
     });
+    es.addEventListener('run-results-ready', (e) => {
+      const p = JSON.parse(e.data);
+      if (!appliesToCurrentRun(p)) return;
+      setResultsReadyByRunId((current) => ({ ...current, [p.runId]: Date.now() }));
+      fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(p.runId)}`))
+        .then((response) => response.ok ? response.json() : Promise.reject(new Error('成果尚未就绪')))
+        .then((detail) => setRunDetails((current) => ({ ...current, [p.runId]: detail })))
+        .catch(() => {});
+    });
+    es.addEventListener('run-persist-error', (e) => {
+      const p = JSON.parse(e.data);
+      if (!appliesToCurrentRun(p)) return;
+      pushEntry({ kind: 'sys', runId: p.runId, status: 'error', text: '成果保存失败，请稍后重试' });
+      toast('成果保存失败，请稍后重试', 'error');
+    });
     es.addEventListener('run-error', (e) => {
       const p = JSON.parse(e.data);
       runningRef.current = false;
@@ -316,6 +353,7 @@ export default function App() {
     es.addEventListener('snapshot', (e) => {
       // 刷新恢复：节点状态 + 一组可点击的运行日志（否则刷新后日志面板会错误显示“尚未运行”）
       const p = JSON.parse(e.data);
+      if (!appliesToCurrentRun(p)) return;
       setRunStatus((s) => ({
         ...s,
         runId: p.runId || s.runId,
@@ -365,7 +403,7 @@ export default function App() {
       }
     });
     return () => es.close();
-  }, [setNodes, toast]);
+  }, [runStatus.runId, setNodes, toast]);
 
   // Esc 关闭面板；Cmd+S 保存；Cmd+Z 撤销 / Shift 重做；Delete 删除选中；Cmd+D 复制选中；F 定位错误
   const isTypingTarget = (e) => {
@@ -473,6 +511,23 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', h);
   }, [dirty]);
 
+  // 切换工作流时让运行面板跟随：显示该工作流最近一次运行（详情懒加载），没有则清空。
+  // 不清 runDetails 缓存——切回来时历史详情直接命中。
+  const syncRunPanelToWorkflow = useCallback((workflowId) => {
+    fetch(apiUrl('/runs')).then((r) => r.json()).then((d) => {
+      const rows = d.runs || [];
+      const latest = rows.find((row) => row.workflowId === workflowId);
+      if (!latest) { setInspectedRunId(null); return; }
+      setInspectedRunId(latest.runId);
+      if (!latest.live) {
+        fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(latest.runId)}`))
+          .then((r) => (r.ok ? r.json() : Promise.reject(new Error('运行记录不存在'))))
+          .then((detail) => setRunDetails((current) => ({ ...current, [latest.runId]: detail })))
+          .catch(() => { /* 面板显示列表摘要兜底 */ });
+      }
+    }).catch(() => { /* 列表拉不到就维持现状 */ });
+  }, []);
+
   const openWorkflow = useCallback(async (wf) => {
     const res = await fetch(apiUrl(`/workflows/detail?id=${encodeURIComponent(wf.id)}`));
     if (!res.ok) { toast(`打开失败：${wf.name}`, 'error'); return; }
@@ -490,8 +545,10 @@ export default function App() {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ nodes: data.graph.nodes, edges: data.graph.edges, workflowId: data.id }),
     }).catch(() => {});
+    // 运行面板跟随：切到哪条工作流就显示哪条的最近一次运行；没跑过则清空面板
+    syncRunPanelToWorkflow(data.id);
     toast(`已打开「${data.name}」`);
-  }, [setNodes, setEdges, toast]);
+  }, [setNodes, setEdges, toast, syncRunPanelToWorkflow]);
 
   const newWorkflow = useCallback((created) => {
     const document = normalizeWorkflowDocument(created);
@@ -508,8 +565,9 @@ export default function App() {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ nodes: document.graph.nodes, edges: document.graph.edges, workflowId: document.id }),
     }).catch(() => {});
+    syncRunPanelToWorkflow(document.id);
     setTemplateOpen(true); // 空画布 → 弹模板库引导
-  }, [setNodes, setEdges]);
+  }, [setNodes, setEdges, syncRunPanelToWorkflow]);
 
   const applyTemplate = useCallback((tpl) => {
     snapshot();
@@ -579,7 +637,14 @@ export default function App() {
     });
     const data = await res.json();
     if (!res.ok) toast(`启动失败：${data.error}`, 'error');
-    else if (data.lint?.issues?.length) toast(`提示：${data.lint.issues.length} 条警告（见图检查）`, 'warn');
+    else {
+      if (data.runId) {
+        runningRef.current = true;
+        setInspectedRunId(data.runId);
+        setRunStatus((current) => ({ ...current, running: true, runId: data.runId, done: 0, total: graph.nodes.length }));
+      }
+      if (data.lint?.issues?.length) toast(`提示：${data.lint.issues.length} 条警告（见图检查）`, 'warn');
+    }
   }, [save, setNodes, toGraph, triggerInput, runInputs, currentWf, toast, doLint]);
 
   const cancelRun = useCallback(async () => {
@@ -878,6 +943,13 @@ export default function App() {
   }, [toGraph, currentWf]);
   reportCanvasStateRef.current = reportCanvasState;
 
+  // 显式契约：当前工作流一变（打开/新建/切换），立刻把新图 + workflowId 上报助手服务端，
+  // 让对话侧 canvas_* 工具同步指向最新工作流。此前依赖 reportCanvasState 身份变化触发
+  // 嵌入 effect 重跑——是隐式耦合，调整任意一侧 hook 依赖都会无声断掉。
+  useEffect(() => {
+    reportCanvasStateRef.current?.(true);
+  }, [currentWf?.id]);
+
   // SSE 漏包/重连恢复：以服务端权威完整图替换当前画布。
   const applyAssistantGraph = useCallback((graph, version, notify = false) => {
     if (!graph?.nodes || Number(version) <= assistantVersionRef.current) return;
@@ -935,10 +1007,12 @@ export default function App() {
       if (!d || typeof d !== 'object') return;
       if (d.type === 'wf1-session' && d.sessionId) {
         hostSessionRef.current = d.sessionId;
+        setHostSession({ id: d.sessionId, canSaveToWorkspace: false });
         fetch(apiUrl('/assistant/bind'), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId: d.sessionId, canvasId: canvasIdRef.current, version: assistantVersionRef.current, graph: toGraph(), workflowId: currentWf?.id || null }),
         }).then((r) => r.json()).then((result) => {
+          setHostSession({ id: d.sessionId, canSaveToWorkspace: result?.canSaveToWorkspace === true });
           if (result?.graph && Number(result.version) > assistantVersionRef.current) {
             assistantGraphRef.current?.(result.graph, Number(result.version), true);
           }
@@ -1256,6 +1330,9 @@ export default function App() {
             runDetail={runDetails[inspectedRunId]}
             events={eventsByRunId[inspectedRunId] || []}
             status={inspectedRunId === runStatus.runId ? runStatus : runDetails[inspectedRunId]}
+            sessionId={hostSession.id}
+            canSaveToWorkspace={hostSession.canSaveToWorkspace}
+            resultsReadyToken={resultsReadyByRunId[inspectedRunId] || 0}
             triggerInput={triggerInput}
             onTriggerChange={setTriggerInput}
             onOpenHistory={() => setHistoryOpen(true)}
