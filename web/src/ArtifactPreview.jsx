@@ -5,6 +5,7 @@ import {
   documentMimeType,
   documentPreviewKind,
 } from 'dsh-ccpg-document-preview/react';
+import 'dsh-ccpg-document-preview/styles.css';
 import { apiUrl } from './api.js';
 
 function normalizeArtifact(artifact) {
