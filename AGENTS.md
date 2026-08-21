@@ -19,6 +19,21 @@
 - 大改动拆多个逻辑提交（引擎 vs 前端 vs 构建 vs 文档分开）；同一文件混多主题时用 patch staging 拆 hunk
 - 提交前跑对应面的最小测试；推送前确保 `git status` 干净
 
+## 分支与 PR 规范
+
+分支模型 = **GitHub Flow**（main 常绿 + 短命特性分支），单人开发也遵守：
+
+- **main 始终可部署**：任何时刻检出 main 都能 `build-web.sh + setup.sh` 跑起来。绝不对 main force push
+- **主题工作必须开分支**：预计改动 >2 个文件或跨引擎/前端多面的工作，先 `git switch -c feat/xxx`（或 `fix/`、`refactor/` 前缀，与 Conventional Commits 对齐），做完经 PR 合回。目的不是协作，是**隔离**——避免多批不相关工作在同一工作区互相污染（2026-08-21 教训：两批工作混装 + auto-stash，拆提交耗时数倍）
+- **分支短命**（1-3 天）：合并后立即删除远端分支；长寿分支是冲突之源
+- **小修直推 main 可以**：docs、单行 fix、测试补充等 ≤2 文件的单主题改动
+- **PR 流程**（主题分支专用）：
+  - push 后开 PR，标题即 Conventional Commit 格式（squash merge 后 commit 历史天然规范）
+  - PR 描述写背景/方案/验证结果（截图、测试数字），这是决策记录的档案
+  - **Squash and merge** 合并：WIP 细分提交压成 1 个干净提交；确需保留细分时用 Rebase merge；不用 merge commit
+  - 自查：开 PR 后隔 10 分钟过一遍完整 diff 再合
+- **多主题并行用 worktree**：`git worktree add ../harness-one-<topic> -b feat/<topic>` 开独立工作目录，各主题互不干扰、随时可弃；同一分支不能检出两个 worktree；新 worktree 要重装 node_modules（多 package 仓库）；用完 `git worktree remove` + 定期 `git worktree prune`
+
 ## dsh 插件开发事实（仓库级知识，违反即报错）
 
 无论开发哪个插件都会碰到：
