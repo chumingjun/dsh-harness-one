@@ -263,6 +263,10 @@ function createChatPane(react, opts) {
 			if (!sessionId) return;
 			var stop = false;
 			var timer = null;
+			// 会话一换立即清空：旧消息多挂一个网络往返（拉取失败还会一直留着），
+			// 用户会误以为新会话带着旧上下文。
+			setItems([]);
+			setErr(null);
 			var tick = function () {
 				if (stop) return;
 				// paused 时不再发请求也不排下一轮；恢复后先立即补一拍再回节拍
