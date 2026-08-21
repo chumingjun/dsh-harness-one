@@ -37,3 +37,4 @@ dsh-plugins/dsh-ccpg-tools/data/credentials.json
 
 # top-level Express fallback runtime artifacts (login QR / agent outputs)
 data/workspaces/
+data/tmp-e2e/
