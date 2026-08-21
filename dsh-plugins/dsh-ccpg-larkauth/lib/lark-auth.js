@@ -180,7 +180,8 @@ export async function setDefaultIdentityUser() {
 // ---------- token 自动续约 ----------
 
 // 飞书 user_access_token 约 2h 过期、refresh_token 约 7 天且每次刷新轮换重计。
-// 周期性触发一次用户身份调用（whoami 走 uat-client，token 临期会自动刷新并轮换 refresh_token），
+// 周期性发一次真实用户 API 调用（uat-client 只在真正调 OpenAPI 时才自动刷新并轮换 refresh_token；
+// whoami 只读本地状态、不触发刷新，不能用作续约探针）。
 // 只要 dsh 在 refresh 窗口内运行过，授权就永久有效。
 export const RENEW_INTERVAL_MS = 20 * 60 * 1000;
 const RENEW_SOON_MS = 45 * 60 * 1000; // access token 剩余不足 45min 才触发刷新
@@ -188,7 +189,7 @@ const RENEW_SOON_MS = 45 * 60 * 1000; // access token 剩余不足 45min 才触�
 const _renew = { lastAt: null, lastResult: null, running: false };
 export function larkRenewState() { return { ..._renew, intervalMs: RENEW_INTERVAL_MS }; }
 
-/** 续约一轮：临期/失效则 whoami --as user 触发 uat-client 刷新；返回最新状态摘要 */
+/** 续约一轮：临期/失效则发一次真实用户 API 调用触发 uat-client 刷新；返回最新状态摘要 */
 export async function renewUserToken({ force = false } = {}) {
   if (!larkCliAvailable()) return { ok: false, skipped: 'not-installed' };
   if (_renew.running) return { ok: true, skipped: 'running' };
@@ -214,12 +215,13 @@ export async function renewUserToken({ force = false } = {}) {
       _renew.lastResult = 'fresh';
       return { ok: true, skipped: 'fresh' };
     }
-    await run(['whoami', '--as', 'user'], { timeoutMs: 30000 });
+    const call = await run(['api', 'GET', '/open-apis/authen/v1/user_info', '--as', 'user'], { timeoutMs: 30000 });
     const after = await run(['auth', 'status', '--json'], { timeoutMs: 15000 });
     const au = after.identities?.user || {};
     _renew.lastAt = new Date().toISOString();
-    _renew.lastResult = au.tokenStatus === 'valid' ? 'renewed' : `failed:${au.tokenStatus || 'unknown'}`;
-    return { ok: au.tokenStatus === 'valid', tokenStatus: au.tokenStatus, expiresAt: au.expiresAt, refreshExpiresAt: au.refreshExpiresAt };
+    const callError = call.ok === false ? (call.error?.message || call.error || call.raw) : null;
+    _renew.lastResult = au.tokenStatus === 'valid' ? 'renewed' : `failed:${au.tokenStatus || 'unknown'}${callError ? `:${String(callError).slice(0, 200)}` : ''}`;
+    return { ok: au.tokenStatus === 'valid', tokenStatus: au.tokenStatus, expiresAt: au.expiresAt, refreshExpiresAt: au.refreshExpiresAt, ...(callError ? { error: callError } : {}) };
   } finally {
     _renew.running = false;
   }
