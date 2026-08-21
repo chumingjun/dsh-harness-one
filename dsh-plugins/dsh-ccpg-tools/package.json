@@ -9,5 +9,22 @@
     "@deepseek-ai/schemastery": "*",
     "@deepseek-ai/dsh-tools": "*"
   },
-  "peerDependenciesMeta": {}
+  "peerDependenciesMeta": {
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "lib",
+    "src",
+    "cordis.patch.yml"
+  ]
 }

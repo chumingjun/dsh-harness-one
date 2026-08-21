@@ -2,7 +2,7 @@
 
 本仓库是 **dsh（DeepSeek Harness）插件开发工作区**：在这里开发、构建、分发跑在 dsh 进程内的 Cordis 插件；未来任何新 dsh 插件都在这里孵化，命名延续 `dsh-ccpg-*` 前缀（ccpg 系列）。
 
-当前主体是 **Workflow One 物业智能体编排套件**（`dsh-plugins/dsh-ccpg-*` 七插件 + `web/` 画布）：拖拽式工作流画布跑在 dsh 进程内，**每个智能体节点是一个真实 dsh agent**（自主循环、bash/文件系统工具、会话持久化、技能系统），工作区即节点目录。画布 → 拓扑调度 → 节点状态实时回流，全链路闭环。
+当前主体是 **Workflow One 物业智能体编排套件**（`dsh-plugins/dsh-ccpg-*` 八插件 + `web/` 画布）：拖拽式工作流画布跑在 dsh 进程内，**每个智能体节点是一个真实 dsh agent**（自主循环、bash/文件系统工具、会话持久化、技能系统），以当前 dsh 会话工作目录为 cwd 读取项目文件，节点交付物隔离写入工作区 `.workflow-one/runtime/`。画布 → 拓扑调度 → 节点状态实时回流，全链路闭环。
 
 - 画布入口：`http://127.0.0.1:4021/wf1/`（dsh web profile）
 - 官方 dsh Web UI：`http://127.0.0.1:4021/`（同进程同端口；画布注册为 conversation.view 一等视图，侧边栏 🧩 进入）
@@ -49,7 +49,7 @@ sh start.sh [profile]                    # 3. 启动
 - **凭据**：画布 ⚙ 设置弹窗管理多套自建应用凭据（掩码/默认切换/输出节点可选）
 - **技能**：feishu-cli 技能由 larkauth 种子到 dsh 原生技能根 `~/.dsh/skills`（官方聊天 agent 与画布 agent 共用）；agent 默认 `--as user`，失败降级 `--as bot`
 
-## 插件形态（dsh-ccpg 系，七插件）
+## 插件形态（dsh-ccpg 系，八插件）
 
 | 包 | 职责 |
 |---|---|
@@ -60,6 +60,7 @@ sh start.sh [profile]                    # 3. 启动
 | `dsh-ccpg-document-preview` | 文档全屏预览（pdfjs / docx-preview / sheetjs / @file-viewer/pptx，inline workers、无第三方上传） |
 | `dsh-ccpg-larkauth` | 飞书扫码登录（启动自举、token 续约、技能种子）；官方设置面板「飞书账号」section |
 | `dsh-ccpg-brand` | 品牌定制（CCPG logo + 聊天 hero 标题） |
+| `dsh-ccpg-llm-guard` | 模型工具调用完整性防护：空 id/name/arguments 自动重试，不写入会话 |
 
 安装 / 打包 / 数据位置见 [dsh-plugins/README.md](dsh-plugins/README.md)。
 

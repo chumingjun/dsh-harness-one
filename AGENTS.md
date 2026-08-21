@@ -1,6 +1,6 @@
 # AGENTS.md — 给 AI 编码代理的仓库指南
 
-本仓库（harness-one）是 **dsh（DeepSeek Harness）插件开发工作区**：开发、构建、分发跑在 dsh 里的 Cordis 插件。当前主体是 Workflow One 物业编排套件（`dsh-plugins/dsh-ccpg-*` 七插件 + `web/` 画布），但仓库不限于它——未来任何新 dsh 插件都在这里开发，命名延续 `dsh-ccpg-*` 前缀（ccpg 系列）。
+本仓库（harness-one）是 **dsh（DeepSeek Harness）插件开发工作区**：开发、构建、分发跑在 dsh 里的 Cordis 插件。当前主体是 Workflow One 物业编排套件（`dsh-plugins/dsh-ccpg-*` 八插件 + `web/` 画布），但仓库不限于它——未来任何新 dsh 插件都在这里开发，命名延续 `dsh-ccpg-*` 前缀（ccpg 系列）。
 
 - 仓库通用规则（环境、dsh 插件事实、提交规范）见下方各节，**对所有插件适用**
 - Workflow One 专属的架构铁律集中在「Workflow One」一节
@@ -46,11 +46,11 @@
 - dsh 进程内 `fetch 127.0.0.1` 自请求 404，用 LAN IP
 - 官方 UI 特权页（settings/credentials 等）远程必 403（PRIVILEGED_METHODS 钉 loopback），属安全设计不是 bug；插件自有路由不受限
 - dsh HMR 会缓存插件模块：改插件代码后必须彻底结束 dsh 进程再重启（macOS/Linux `pkill`，Windows/WSL 用任务管理器或 `taskkill`），半重启不生效
-- 新插件上线清单：加进 `setup.sh` 与 `pack.sh` 的 `PLUGINS=` 清单（两处同步）、`setup.sh` 的 `cordis.patch.yml` 插件行；有前端产物则接入 `build-web.sh`；setup.sh 会校验 package name 与目录名一致
+- 新插件上线清单：加进 `setup.sh` 与 `pack.sh` 的 `PLUGINS=` 清单（两处同步）、写包内 `cordis.patch.yml` 并在 package.json 声明 `dsh.bundle.patch`（挂载全靠它，profile patch 不再手写插件行）；有前端产物则接入 `build-web.sh`；setup.sh 会校验 package name 与目录名一致
 
 ## Workflow One（当前主体）
 
-七插件：tools / orchestrator（引擎+HTTP+SSE）/ web（静态托管）/ canvasui（官方 UI 视图）/ document-preview（文档预览）/ larkauth（飞书登录）/ brand。画布 `web/`（Vite + React 18 + @xyflow/react + CodeMirror）。
+八插件：tools / orchestrator（引擎+HTTP+SSE）/ web（静态托管）/ canvasui（官方 UI 视图）/ document-preview（文档预览）/ larkauth（飞书登录）/ brand / llm-guard（畸形工具调用防护）。画布 `web/`（Vite + React 18 + @xyflow/react + CodeMirror）。
 
 ### 常用命令
 
@@ -75,7 +75,7 @@ CI：`.github/workflows/ci.yml` 在 PR 与 main push 上跑 `npm test` + `build-
 1. **双端节点注册表**：新增节点类型必须两处注册——引擎 `orchestrator/lib/engine.js` 的 `registerKind({execute, lint, edgeTaken, wantsSink})` + 前端 `web/src/registry.jsx`（icon/色/preset/summary/badges）。AI 助手侧同步 `lib/assistant.js`（NODE_TYPES + persona 契约）与 `lib/variable-schema.js`（变量树）。两处注册即得调度/审批/超时/重试/UI 全部能力，不要另起旁路。
 2. **canvasui bundle 是构建产物**：`lib/client.js` 由 `src/client.js` 内联 `shared/` 片段生成（gitignore 不入库），直接改会被覆盖；改后重跑 `build-canvasui.sh`（`--check` 逐字比对防漂移）。
 3. **4020 Express 回退能力冻结**：新功能只做插件路径（`/wf1/api/*`）；`server/` 仅修 bug。同语义端点双入口实现时以插件端为准。
-4. **存储 = 每实体一 JSON 文件**（`data/workflows|runs|attachments|workspaces`）；运行时产物（runs/run-artifacts/workspaces/credentials）全部 gitignore，**绝不提交**。
+4. **工作区本地存储**：每实体一 JSON 文件，统一位于当前 dsh 会话工作目录的 `.workflow-one/`（state/workflows/runs/attachments/runtime），节点 agent 以工作区根为 cwd、成果只收集各节点 runtime 输出目录；`.workflow-one/` 必须 gitignore，**绝不提交**。飞书凭据仍是 dsh 用户级数据，不迁入工作区。
 5. **构建产物一律不入库**（`web-dist/`、`canvasui lib/client.js`、`document-preview/dist/`、`web/dist/` 全部 gitignore）：分发包「拿到即装」由 `pack.sh` 现场重跑构建保证；源码安装先 `build-web.sh` 再 `setup.sh`（setup 已前置校验）。绝不为省一步构建把产物提交进仓库。
 
 ### 前端坑

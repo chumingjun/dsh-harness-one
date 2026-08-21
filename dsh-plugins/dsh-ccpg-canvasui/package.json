@@ -6,9 +6,17 @@
   "main": "lib/index.js",
   "description": "工作流画布进官方 Web UI：conversation.view 注册 workflow tab（iframe 载 /wf1/ 画布），与官方聊天同会话共存",
   "peerDependencies": {
+    "@deepseek-ai/dsh-commands": "*",
     "@deepseek-ai/schemastery": "*"
   },
-  "peerDependenciesMeta": {},
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-commands": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
@@ -19,8 +27,17 @@
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-conversation"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-slots"
       ]
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
     }
-  }
+  },
+  "files": [
+    "lib",
+    "src",
+    "cordis.patch.yml"
+  ]
 }
