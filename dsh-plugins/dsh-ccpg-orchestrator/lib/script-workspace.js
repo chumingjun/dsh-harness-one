@@ -69,17 +69,20 @@ function byteLength(value) {
 }
 
 export function createScriptWorkspace(rootDir, options = {}) {
+  const readRootDir = options.readRootDir || rootDir;
+  const writeRootDir = options.writeRootDir || rootDir;
   const readLimit = options.maxReadBytes ?? DEFAULT_READ_BYTES;
   const fileWriteLimit = options.maxFileWriteBytes ?? DEFAULT_FILE_WRITE_BYTES;
   const totalWriteLimit = options.maxTotalWriteBytes ?? DEFAULT_TOTAL_WRITE_BYTES;
   const listLimit = options.maxListItems ?? DEFAULT_LIST_ITEMS;
   let writtenBytes = 0;
 
-  mkdirSync(rootDir, { recursive: true });
+  mkdirSync(readRootDir, { recursive: true });
+  mkdirSync(writeRootDir, { recursive: true });
 
   return {
     list(path = '.') {
-      const { root, target, relativePath } = resolveWorkspacePath(rootDir, path, { allowRoot: true });
+      const { root, target, relativePath } = resolveWorkspacePath(readRootDir, path, { allowRoot: true });
       assertNoSymlink(root, target);
       if (!existsSync(target)) throw workspaceError(`工作区路径不存在：${relativePath}`, 'SCRIPT_WORKSPACE_NOT_FOUND');
       const stat = lstatSync(target);
@@ -92,7 +95,10 @@ export function createScriptWorkspace(rootDir, options = {}) {
     },
 
     read(path, readOptions = {}) {
-      const { root, target, relativePath } = resolveWorkspacePath(rootDir, path);
+      const readable = resolveWorkspacePath(readRootDir, path);
+      const written = resolveWorkspacePath(writeRootDir, path);
+      const selected = existsSync(written.target) ? written : readable;
+      const { root, target, relativePath } = selected;
       assertNoSymlink(root, target);
       if (!existsSync(target)) throw workspaceError(`工作区文件不存在：${relativePath}`, 'SCRIPT_WORKSPACE_NOT_FOUND');
       const stat = lstatSync(target);
@@ -103,7 +109,7 @@ export function createScriptWorkspace(rootDir, options = {}) {
     },
 
     write(path, content) {
-      const { root, target, relativePath } = resolveWorkspacePath(rootDir, path);
+      const { root, target, relativePath } = resolveWorkspacePath(writeRootDir, path);
       assertNoSymlink(root, target, { includeTarget: false });
       if (existsSync(target) && lstatSync(target).isSymbolicLink()) {
         throw workspaceError('工作区不允许覆盖符号链接', 'SCRIPT_WORKSPACE_SYMLINK');
@@ -124,7 +130,7 @@ export function createScriptWorkspace(rootDir, options = {}) {
     },
 
     remove(path) {
-      const { root, target, relativePath } = resolveWorkspacePath(rootDir, path);
+      const { root, target, relativePath } = resolveWorkspacePath(writeRootDir, path);
       assertNoSymlink(root, target);
       if (!existsSync(target)) return false;
       const stat = lstatSync(target);
@@ -134,7 +140,15 @@ export function createScriptWorkspace(rootDir, options = {}) {
     },
 
     stats() {
-      return { writtenBytes, readLimit, fileWriteLimit, totalWriteLimit, listLimit };
+      return {
+        writtenBytes,
+        readLimit,
+        fileWriteLimit,
+        totalWriteLimit,
+        listLimit,
+        readRootDir: resolve(readRootDir),
+        writeRootDir: resolve(writeRootDir),
+      };
     },
   };
 }

@@ -42,6 +42,43 @@ const makeOrch = (runner) => {
 
 console.log('engine tests:');
 
+await test('运行生命周期事件携带工作流与画布归属', async () => {
+  const { orch, events } = makeOrch();
+  const run = await orch.run({
+    nodes: [{ id: 'in', type: 'input', data: { text: 'hello' } }],
+    edges: [],
+  }, {
+    runId: 'run_scoped', workflowId: 'wf_scoped', canvasId: 'cv_scoped', source: 'assistant',
+  });
+  assert.equal(run.workflowId, 'wf_scoped');
+  assert.equal(run.canvasId, 'cv_scoped');
+  assert.equal(run.source, 'assistant');
+  const started = events.find(([event]) => event === 'run-start')?.[1];
+  const ended = events.find(([event]) => event === 'run-end')?.[1];
+  assert.deepEqual({
+    runId: started.runId,
+    workflowId: started.workflowId,
+    canvasId: started.canvasId,
+    source: started.source,
+  }, {
+    runId: 'run_scoped', workflowId: 'wf_scoped', canvasId: 'cv_scoped', source: 'assistant',
+  });
+  assert.equal(ended.workflowId, 'wf_scoped');
+  assert.equal(ended.canvasId, 'cv_scoped');
+});
+
+await test('草稿运行事件显式携带 null workflowId', async () => {
+  const { orch, events } = makeOrch();
+  await orch.run({
+    nodes: [{ id: 'in', type: 'input', data: { text: 'hello' } }],
+    edges: [],
+  }, { runId: 'run_draft', canvasId: 'cv_draft', source: 'manual' });
+  const started = events.find(([event]) => event === 'run-start')?.[1];
+  assert.equal(Object.hasOwn(started, 'workflowId'), true);
+  assert.equal(started.workflowId, null);
+  assert.equal(started.canvasId, 'cv_draft');
+});
+
 await test('scoped execution context renders and persists runInputs only', async () => {
   const { orch } = makeOrch();
   const run = await orch.run({

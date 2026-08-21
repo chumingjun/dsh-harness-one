@@ -1,7 +1,7 @@
 #!/bin/sh
 # 打包 dsh-ccpg-* 插件为可分发 tarball（release 用，CI 与本地同源）。
 #
-# 产物：dsh-ccpg-plugins-<tag>.tar.gz，内容 = dsh-plugins/ 里七个插件 + setup/start/build/bootstrap 脚本，
+# 产物：dsh-ccpg-plugins-<tag>.tar.gz，内容 = dsh-plugins/ 里八个插件 + setup/start/build/bootstrap 脚本，
 # 且满足"拿到即装"（产物不入库，本脚本现场构建）：
 #   - 画布已构建：dsh-ccpg-web/web-dist/ 由第 1 步 build-web.sh 现场生成，装包机无需再跑构建
 #   - orchestrator 真依赖已装：ajv/cron-parser 在 dsh-ccpg-orchestrator/node_modules/（本地 setup.sh 直接
@@ -24,12 +24,13 @@ OUT="${PACK_DIR:-/tmp/dsh-ccpg-pack}"
 DIST_DIR="$REPO_ROOT/dist-release"
 PKG="dsh-ccpg-plugins-$TAG"
 TAR="$DIST_DIR/$PKG.tar.gz"
-PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-brand"
+PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-brand dsh-ccpg-llm-guard"
+# 聚合壳（bundle patch 挂载八插件 + better-sidebar，可选件 env 门控）；其 node_modules 是本地安装产物，不打包
+AGG="dsh-ccpg-one"
 
 # ---- 0. node（>=20）----
 NODE_BIN="${WF1_NODE:-}"
 [ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "console.log(Number(process.versions.node.split('.')[0])>=20?process.execPath:'')" 2>/dev/null || true)
-[ -z "$NODE_BIN" ] && [ -x /tmp/node-v22.20.0-darwin-arm64/bin/node ] && NODE_BIN=/tmp/node-v22.20.0-darwin-arm64/bin/node
 [ -z "$NODE_BIN" ] && { echo "✗ 需要 node>=20（或设 WF1_NODE 指向）"; exit 1; }
 echo "✓ node: $("$NODE_BIN" -v)"
 PATH=$(dirname "$NODE_BIN"):$PATH
@@ -41,7 +42,7 @@ for p in $PLUGINS; do
   "$NODE_BIN" -e "const p=require(process.argv[1]); if(p.name!==process.argv[2]) throw new Error('package name 应为 '+process.argv[2])" \
     "$HERE/$p/package.json" "$p"
 done
-echo "✓ 七个插件清单已校验"
+echo "✓ 八个插件清单已校验"
 
 # ---- 1. 构建画布（生成 dsh-ccpg-web/web-dist）----
 sh "$HERE/build-web.sh"
@@ -70,6 +71,8 @@ cd "$REPO_ROOT"
 
 rsync -a --delete \
   --exclude 'node_modules/@deepseek-ai' \
+  --exclude 'dsh-ccpg-one/node_modules' \
+  --exclude 'dsh-ccpg-one/pnpm-lock.yaml' \
   --exclude 'web-dist' \
   "$HERE/" "$OUT/dsh-plugins/"
 # web-dist 单独拷（构建产物，rsync 排除了但需要带）
@@ -90,10 +93,14 @@ done
 mkdir -p "$OUT/dsh-plugins/dsh-ccpg-orchestrator/data/runs"
 rmdir "$OUT/dsh-plugins/dsh-ccpg-orchestrator/data/runs" 2>/dev/null || true
 
-# 校验：web-dist、七插件目录与 document-preview 构建入口必须完整。
+# 校验：web-dist、八插件目录、bundle patch 与 document-preview 构建入口必须完整。
 [ -f "$OUT/dsh-plugins/dsh-ccpg-web/web-dist/index.html" ] || { echo "✗ web-dist/index.html 缺失（构建失败？）"; exit 1; }
-for p in $PLUGINS; do
+for p in $PLUGINS $AGG; do
   [ -f "$OUT/dsh-plugins/$p/package.json" ] || { echo "✗ 打包目录缺失: $p/package.json"; exit 1; }
+  # dsh.bundle.patch 声明与 patch 文件必须在场：setup.sh 的挂载全靠它
+  "$NODE_BIN" -e "const p=require(process.argv[1]+'/package.json'); if(!p.dsh?.bundle?.patch) throw new Error('缺 dsh.bundle.patch 声明')" \
+    "$OUT/dsh-plugins/$p" || { echo "✗ $p 缺 dsh.bundle.patch 声明"; exit 1; }
+  [ -f "$OUT/dsh-plugins/$p/cordis.patch.yml" ] || { echo "✗ $p/cordis.patch.yml 缺失"; exit 1; }
 done
 "$NODE_BIN" - "$OUT/dsh-plugins/dsh-ccpg-document-preview/package.json" <<'NODE'
 const fs = require('fs');
@@ -144,7 +151,7 @@ echo "✓ QuickJS WASM 归档 smoke 通过"
 # ---- 4. 打包 ----
 cd "$OUT"
 tar -czf "$TAR" dsh-plugins
-for p in $PLUGINS; do
+for p in $PLUGINS $AGG; do
   tar -tzf "$TAR" "dsh-plugins/$p/package.json" >/dev/null 2>&1 \
     || { echo "✗ tarball 缺失: $p/package.json"; exit 1; }
 done

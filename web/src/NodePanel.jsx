@@ -420,13 +420,12 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
             </button>
           </Section>
 
-          <Section title="JavaScript 代码" hint="入口函数 main(input, workspace)">
-            <Field label="代码" hint="按原文保存，不解析模板" wide>
-              <ScriptCodeEditor
-                value={d.code ?? 'function main(input, workspace) {\n  return input;\n}'}
-                onChange={(code) => set({ code })}
-              />
-            </Field>
+          <Section title="JavaScript 代码" hint="按原文保存，不解析模板">
+            <p className="sec-hint">入口函数 main(input, workspace)，return 值即节点输出；input 来自上方输入参数。</p>
+            <ScriptCodeEditor
+              value={d.code ?? 'function main(input, workspace) {\n  return input;\n}'}
+              onChange={(code) => set({ code })}
+            />
           </Section>
 
           <Section title="输出 Schema" hint="可选" defaultOpen={Boolean(d.outputSchema)}>

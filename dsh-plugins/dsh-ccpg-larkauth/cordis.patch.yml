@@ -1,0 +1,10 @@
+# dsh-ccpg-* 插件各自的 dsh.bundle.patch：每包一个 insert 行（本插件自己）。
+# 声明后 dsh plugin add 一步完成「安装 + 进 bundles 层 + 挂载」，无需手写 profile patch。
+# 与 better-sidebar 的 npm 分发同一机制；手写挂载行与本层并存会双挂载（duplicate route），
+# 从手写迁移到 bundle 渠道时必须先删 profile patch 里的 insert 行。
+#
+# 行内 config 缺省：canvasui/larkauth 等无必填项；orchestrator 的 staticDir 由
+# dsh-ccpg-web 托管静态资源，不在此处配置。
+- insert:
+    - id: dsh-ccpg-larkauth
+      name: 'dsh-ccpg-larkauth'

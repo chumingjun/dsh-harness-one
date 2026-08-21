@@ -1,0 +1,24 @@
+packages:
+  - .
+
+# SDK peer（@deepseek-ai/dsh-*）的 registry latest 停在 0.0.1-rc.1，0.1.x 只在 next tag：
+# pnpm 解析 peer 时按 latest 语义找不到 >=0.1.0 <0.2.0，直接 ERR_NO_MATCHING_VERSION。
+# 运行时这些包由 dsh 启动时的扁平兜底（~/.dsh/profiles/node_modules）提供，
+# 这里 override 只为让 install 通过——钉到与 dsh 0.1.1-rc.2 同版的 next 发布。
+overrides:
+  "@deepseek-ai/dsh-agent": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-agent-instructions": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-client-locale": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-client-runtime": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-client-ui-conversation": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-client-ui-primitives": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-client-ui-settings": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-client-ui-sidebar": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-client-ui-slots": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-host-webserver": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-invariants": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-llm": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-session": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-settings": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-subagent": "0.1.1-rc.2"
+  "@deepseek-ai/dsh-tools": "0.1.1-rc.2"

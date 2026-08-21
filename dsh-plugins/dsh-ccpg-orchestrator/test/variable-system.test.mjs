@@ -309,6 +309,15 @@ await test('完成运行不通过 SSE 全局快照恢复', () => {
   assert.ok(!sseBlock.includes('else if (runHistory[0])'));
 });
 
+await test('SSE 全局订阅恢复全部 live run 并携带归属', () => {
+  const source = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8');
+  const sseBlock = source.slice(source.indexOf("path: '/wf1/api/events'"), source.indexOf('// ---------------- helpers'));
+  assert.ok(sseBlock.includes(': [...orch.runs.values()]'));
+  assert.ok(sseBlock.includes('for (const live of liveRuns)'));
+  assert.ok(sseBlock.includes('workflowId: live.run.workflowId ?? null'));
+  assert.ok(sseBlock.includes('canvasId: live.run.canvasId ?? null'));
+});
+
 await test('SSE 摘要不包含 envelope value/schema 或 trace', () => {
   const outputSummary = summarizeStructuredOutputs({ n: { version: 1, type: 'json', value: { secret: 1 }, schema: { secret: true } } });
   assert.deepEqual(outputSummary.n, { hasStructured: true, outputType: 'json' });

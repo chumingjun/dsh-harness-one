@@ -93,7 +93,11 @@ __serialized;
 
 async function execute(message) {
   const deadline = Date.now() + message.timeoutMs;
-  responseFor.workspace = createScriptWorkspace(message.workspaceDir, message.workspaceLimits);
+  responseFor.workspace = createScriptWorkspace(message.workspaceDir, {
+    ...(message.workspaceLimits || {}),
+    readRootDir: message.readWorkspaceDir || message.workspaceDir,
+    writeRootDir: message.workspaceDir,
+  });
   const QuickJS = await getQuickJS();
   const runtime = QuickJS.newRuntime();
   runtime.setMemoryLimit(message.memoryLimitBytes || MEMORY_LIMIT_BYTES);

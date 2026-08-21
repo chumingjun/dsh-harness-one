@@ -24,11 +24,21 @@ window.__ModuleLoader__.load({
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let react = require("react");
 
-		var CANVAS_URL = "/wf1/";
-		var CHAT_TAB_TYPE = "ccpg:chat";
-		var CHAT_TAB_ORDER = 5; // better-sidebar + 菜单升序，内置最小 explorer=10 → 排第一
+			var CANVAS_URL = "/wf1/";
+			var WORKFLOW_COMMAND = "workflow";
+			var CHAT_TAB_TYPE = "ccpg:chat";
+			var CHAT_TAB_ORDER = 5; // better-sidebar + 菜单升序，内置最小 explorer=10 → 排第一
 
-		// better-sidebar 服务句柄：注册时存，供 WorkflowView 的 openTab 联动用
+			function currentDshSessionId(fallback) {
+				try {
+					var raw = window.localStorage.getItem("dsh.sessions.current");
+					var current = raw ? JSON.parse(raw) : null;
+					return current && current.sessionId || fallback;
+				} catch (e) { return fallback; }
+			}
+
+			// better-sidebar 服务句柄：注册时存，供 WorkflowView 的 openTab 联动用
+
 		//（conversation.view entry 的 owner props 拿不到 ctx，走模块级引用）。
 		var betterSidebarRef = { svc: null };
 
@@ -56,17 +66,115 @@ window.__ModuleLoader__.load({
 			if (document.getElementById("wf1-canvasui-style")) return;
 			var el = document.createElement("style");
 			el.id = "wf1-canvasui-style";
-			el.textContent = [
-					// 官方 viewArea 是 flex "1 0 auto"（shrink=0），普通流内 iframe 会把它撑高。
-					// root 正常占满 viewArea 并建立定位上下文，iframe absolute 锁在该内容区内。
-					".wf1-view-root{position:relative;display:block;flex:1 1 0;width:100%;height:100%;min-height:0;overflow:hidden;}",
-					".wf1-canvas-fill{position:absolute;inset:0;display:flex;}",
-					".wf1-canvas-fill iframe{width:100%;height:100%;border:0;display:block;flex:1;}",
-				].join("\n");
+				el.textContent = [
+						".wf1-open-btn{width:28px;height:28px;display:grid;flex:none;place-items:center;padding:0;border:0;border-radius:999px;background:var(--dsw-specific-selector);color:var(--dsw-alias-label-primary);cursor:pointer;transition:background-color 100ms ease,opacity 100ms ease;}",
+						".wf1-open-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-solid);}",
+						".wf1-open-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
+						".wf1-open-btn:disabled{opacity:.5;cursor:default;}",
+						".wf1-open-btn svg{width:15px;height:15px;display:block;}",
+						".wf1-open-btn[data-pending=true] svg{animation:wf1-open-pulse .8s ease-in-out infinite alternate;}",
+						"@keyframes wf1-open-pulse{from{opacity:.35}to{opacity:1}}",
+						// 官方 viewArea 是 flex "1 0 auto"（shrink=0），普通流内 iframe 会把它撑高。
+						// root 正常占满 viewArea 并建立定位上下文，iframe absolute 锁在该内容区内。
+						".wf1-view-root{position:relative;display:block;flex:1 1 0;width:100%;height:100%;min-height:0;overflow:hidden;}",
+						".wf1-canvas-fill{position:absolute;inset:0;display:flex;}",
+						".wf1-canvas-fill iframe{width:100%;height:100%;border:0;display:block;flex:1;}",
+					].join("\n");
 			document.head.appendChild(el);
 		}
 
-		// ---- 画布半：常驻 iframe（tab 切换不重载）----
+			function workflowCommandInputDefinition() {
+				return {
+					kind: "ccpg-workflow-open",
+					target: "chat",
+					match: function (event) {
+						return event.type === "command/run" && event.data.name === WORKFLOW_COMMAND
+							? { id: String(event.data.commandId), role: "start" }
+							: null;
+					},
+					start: function (_context, match) {
+						return match.event.type === "command/run" ? { seq: match.event.seq } : undefined;
+					},
+					update: function (context) { return context.state; },
+					buildViewNode: function (context) {
+						if (!context.state) return null;
+						return {
+							key: context.key,
+							kind: "ccpg-workflow-open",
+							id: context.id,
+							target: "chat",
+							anchorSeq: context.state.seq,
+							location: context.start && context.start.location || { kind: "unresolved" },
+							visibility: "visible",
+							data: {},
+						};
+					},
+				};
+			}
+
+			function workflowTab() {
+				return Array.prototype.slice.call(document.querySelectorAll('[role="tab"]')).find(function (node) {
+					return node.textContent && node.textContent.trim() === "工作流";
+				});
+			}
+
+			function selectWorkflowTab() {
+				var existing = workflowTab();
+				if (existing) { existing.click(); return; }
+				var tries = 0;
+				var timer = setInterval(function () {
+					tries += 1;
+					var tab = workflowTab();
+					if (tab) {
+						clearInterval(timer);
+						tab.click();
+					} else if (tries >= 20) clearInterval(timer);
+				}, 50);
+			}
+
+			function WorkflowCommandRow() {
+				return null;
+			}
+
+			function WorkflowOpenButton(props) {
+				var sessionId = props.sessionId;
+				var [pending, setPending] = react.useState(false);
+				var disabled = pending || !props.input || props.input.phase !== "plain";
+				var openWorkflow = async function () {
+					if (disabled || !sessionId) return;
+					if (workflowTab()) { selectWorkflowTab(); return; }
+					setPending(true);
+					try {
+						var binding = props.sessions.binding(sessionId);
+						var result = await binding.session.command("/" + WORKFLOW_COMMAND);
+						if (!result || result.ok !== false) selectWorkflowTab();
+					} finally {
+						setPending(false);
+					}
+				};
+				return react.createElement("button", {
+					type: "button",
+					className: "wf1-open-btn",
+					disabled: disabled,
+					title: pending ? "正在打开工作流" : "打开工作流",
+					"aria-label": pending ? "正在打开工作流" : "打开工作流",
+					"data-pending": pending ? "true" : "false",
+					onClick: openWorkflow,
+				},
+					react.createElement("svg", {
+						viewBox: "0 0 16 16", "aria-hidden": true,
+						fill: "none", stroke: "currentColor", "stroke-width": 1.45,
+						"stroke-linecap": "round", "stroke-linejoin": "round",
+					},
+						react.createElement("circle", { cx: 3.25, cy: 4, r: 1.35 }),
+						react.createElement("circle", { cx: 12.75, cy: 3.25, r: 1.35 }),
+						react.createElement("circle", { cx: 12.75, cy: 12.75, r: 1.35 }),
+						react.createElement("path", { d: "M4.6 4h2.15A2.25 2.25 0 0 1 9 6.25v4.25A2.25 2.25 0 0 0 11.25 12.75h.15M9 7V5.5a2.25 2.25 0 0 1 2.25-2.25h.15" }),
+					),
+				);
+			}
+
+			// ---- 画布半：常驻 iframe（tab 切换不重载）----
 		// 官方视图 tab 是 only 过滤渲染：非活动 entry 整体卸载，iframe 若挂在 React 树里
 		// 切 tab 即销毁重载（几秒）。解法：iframe 挂在模块级 detached 容器，entry mount 时
 		// appendChild 移入、卸载时移回 —— contentWindow 全程存活，切 tab 瞬时。
@@ -104,13 +212,22 @@ window.__ModuleLoader__.load({
 				};
 			}, []);
 
-			// sessionId 或画布 ready 任一就绪即（重）发绑定
+			// sessionId 或画布 ready 任一就绪即（重）发绑定。blank 会话首条消息后，
+			// dsh 会换成正式 sessionId，但 conversation.view 不一定重渲染；轮询只补发身份，iframe 不重载。
 			react.useEffect(function () {
-				var frame = frameRef.current;
-				if (!frame || !ready || !sessionId) return;
-				try {
-					frame.contentWindow.postMessage({ type: "wf1-session", sessionId: sessionId }, window.location.origin);
-				} catch (e) { /* 画布未就绪 */ }
+				var lastSent = null;
+				function sendSession() {
+					var frame = frameRef.current;
+					var current = currentDshSessionId(sessionId);
+					if (!frame || !ready || !current || current === lastSent) return;
+					try {
+						frame.contentWindow.postMessage({ type: "wf1-session", sessionId: current }, window.location.origin);
+						lastSent = current;
+					} catch (e) { /* 画布未就绪 */ }
+				}
+				sendSession();
+				var timer = window.setInterval(sendSession, 500);
+				return function () { window.clearInterval(timer); };
 			}, [sessionId, ready]);
 
 			react.useEffect(function () {
@@ -207,11 +324,35 @@ window.__ModuleLoader__.load({
 			} catch (e) { /* 状态异常不阻塞 */ }
 		}
 
-		function apply(ctx) {
-			ensureStyle();
+			function apply(ctx) {
+				ensureStyle();
+				ctx.conversationEvents.register(workflowCommandInputDefinition());
 
-			ctx.slots.inject("conversation.view", function () {
-				return ctx.slots.register({
+				ctx.slots.inject("conversation.input.left", function () {
+					return ctx.slots.register({
+						name: "conversation.input.left",
+						id: "ccpg-workflow-open",
+						order: 30,
+						inject: function () { return { sessions: ctx.sessions }; },
+					}, WorkflowOpenButton);
+				});
+
+				ctx.slots.inject("conversation.chat.node", function () {
+					return ctx.slots.register({
+						name: "conversation.chat.node",
+						key: "ccpg-workflow-open",
+					}, WorkflowCommandRow);
+				});
+
+				ctx.slots.inject("conversation.chat.commandview", function () {
+					return ctx.slots.register({
+						name: "conversation.chat.commandview",
+						key: WORKFLOW_COMMAND,
+					}, WorkflowCommandRow);
+				});
+
+				ctx.slots.inject("conversation.view", function () {
+					return ctx.slots.register({
 					name: "conversation.view",
 					id: "workflow",
 					order: 1,
@@ -257,9 +398,14 @@ window.__ModuleLoader__.load({
 			} catch (e) { /* 老运行时无 ctx.inject：跳过侧边栏注册，工作流 tab 不受影响 */ }
 		}
 
-		exports.apply = apply;
-		exports.name = "dsh-ccpg-canvasui/client";
-		exports.inject = ["slots"];
+			exports.apply = apply;
+			exports.name = "dsh-ccpg-canvasui/client";
+			exports.inject = ["slots", "sessions", "conversationEvents"];
+			exports.__test = {
+				workflowCommandInputDefinition: workflowCommandInputDefinition,
+				WorkflowCommandRow: WorkflowCommandRow,
+				currentDshSessionId: currentDshSessionId,
+			};
 		return exports;
 	},
 });

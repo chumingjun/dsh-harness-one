@@ -7,4 +7,15 @@ const API_BASE = resolveApiBase({
   pathname: window.location?.pathname || '/',
 });
 const API = `${API_BASE}/api`;
-export const apiUrl = (p) => API + p;
+let sessionId = null;
+
+export function setApiSessionId(value) {
+  sessionId = value ? String(value) : null;
+}
+
+export const apiUrl = (path) => {
+  const raw = `${API}${path}`;
+  if (!sessionId) return raw;
+  const separator = raw.includes('?') ? '&' : '?';
+  return `${raw}${separator}sessionId=${encodeURIComponent(sessionId)}`;
+};

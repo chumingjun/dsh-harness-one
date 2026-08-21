@@ -74,7 +74,7 @@ export class Orchestrator {
   }
 
   async run(graph, {
-    triggerInput = '', runId, workflowName, workflowId,
+    triggerInput = '', runId, workflowName, workflowId, canvasId, source, workspaceRoot,
     globalVariables = {}, workflowVariables = {}, runInputs = {},
   } = {}) {
     const id = runId || `run_${Date.now().toString(36)}_${++runSeq}`;
@@ -82,6 +82,7 @@ export class Orchestrator {
     const run = {
       runId: id, startedAt: new Date().toISOString(), status: 'running',
       triggerInput, runInputs: safeRunInputs, workflowName: workflowName || null, workflowId: workflowId || null,
+      canvasId: canvasId || null, source: source || null, workspaceRoot: workspaceRoot || null,
       schemaVersion: RUN_SCHEMA_VERSION,
       nodeStates: {}, outputs: {}, structuredOutputs: {}, nodeOrder: [],
       canceled: false,
@@ -130,19 +131,28 @@ export class Orchestrator {
       run.status = 'error';
       run.error = '图中存在环，无法执行';
       s.finished = true;
-      this.emit('run-error', { runId: id, error: run.error });
+      this.emit('run-error', {
+        runId: id, error: run.error,
+        workflowId: run.workflowId, canvasId: run.canvasId, source: run.source,
+      });
       this.runs.delete(id);
       return run;
     }
 
-    this.emit('run-start', { runId: id, nodeIds: graph.nodes.map((n) => n.id) });
+    this.emit('run-start', {
+      runId: id, nodeIds: graph.nodes.map((n) => n.id),
+      workflowId: run.workflowId, canvasId: run.canvasId, source: run.source,
+    });
     s._done = new Promise((resolve) => { s.resolve = resolve; });
     this._pump(s);
     await s._done;
     run.durationMs = Date.now() - s.startedAtMs;
     run.status = run.canceled ? 'canceled'
       : Object.values(run.nodeStates).some((st) => st.status === 'error') ? 'error' : 'success';
-    this.emit('run-end', { runId: id, status: run.status, durationMs: run.durationMs });
+    this.emit('run-end', {
+      runId: id, status: run.status, durationMs: run.durationMs,
+      workflowId: run.workflowId, canvasId: run.canvasId, source: run.source,
+    });
     return run;
   }
 
