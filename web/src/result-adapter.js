@@ -110,6 +110,15 @@ function normalizeLink(link) {
   } : null;
 }
 
+// 技术输出文件（调试/错误转储）不进「过程文件」展示列表；
+// 仍保留在 files/产物索引里——正文行内引用可点、ZIP 导出完整。
+const TECHNICAL_ARTIFACT_PATTERNS = [/^fetch_err[^/]*\.json$/i];
+
+export function isTechnicalArtifact(file) {
+  const name = String(file?.name || file?.path || '').split('/').filter(Boolean).at(-1) || '';
+  return TECHNICAL_ARTIFACT_PATTERNS.some((pattern) => pattern.test(name));
+}
+
 function normalizeResultRow(row, nodes, runDetail) {
   const value = asObject(row);
   const nodeId = first(value.nodeId, value.id);
@@ -124,6 +133,7 @@ function normalizeResultRow(row, nodes, runDetail) {
     structuredOutput: first(value.structuredOutput, runDetail?.structuredOutputs?.[nodeId], null),
     error: first(value.error, state.error, state.toleratedError),
     durationMs: first(value.durationMs, state.durationMs),
+    startedAt: first(value.startedAt, state.startedAt),
     legacyInferred: Boolean(value.legacyInferred),
   };
 }
@@ -150,6 +160,26 @@ function timelineText(row) {
   return `节点状态：${row.status}`;
 }
 
+// 面向普通用户的耗时文案：毫秒不直接暴露，统一换算成秒/分
+export function formatDuration(durationMs) {
+  if (durationMs == null || Number.isNaN(Number(durationMs))) return '';
+  const ms = Number(durationMs);
+  if (ms < 1000) return '不到 1 秒';
+  const seconds = ms / 1000;
+  if (seconds < 60) return seconds < 10 ? `${seconds.toFixed(1)} 秒` : `${Math.round(seconds)} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分钟`;
+}
+
+//  HH:MM:SS 时钟格式，用于「开始时间」
+export function formatClock(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('zh-CN', { hour12: false });
+}
+
 export function normalizeRunEvent(event, index = 0) {
   const value = asObject(event);
   const status = first(value.status, value.state, value.level === 'error' ? 'error' : undefined, 'info');
@@ -162,7 +192,7 @@ export function normalizeRunEvent(event, index = 0) {
     nodeId: first(value.nodeId, value.node?.id),
     nodeLabel: first(value.nodeLabel, value.label, value.node?.label),
     text: textOf(first(value.text, value.message, value.error, value.detail, value.summary)),
-    meta: first(value.meta, value.durationMs != null ? `${value.durationMs}ms` : undefined),
+    meta: first(value.meta, value.durationMs != null ? formatDuration(value.durationMs) : undefined),
     raw: event,
   };
 }
@@ -212,7 +242,8 @@ export function adaptRunResults(payload, context = {}) {
   const explicitProcessFiles = asArray(source.processArtifacts).map((file) => normalizeFile(file)).filter(Boolean);
   const outputIds = new Set(effectiveOutputs.map((row) => row.nodeId));
   const finalFiles = explicitFinalFiles.length ? explicitFinalFiles : allFiles.filter((file) => outputIds.has(file.nodeId));
-  const processFiles = explicitProcessFiles.length ? explicitProcessFiles : allFiles.filter((file) => !outputIds.has(file.nodeId));
+  const processFiles = (explicitProcessFiles.length ? explicitProcessFiles : allFiles.filter((file) => !outputIds.has(file.nodeId)))
+    .filter((file) => !isTechnicalArtifact(file));
 
   const selectedOutput = effectiveOutputs.find((row) => row.status === 'success' && row.output) || null;
   const coreText = textOf(first(source.coreText, source.primaryText, source.primaryResult?.output, selectedOutput?.output));
@@ -230,7 +261,13 @@ export function adaptRunResults(payload, context = {}) {
   const nodeTimeline = sourceTimeline.map((row) => {
     const live = liveByNode.get(row.nodeId);
     const merged = live ? { ...row, status: live.status || row.status, error: live.text || row.error } : row;
-    return { ...merged, id: `node:${row.nodeId}`, kind: 'node', text: timelineText(merged), meta: merged.durationMs != null ? `${merged.durationMs}ms` : undefined };
+    return {
+      ...merged,
+      id: `node:${row.nodeId}`,
+      kind: 'node',
+      text: timelineText(merged),
+      meta: merged.durationMs != null ? formatDuration(merged.durationMs) : undefined,
+    };
   });
   const runEvents = [
     ...asArray(context.events), ...asArray(source.events), ...asArray(source.process),

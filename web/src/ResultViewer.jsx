@@ -1,5 +1,5 @@
 import { Download, ExternalLink, Eye, FileText, Link2, PackageOpen } from 'lucide-react';
-import { ArtifactLinks, ArtifactPreviewButton } from './ArtifactPreview.jsx';
+import { ArtifactLinks, ArtifactNameLink, ArtifactPreviewButton } from './ArtifactPreview.jsx';
 import MarkdownDocument from './MarkdownDocument.jsx';
 
 function LegacyArtifacts({ files }) {
@@ -28,7 +28,7 @@ function FileList({ files }) {
         const artifact = { ...file, downloadUrl: file.downloadUrl || file.url };
         return (
           <div className="result-file" key={`${file.nodeId || file.nodeLabel || ''}:${file.path}`}>
-            <span className="result-file-name">{file.name}</span>
+            <ArtifactNameLink artifact={artifact} className="result-file-name" />
             {file.nodeLabel && <span className="result-file-source">{file.nodeLabel}</span>}
             <ArtifactPreviewButton artifact={artifact} className="result-file-action">
               <Eye size={14} aria-hidden="true" />
@@ -67,6 +67,7 @@ export function ResultViewer({
   coreText = '',
   files = [],
   links = [],
+  artifacts = files,
   emptyText = '本次运行没有生成最终成果。',
   legacyInferred = false,
 }) {
@@ -80,7 +81,7 @@ export function ResultViewer({
         </div>
         {coreText ? (
           <article className="result-markdown markdown-preview">
-            <MarkdownDocument content={coreText} />
+            <MarkdownDocument content={coreText} files={artifacts} />
           </article>
         ) : <p className="result-empty result-final-empty">{emptyText}</p>}
       </section>
@@ -110,7 +111,7 @@ export function ResultViewer({
   );
 }
 
-export function ProcessArtifacts({ results = [], files = [] }) {
+export function ProcessArtifacts({ results = [], files = [], artifacts = files }) {
   const textResults = results.filter((row) => row.output);
   if (!textResults.length && !files.length) return null;
   return (
@@ -124,7 +125,7 @@ export function ProcessArtifacts({ results = [], files = [] }) {
           <details className="result-process-output" key={row.nodeId}>
             <summary>{row.nodeLabel}</summary>
             <article className="result-markdown markdown-preview">
-              <MarkdownDocument content={row.output} />
+              <MarkdownDocument content={row.output} files={artifacts} />
             </article>
           </details>
         ))}

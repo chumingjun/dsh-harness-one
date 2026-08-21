@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { artifactPreviewKind } from './artifact-preview.js';
-import { adaptRunResults, getRunId, normalizeRunEvent } from './result-adapter.js';
+import { adaptRunResults, formatClock, formatDuration, getRunId, isTechnicalArtifact, normalizeRunEvent } from './result-adapter.js';
 import { deriveRunViewState, getRunStatusMeta } from './run-view-state.js';
 
 const runDetail = {
@@ -24,9 +24,9 @@ const runDetail = {
     output: '# 最终报告\n\n参见 https://example.com/report',
   },
   nodeStates: {
-    input: { status: 'success', durationMs: 10 },
-    agent: { status: 'success', durationMs: 20, artifacts: ['report.md'] },
-    output: { status: 'success', durationMs: 2 },
+    input: { status: 'success', durationMs: 10, startedAt: '2026-08-21T06:00:00.000Z' },
+    agent: { status: 'success', durationMs: 26817, startedAt: '2026-08-21T06:00:01.000Z', artifacts: ['report.md'] },
+    output: { status: 'success', durationMs: 2, startedAt: '2026-08-21T06:00:28.000Z' },
   },
 };
 
@@ -43,6 +43,23 @@ assert.equal(fallback.finalFiles.length, 0);
 assert.equal(fallback.processFiles.length, 1);
 assert.deepEqual(fallback.links, [{ url: 'https://example.com/report', label: 'https://example.com/report' }]);
 assert.deepEqual(fallback.nodeTimeline.map((row) => row.nodeId), ['input', 'agent', 'output']);
+// 过程 tab：步骤卡片需要原始 durationMs + startedAt，meta 统一为秒级文案
+assert.equal(fallback.nodeTimeline[0].durationMs, 10);
+assert.equal(fallback.nodeTimeline[0].startedAt, '2026-08-21T06:00:00.000Z');
+assert.equal(fallback.nodeTimeline[0].meta, '不到 1 秒');
+assert.equal(fallback.nodeTimeline[1].meta, '27 秒');
+
+assert.equal(formatDuration(undefined), '');
+assert.equal(formatDuration(0), '不到 1 秒');
+assert.equal(formatDuration(999), '不到 1 秒');
+assert.equal(formatDuration(1500), '1.5 秒');
+assert.equal(formatDuration(26817), '27 秒');
+assert.equal(formatDuration(57722), '58 秒');
+assert.equal(formatDuration(60000), '1 分钟');
+assert.equal(formatDuration(92000), '1 分 32 秒');
+assert.equal(formatClock('2026-08-21T06:00:00.000Z').length > 0, true);
+assert.equal(formatClock('not-a-date'), '');
+assert.equal(formatClock(undefined), '');
 assert.equal(fallback.processResults.some((row) => row.nodeId === 'note'), false);
 assert.equal(fallback.issues.length, 0);
 assert.equal(fallback.input, '原始输入');
@@ -138,5 +155,23 @@ assert.deepEqual(state.counts, { result: 2, process: 3, issues: 0 });
 assert.equal(state.canExport, true);
 assert.equal(state.isEmpty, false);
 assert.deepEqual(getRunStatusMeta('mystery'), { label: 'mystery', tone: 'neutral' });
+
+// fetch_err.json 这类技术转储文件不进「过程文件」列表，但保留在 files 索引（正文行内引用仍可点）
+const withTechnical = adaptRunResults({
+  runId: 'run-technical',
+  status: 'success',
+  outputResults: [{ nodeId: 'output', nodeLabel: '最终交付', nodeType: 'output', status: 'success', output: 'done' }],
+  artifacts: [
+    { id: 'a1', name: 'report.md', relativePath: 'report.md', downloadUrl: '/r', nodeId: 'output', nodeLabel: '最终交付' },
+    { id: 'a2', name: 'fetch_err.json', relativePath: 'fetch_err.json', downloadUrl: '/e1', nodeId: 'agent', nodeLabel: '抓取' },
+    { id: 'a3', name: 'fetch_err2.json', relativePath: 'fetch_err2.json', downloadUrl: '/e2', nodeId: 'agent', nodeLabel: '抓取' },
+    { id: 'a4', name: 'notes.md', relativePath: 'notes.md', downloadUrl: '/n', nodeId: 'agent', nodeLabel: '抓取' },
+  ],
+});
+assert.deepEqual(withTechnical.processFiles.map((f) => f.name), ['notes.md']);
+assert.equal(withTechnical.files.length, 4);
+assert.equal(isTechnicalArtifact({ name: 'fetch_err.json' }), true);
+assert.equal(isTechnicalArtifact({ name: 'FETCH_ERR2.JSON' }), true);
+assert.equal(isTechnicalArtifact({ name: 'notes.md' }), false);
 
 console.log('result adapter frontend tests: all pass');

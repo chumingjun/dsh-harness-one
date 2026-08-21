@@ -38,6 +38,39 @@ export function ArtifactPreviewButton({ artifact, className = 'artifact-action',
   return <DocumentPreviewButton document={normalized} className={className} title={`预览 ${normalized.name}`}>{children}</DocumentPreviewButton>;
 }
 
+/** 文件名本体可点击：可预览→开预览弹窗；不可预览→退化为下载链接；无地址→纯文本 */
+export function ArtifactNameLink({ artifact, className = 'artifact-name', children }) {
+  const normalized = normalizeArtifact(artifact);
+  const label = children ?? normalized.name;
+  if (normalized.previewUrl && documentPreviewKind(normalized.name, normalized.mimeType)) {
+    return (
+      <DocumentPreviewButton document={normalized} className={`${className} ${className}-link`} title={`预览 ${normalized.name}`}>
+        {label}
+      </DocumentPreviewButton>
+    );
+  }
+  if (normalized.downloadUrl) {
+    return (
+      <a className={`${className} ${className}-link`} href={normalized.downloadUrl} download title={`下载 ${normalized.name}`}>
+        {label}
+      </a>
+    );
+  }
+  return <span className={className} title={normalized.name}>{label}</span>;
+}
+
+/** 按文件名在产物清单里反查可预览 artifact（正文行内引用点击预览用） */
+export function findArtifactByName(files = [], name) {
+  const target = String(name || '').trim();
+  if (!target) return null;
+  const hit = files.find((f) => f && (f.name === target
+    || String(f.path || '').split('/').filter(Boolean).at(-1) === target));
+  if (!hit) return null;
+  if (hit.previewUrl || hit.url || hit.downloadUrl) return normalizeArtifact(hit);
+  if (hit.nodeLabel && hit.path) return legacyArtifact(hit.nodeLabel, hit.path);
+  return null;
+}
+
 export function ArtifactLinks({ nodeLabel, artifacts = [] }) {
   const files = artifacts.filter((file) => file && !file.endsWith('/'));
   const dirs = artifacts.filter((file) => file?.endsWith('/'));
@@ -48,7 +81,7 @@ export function ArtifactLinks({ nodeLabel, artifacts = [] }) {
         const artifact = legacyArtifact(nodeLabel, file);
         return (
           <div key={file} className="artifact-row">
-            <span className="artifact-name" title={file}>{file}</span>
+            <ArtifactNameLink artifact={artifact} className="artifact-name" />
             <span className="artifact-actions">
               <ArtifactPreviewButton artifact={artifact}>
                 <Eye size={14} aria-hidden="true" />

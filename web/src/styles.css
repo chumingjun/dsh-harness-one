@@ -28,7 +28,6 @@
   --type-input: #3B82F6;
   --type-agent: #8B5CF6;
   --type-condition: #F59E0B;
-  --type-approval: #EC4899;
   --type-http: #06B6D4;
   --type-script: #F97316;
   --type-output: #10B981;
@@ -283,7 +282,6 @@ body {
 .type-agent { background: var(--type-agent); }
 .type-output { background: var(--type-output); }
 .type-condition { background: var(--type-condition); color: #422006; }
-.type-approval { background: var(--type-approval); }
 .type-http { background: var(--type-http); color: #062a30; }
 .type-script { background: var(--type-script); color: #2B1104; }
 .type-note { background: var(--type-note); color: #F5F5F4; }
@@ -527,7 +525,6 @@ body {
 }
 .badge-plan { background: rgba(236,72,153,.12); color: #F9A8D4; border-color: rgba(236,72,153,.25); }
 .badge-cond { background: rgba(245,158,11,.1); color: #FBBF24; border-color: rgba(245,158,11,.25); }
-.badge-approval { background: rgba(236,72,153,.12); color: #F9A8D4; border-color: rgba(236,72,153,.25); }
 
 /* 连接桩 */
 .flow-handle {
@@ -651,6 +648,14 @@ body {
   border-radius: 8px; font-family: var(--font-mono);
 }
 .artifact-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 产物文件名本体可点击：去按钮外壳 */
+.dsh-doc-preview-button.artifact-name-link, a.artifact-name-link {
+  display: block; flex: 1; min-height: 0; padding: 0; border: 0; border-radius: 0;
+  background: none; color: inherit; font-family: inherit; font-size: inherit;
+  text-align: left; text-decoration: none; cursor: pointer;
+  transition: color var(--dur) var(--ease);
+}
+.dsh-doc-preview-button.artifact-name-link:hover, a.artifact-name-link:hover { color: var(--accent); text-decoration: underline; }
 .artifact-actions { display: flex; align-items: center; flex: none; gap: 4px; }
 .artifact-action {
   display: inline-flex; align-items: center; justify-content: center;
@@ -670,7 +675,7 @@ body {
 .var-buttons { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .var-buttons .btn { font-family: var(--font-mono); font-size: 11px; padding: 3px 8px; }
 
-/* ============ lint 条 / 审批条 ============ */
+/* ============ lint 条 ============ */
 .lint-bar {
   position: absolute; left: 12px; bottom: 12px; z-index: 6;
   background: var(--bg-panel); border: 1px solid var(--border-strong);
@@ -681,29 +686,6 @@ body {
 }
 .lint-error { color: #F87171; }
 .lint-warn { color: #FBBF24; }
-
-.approval-bar {
-  position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 20;
-  display: flex; flex-direction: column; gap: 8px; max-width: min(680px, 90%);
-}
-.approval-card {
-  display: flex; align-items: flex-start; gap: 12px;
-  background: var(--bg-panel);
-  border: 1px solid var(--type-approval);
-  border-radius: var(--radius-lg); padding: 10px 14px;
-  box-shadow: 0 0 24px rgba(236,72,153,.2);
-}
-.approval-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
-.approval-main strong { color: #F9A8D4; }
-.approval-content pre {
-  margin: 6px 0 0; max-height: 140px; overflow: auto;
-  background: var(--bg); border-radius: 8px; padding: 8px;
-  font-size: 12px; white-space: pre-wrap; word-break: break-word;
-}
-.approval-name, .approval-comment { width: 100%; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-raised); color: var(--fg); font-size: 12px; margin-top: 8px; }
-.approval-me { flex-shrink: 0; display: flex; align-items: center; }
-.approval-name { width: 140px; margin-top: 0; }
-.approval-actions { display: flex; gap: 8px; flex-shrink: 0; }
 
 /* ============ Plan 过程 ============ */
 .plan-trace {
@@ -834,6 +816,13 @@ body {
   background: var(--bg-raised);
 }
 .markdown-preview pre code { padding: 0; border: 0; background: transparent; color: var(--fg); }
+/* 正文行内产物文件名：可点击预览（去按钮壳，保留 code 样式） */
+.dsh-doc-preview-button.md-file-link {
+  display: inline; min-height: 0; padding: 0; border: 0; border-radius: 0;
+  background: none; font: inherit; cursor: pointer; vertical-align: baseline;
+}
+.dsh-doc-preview-button.md-file-link code { transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease); }
+.dsh-doc-preview-button.md-file-link:hover code { color: var(--accent); border-color: var(--accent); text-decoration: underline; }
 .markdown-preview table { width: 100%; margin: 1em 0; border-collapse: collapse; font-size: 13px; }
 .markdown-preview th,
 .markdown-preview td { padding: 8px 10px; border: 1px solid var(--border-strong); text-align: left; vertical-align: top; }
@@ -1260,7 +1249,7 @@ body {
 }
 
 /* ============ 试运行弹窗 ============ */
-.test-inputs, .test-approval, .test-progress, .test-result, .test-history { margin-top: 14px; }
+.test-inputs, .test-progress, .test-result, .test-history { margin-top: 14px; }
 .test-sec-title {
   font-size: 12px; font-weight: 700; color: var(--fg-muted);
   text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px;
