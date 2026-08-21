@@ -21,6 +21,7 @@ run_suite() { # run_suite <目录> <glob>
 
 run_suite web/src '*.test.mjs'
 run_suite dsh-plugins/dsh-ccpg-orchestrator/test '*.test.mjs'
+run_suite dsh-plugins/dsh-ccpg-llm-guard/test '*.test.mjs'
 run_suite dsh-plugins/shared '*.test.mjs'
 
 # document-preview 用 node --test runner
