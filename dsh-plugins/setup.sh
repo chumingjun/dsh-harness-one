@@ -211,7 +211,7 @@ else
 fi
 # 已登录过飞书则把默认身份固定为 user（插件启动时也会执行，此处幂等）
 [ -x "$LARK_BIN" ] && "$LARK_BIN" config default-as user >/dev/null 2>&1 || true
-# feishu-cli 技能种子由 larkauth 插件启动时自动写入 ~/.dsh/skills 与 ~/.dsh/workflow-one-skills
+# feishu-cli 技能种子由 larkauth 插件启动时自动写入 ~/.dsh/skills（dsh 原生技能根）
 
 echo ""
 echo "安装完成。启动："

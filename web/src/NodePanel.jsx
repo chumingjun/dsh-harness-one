@@ -26,7 +26,6 @@ const TOOL_LABELS = {
   web_fetch: '抓网页',
   feishu_doc_read: '读飞书文档',
   feishu_doc_write: '写飞书文档',
-  load_skill: '加载技能',
 };
 
 const TYPE_TEXT = { input: '输入', agent: '智能体', output: '输出', condition: '条件', approval: '审批', http: 'HTTP', script: '脚本', note: '注释' };
@@ -522,7 +521,7 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
           </Section>
 
           {skills.length > 0 && (
-            <Section title="技能" hint="目录进提示词，按需加载" count={selectedSkills.length || undefined} defaultOpen={false}>
+            <Section title="技能" hint="dsh 技能目录，勾选后定向提示" count={selectedSkills.length || undefined} defaultOpen={false}>
               <div className="tool-chips">
                 {skills.map((sk) => {
                   const on = selectedSkills.includes(sk.id) || selectedSkills.includes(sk.name);
@@ -531,7 +530,7 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
                       onClick={() => {
                         const next = on
                           ? selectedSkills.filter((x) => x !== sk.id && x !== sk.name)
-                          : [...selectedSkills, sk.id];
+                          : [...selectedSkills, sk.name];
                         set({ skills: next });
                       }}>
                       {sk.name}
@@ -539,7 +538,7 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
                   );
                 })}
               </div>
-              {selectedSkills.length === 0 && <p className="sec-hint">未选技能：不注入技能目录</p>}
+              {selectedSkills.length === 0 && <p className="sec-hint">未选技能：按会话默认技能目录执行</p>}
             </Section>
           )}
 
