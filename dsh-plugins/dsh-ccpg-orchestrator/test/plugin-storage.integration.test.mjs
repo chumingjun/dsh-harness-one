@@ -55,6 +55,12 @@ const seedLegacy = () => {
       status: 'success', triggerInput: '', outputs: {}, structuredOutputs: {}, nodeStates: {}, nodeOrder: [], schemaVersion: 3,
     }));
   }
+  // graph.json：迁移只在 legacy 存在时复制；没有它 state/graph.json 不会生成
+  //（GET /graph 会返回 defaultGraph 但不落盘），断言读文件必 ENOENT。
+  const graphFile = join(legacyDataDir, 'graph.json');
+  if (!existsSync(graphFile)) {
+    writeFileSync(graphFile, JSON.stringify({ nodes: [], edges: [] }));
+  }
 };
 seedLegacy();
 try {
