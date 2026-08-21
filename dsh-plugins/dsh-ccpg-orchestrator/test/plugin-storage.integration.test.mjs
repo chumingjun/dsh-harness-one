@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 import { apply } from '../lib/index.js';
 
 function responseCapture() {
@@ -32,44 +31,48 @@ function request(method, url, body) {
   return req;
 }
 
+const withSession = (url, sessionId) => `${url}${url.includes('?') ? '&' : '?'}sessionId=${sessionId}`;
 const dshHome = mkdtempSync(join(tmpdir(), 'wf1-plugin-home-'));
+const workspacesRoot = mkdtempSync(join(tmpdir(), 'wf1-workspaces-'));
+const workspaceA = join(workspacesRoot, 'workspace-a');
+const workspaceB = join(workspacesRoot, 'workspace-b');
+mkdirSync(workspaceA, { recursive: true });
+mkdirSync(workspaceB, { recursive: true });
 const original = process.env.DSH_HOME;
 process.env.DSH_HOME = dshHome;
-// legacy 数据是 gitignore 的本机运行时目录：本地碰巧有历史数据测试才过，
-// CI 干净检出是空的。测试自播种最小 legacy 数据，保证任何环境可复现。
-const legacyDataDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
+
+const legacyDataDir = join(dshHome, 'plugin-data', 'dsh-ccpg-orchestrator');
 const seedLegacy = () => {
   mkdirSync(join(legacyDataDir, 'workflows'), { recursive: true });
   mkdirSync(join(legacyDataDir, 'runs'), { recursive: true });
-  const workflowFile = join(legacyDataDir, 'workflows', 'wf_it_legacy.json');
-  const runFile = join(legacyDataDir, 'runs', 'run_it_legacy.json');
-  if (!existsSync(workflowFile)) {
-    writeFileSync(workflowFile, JSON.stringify({
-      id: 'wf_it_legacy', name: 'IT 遗留工作流', createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
-      graph: { nodes: [], edges: [] },
-    }));
-  }
-  if (!existsSync(runFile)) {
-    writeFileSync(runFile, JSON.stringify({
-      runId: 'run_it_legacy', startedAt: '2026-08-01T00:00:00.000Z', finishedAt: '2026-08-01T00:00:01.000Z',
-      status: 'success', triggerInput: '', outputs: {}, structuredOutputs: {}, nodeStates: {}, nodeOrder: [], schemaVersion: 3,
-    }));
-  }
-  // graph.json：迁移只在 legacy 存在时复制；没有它 state/graph.json 不会生成
-  //（GET /graph 会返回 defaultGraph 但不落盘），断言读文件必 ENOENT。
-  const graphFile = join(legacyDataDir, 'graph.json');
-  if (!existsSync(graphFile)) {
-    writeFileSync(graphFile, JSON.stringify({ nodes: [], edges: [] }));
-  }
+  mkdirSync(join(legacyDataDir, 'state'), { recursive: true });
+  writeFileSync(join(legacyDataDir, 'workflows', 'wf_it_legacy.json'), JSON.stringify({
+    id: 'wf_it_legacy', name: 'IT 遗留工作流', createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+    graph: { nodes: [], edges: [] },
+  }));
+  writeFileSync(join(legacyDataDir, 'runs', 'run_it_legacy.json'), JSON.stringify({
+    runId: 'run_it_legacy', startedAt: '2026-08-01T00:00:00.000Z', finishedAt: '2026-08-01T00:00:01.000Z',
+    status: 'success', triggerInput: '', outputs: {}, structuredOutputs: {}, nodeStates: {}, nodeOrder: [], schemaVersion: 3,
+  }));
+  writeFileSync(join(legacyDataDir, 'state', 'graph.json'), JSON.stringify({ nodes: [], edges: [] }));
 };
 seedLegacy();
+
 try {
   const routes = [];
-  const sessions = { get: () => undefined, flush: async () => {} };
+  const sessionMap = new Map([
+    ['session-a', { header: { cwd: workspaceA } }],
+    ['session-b', { header: { cwd: workspaceB } }],
+  ]);
+  const sessions = { get: (id) => sessionMap.get(String(id)), flush: async () => {} };
   const ctx = {
     webServer: { register(route) { routes.push(route); } },
     tools: { register() {}, schemas() { return []; } },
-    get(name) { if (name === 'sessions') return sessions; return null; },
+    get(name) {
+      if (name === 'sessions') return sessions;
+      if (name === 'workspaceRegistry') return { list: () => [{ path: workspaceA }, { path: workspaceB }] };
+      return null;
+    },
     skills: { async list() { return []; } },
     llm: { listProviders() { return []; }, async listModels() { return []; } },
     agentPresets: { async mount() {} },
@@ -77,37 +80,34 @@ try {
   };
   apply(ctx, {});
   const route = (path) => routes.find((entry) => entry.kind === 'exact' && entry.path === path)?.handler;
-  assert.ok(route('/wf1/api/graph'));
-  assert.ok(route('/wf1/api/run-results'));
 
-  const graphRes = responseCapture();
-  await route('/wf1/api/graph')(request('GET', '/wf1/api/graph'), graphRes);
-  assert.equal(graphRes.status, 200);
-  assert.ok(Array.isArray(graphRes.json().nodes));
+  const graphA = responseCapture();
+  await route('/wf1/api/graph')(request('GET', withSession('/wf1/api/graph', 'session-a')), graphA);
+  assert.equal(graphA.status, 200);
+  assert.ok(Array.isArray(graphA.json().nodes));
+  assert.equal(existsSync(join(workspaceA, '.workflow-one', 'state', 'legacy-import.json')), true);
+  assert.equal(existsSync(join(workspaceB, '.workflow-one')), false);
 
-  const workflowsRes = responseCapture();
-  await route('/wf1/api/workflows')(request('GET', '/wf1/api/workflows'), workflowsRes);
-  assert.equal(workflowsRes.status, 200);
-  assert.ok(workflowsRes.json().workflows.length > 0, 'legacy workflows should remain visible');
+  const workflowsA = responseCapture();
+  await route('/wf1/api/workflows')(request('GET', withSession('/wf1/api/workflows', 'session-a')), workflowsA);
+  assert.equal(workflowsA.status, 200);
+  assert.ok(workflowsA.json().workflows.some((row) => row.id === 'wf_it_legacy'));
 
-  const runsRes = responseCapture();
-  await route('/wf1/api/runs')(request('GET', '/wf1/api/runs'), runsRes);
-  assert.equal(runsRes.status, 200);
-  const latest = runsRes.json().runs[0];
-  assert.ok(latest?.runId, 'legacy runs should remain visible');
+  const workflowsB = responseCapture();
+  await route('/wf1/api/workflows')(request('GET', withSession('/wf1/api/workflows', 'session-b')), workflowsB);
+  assert.equal(workflowsB.status, 200);
+  assert.equal(workflowsB.json().workflows.some((row) => row.id === 'wf_it_legacy'), false);
 
-  const resultsRes = responseCapture();
-  await route('/wf1/api/run-results')(request('GET', `/wf1/api/run-results?id=${encodeURIComponent(latest.runId)}`), resultsRes);
-  assert.equal(resultsRes.status, 200);
-  assert.equal(resultsRes.json().runId, latest.runId);
-
-  const root = join(dshHome, 'plugin-data', 'dsh-ccpg-orchestrator');
-  assert.equal(existsSync(join(root, 'state')), true);
-  assert.equal(existsSync(join(root, 'runs')), true);
-  assert.equal(readFileSync(join(root, 'state', 'graph.json'), 'utf8').length > 0, true);
+  const createA = responseCapture();
+  await route('/wf1/api/workflows')(request('POST', withSession('/wf1/api/workflows', 'session-a'), {
+    id: 'wf_only_a', name: '仅 A', graph: { nodes: [], edges: [] },
+  }), createA);
+  assert.equal(createA.status, 200);
+  assert.equal(existsSync(join(workspaceA, '.workflow-one', 'workflows', 'wf_only_a.json')), true);
+  assert.equal(existsSync(join(workspaceB, '.workflow-one', 'workflows', 'wf_only_a.json')), false);
 
   const runRes = responseCapture();
-  await route('/wf1/api/run')(request('POST', '/wf1/api/run', {
+  await route('/wf1/api/run')(request('POST', withSession('/wf1/api/run', 'session-b'), {
     graph: {
       nodes: [{ id: 'input_one', type: 'input', position: { x: 0, y: 0 }, data: { label: '测试输入', text: 'hello' } }],
       edges: [],
@@ -116,20 +116,26 @@ try {
   }), runRes);
   assert.equal(runRes.status, 200);
   const newRunId = runRes.json().runId;
-  assert.ok(newRunId);
   let storedRun;
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const files = readdirSync(join(root, 'runs')).filter((file) => file.endsWith('.json'));
-    storedRun = files.map((file) => JSON.parse(readFileSync(join(root, 'runs', file), 'utf8'))).find((run) => run.runId === newRunId);
+  const runsDirB = join(workspaceB, '.workflow-one', 'runs');
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const files = existsSync(runsDirB) ? readdirSync(runsDirB).filter((file) => file.endsWith('.json')) : [];
+    storedRun = files.map((file) => JSON.parse(readFileSync(join(runsDirB, file), 'utf8'))).find((run) => run.runId === newRunId);
     if (storedRun) break;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   assert.equal(storedRun?.status, 'success');
-  assert.equal(storedRun?.workflowId, null);
-  assert.equal(existsSync(join(root, 'runtime')), true);
+  assert.equal(storedRun?.workspaceRoot, undefined);
+  assert.equal(existsSync(join(workspaceA, '.workflow-one', 'runs', `${newRunId}.json`)), false);
+  assert.equal(existsSync(join(dshHome, 'plugin-data', 'dsh-ccpg-orchestrator', 'runs', `${newRunId}.json`)), false);
+
+  const missingSession = responseCapture();
+  await route('/wf1/api/graph')(request('GET', '/wf1/api/graph'), missingSession);
+  assert.equal(missingSession.status, 409);
   console.log('plugin storage integration tests: ALL PASS');
 } finally {
   if (original === undefined) delete process.env.DSH_HOME;
   else process.env.DSH_HOME = original;
   rmSync(dshHome, { recursive: true, force: true });
+  rmSync(workspacesRoot, { recursive: true, force: true });
 }

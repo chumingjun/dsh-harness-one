@@ -14,8 +14,9 @@
 // HTTP 全部挂 ctx.webServer（/wf1 前缀，避开 dsh 自己的 /api）。
 
 import { randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, copyFileSync, unlinkSync, renameSync, realpathSync, rmSync } from 'node:fs';
-import { join, dirname, extname } from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, copyFileSync, cpSync, unlinkSync, renameSync, realpathSync, rmSync } from 'node:fs';
+import { join, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import z from '@deepseek-ai/schemastery';
@@ -86,32 +87,114 @@ export const Config = z.object({
   staticDir: z.string().default(''),
 });
 
+const workspaceContext = new AsyncLocalStorage();
+
 export function apply(ctx, config) {
-  const STORAGE = createStoragePaths({ legacyRoot: LEGACY_DATA_DIR });
-  const DATA_DIR = STORAGE.root;
-  const STATE_DIR = STORAGE.state;
-  const GRAPH_FILE = join(STATE_DIR, 'graph.json');
-  const LEGACY_GRAPH_FILE = join(STORAGE.legacy.state, 'graph.json');
-  const RUNS_DIR = STORAGE.runs;
-  const LEGACY_RUNS_DIR = STORAGE.legacy.runs;
-  const TRIGGERS_FILE = join(STATE_DIR, 'triggers.json');
-  const LEGACY_TRIGGERS_FILE = join(STORAGE.legacy.state, 'triggers.json');
-  const GLOBAL_VARIABLES_FILE = join(STATE_DIR, 'global-variables.json');
-  const LEGACY_GLOBAL_VARIABLES_FILE = join(STORAGE.legacy.state, 'global-variables.json');
-  const WORKFLOW_TOMBSTONE_DIR = join(STATE_DIR, 'tombstones', 'workflows');
   ctxRef = ctx; // replayTrace 需要在路由 handler 里拿到 ctx.sessionPersistence
-  for (const dir of [DATA_DIR, STATE_DIR, STORAGE.workflows, STORAGE.attachments, RUNS_DIR, STORAGE.runtime, WORKFLOW_TOMBSTONE_DIR]) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
-  for (const [target, legacy] of [
-    [GRAPH_FILE, LEGACY_GRAPH_FILE],
-    [TRIGGERS_FILE, LEGACY_TRIGGERS_FILE],
-    [GLOBAL_VARIABLES_FILE, LEGACY_GLOBAL_VARIABLES_FILE],
-  ]) {
-    if (!existsSync(target) && existsSync(legacy)) {
-      try { copyFileSync(legacy, target); } catch (error) { ctx.logger?.warn?.(`dsh-ccpg 兼容数据复制失败：${error.message}`); }
+  const stores = new Map();
+  const publicHooks = new Map();
+  let legacyClaimedWorkspace = null;
+
+  const canonicalWorkspace = (cwd) => {
+    if (!cwd || !isAbsolute(cwd)) throw new Error('当前会话没有可用的工作目录');
+    const root = realpathSync(resolve(cwd));
+    if (!statSync(root).isDirectory()) throw new Error('当前会话工作目录不存在');
+    return root;
+  };
+  try {
+    const registry = ctx.workspaceRegistry || ctx.get?.('workspaceRegistry');
+    for (const workspace of registry?.list?.() || []) {
+      const marker = join(workspace.path, '.workflow-one', 'state', 'legacy-import.json');
+      if (existsSync(marker)) {
+        legacyClaimedWorkspace = canonicalWorkspace(workspace.path);
+        break;
+      }
     }
-  }
+  } catch { /* workspaceRegistry 是可选服务 */ }
+
+  const copyLegacyTree = (source, target) => {
+    if (!existsSync(source)) return;
+    mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+    cpSync(source, target, { recursive: true, force: true, errorOnExist: false });
+  };
+  const initializeStore = (workspaceRoot) => {
+    const paths = createStoragePaths({ workspaceRoot, legacyRoot: LEGACY_DATA_DIR });
+    const rootExisted = existsSync(paths.root);
+    const marker = join(paths.state, 'legacy-import.json');
+    for (const dir of [paths.root, paths.state, paths.workflows, paths.attachments, paths.runs, paths.runtime, join(paths.state, 'tombstones', 'workflows')]) {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
+    if (!legacyClaimedWorkspace && !rootExisted) {
+      for (const legacy of [paths.packageLegacy, paths.pluginDataLegacy]) {
+        copyLegacyTree(legacy.workflows, paths.workflows);
+        copyLegacyTree(legacy.attachments, paths.attachments);
+        copyLegacyTree(legacy.runs, paths.runs);
+        if (legacy === paths.pluginDataLegacy) copyLegacyTree(legacy.runtime, paths.runtime);
+        for (const name of ['graph.json', 'triggers.json', 'global-variables.json']) {
+          const source = join(legacy.state, name);
+          if (existsSync(source)) copyLegacyTree(source, join(paths.state, name));
+        }
+      }
+      legacyClaimedWorkspace = workspaceRoot;
+      atomicJson(marker, { version: 1, importedAt: new Date().toISOString() });
+    }
+    const store = {
+      workspaceRoot,
+      paths,
+      graphFile: join(paths.state, 'graph.json'),
+      triggersFile: join(paths.state, 'triggers.json'),
+      globalVariablesFile: join(paths.state, 'global-variables.json'),
+      workflowTombstoneDir: join(paths.state, 'tombstones', 'workflows'),
+      runHistory: [],
+      historyHydrated: false,
+      globalVariableStore: new GlobalVariableStore(join(paths.state, 'global-variables.json')),
+      hooks: new Map(),
+      schedulers: new Map(),
+      schedulerMeta: new Map(),
+      triggersLoaded: false,
+      triggersRestored: false,
+    };
+    stores.set(workspaceRoot, store);
+    return store;
+  };
+  const storeForWorkspace = (cwd) => {
+    const workspaceRoot = canonicalWorkspace(cwd);
+    return stores.get(workspaceRoot) || initializeStore(workspaceRoot);
+  };
+  const currentStore = () => {
+    const store = workspaceContext.getStore();
+    if (!store) throw new Error('工作流请求缺少会话工作目录');
+    return store;
+  };
+  const STORAGE = new Proxy({}, { get(_target, key) { return currentStore().paths[key]; } });
+  const runHistory = new Proxy([], {
+    get(_target, key) {
+      const rows = currentStore().runHistory;
+      const value = rows[key];
+      return typeof value === 'function' ? value.bind(rows) : value;
+    },
+    set(_target, key, value) { currentStore().runHistory[key] = value; return true; },
+  });
+  const globalVariableStore = new Proxy({}, {
+    get(_target, key) {
+      const store = currentStore().globalVariableStore;
+      const value = store[key];
+      return typeof value === 'function' ? value.bind(store) : value;
+    },
+  });
+  const currentPaths = () => currentStore().paths;
+  const currentRunHistory = () => currentStore().runHistory;
+  const currentHooks = () => currentStore().hooks;
+  const currentSchedulers = () => currentStore().schedulers;
+  const currentSchedulerMeta = () => currentStore().schedulerMeta;
+  const registeredWorkspaceRoots = () => {
+    try {
+      const registry = ctx.workspaceRegistry || ctx.get?.('workspaceRegistry');
+      return (registry?.list?.() || [])
+        .map((workspace) => canonicalWorkspace(workspace.path))
+        .filter((workspaceRoot) => existsSync(join(workspaceRoot, '.workflow-one')));
+    } catch { return []; }
+  };
 
   const json = (res, code, body) => {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -122,13 +205,45 @@ export function apply(ctx, config) {
     req.on('data', (d) => { buf += d; if (buf.length > 8e6) req.destroy(); });
     req.on('end', () => { try { resolve(JSON.parse(buf || '{}')); } catch { resolve({}); } });
   });
+  const sessionStore = (sessionId) => {
+    if (!sessionId) throw new Error('缺少当前会话');
+    const session = ctx.get('sessions')?.get?.(SessionId(String(sessionId)));
+    return storeForWorkspace(session?.header?.cwd);
+  };
+  const requestStore = (req) => {
+    const url = new URL(req.url, 'http://wf1.local');
+    const sessionId = url.searchParams.get('sessionId') || req.headers?.['x-wf1-session'];
+    return sessionStore(sessionId);
+  };
+  let ensureTriggers = () => {};
+  const register = (route, { scoped = true } = {}) => {
+    const handler = route.handler;
+    ctx.webServer.register({
+      ...route,
+      handler(req, res) {
+        if (!scoped) return handler(req, res);
+        try {
+          return workspaceContext.run(requestStore(req), () => {
+            hydrateHistory();
+            ensureTriggers();
+            return handler(req, res);
+          });
+        } catch (error) {
+          return json(res, 409, { error: String(error.message || error), code: 'workspace-session-required' });
+        }
+      },
+    });
+  };
 
   // ---- SSE ----
   const sseClients = new Map();
   const broadcast = (event, payload) => {
+    const store = workspaceContext.getStore();
+    if (!store) return;
     const frame = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
-    for (const [res, subscribedRunId] of sseClients) {
-      if (subscribedRunId && payload?.runId && subscribedRunId !== payload.runId) continue;
+    for (const [res, subscription] of sseClients) {
+      if (subscription.store !== store) continue;
+      if (subscription.runId && payload?.runId && subscription.runId !== payload.runId) continue;
       try { res.write(frame); } catch { /* 断开的连接 */ }
     }
   };
@@ -137,9 +252,11 @@ export function apply(ctx, config) {
   // canvasId（前端生成、localStorage 持久）→ { graph, version, workflowId, boundSessions:Set }
   // version 只在 AI patch 后递增；前端上报必须基于当前 version，防止延迟的旧图覆盖 AI 新图。
   const canvases = new Map();
+  const canvasKey = (id) => `${currentStore().workspaceRoot}\0${id}`;
   const canvasOf = (id) => {
-    if (!canvases.has(id)) canvases.set(id, { graph: null, version: 0, workflowId: null, boundSessions: new Set() });
-    return canvases.get(id);
+    const key = canvasKey(id);
+    if (!canvases.has(key)) canvases.set(key, { graph: null, version: 0, workflowId: null, boundSessions: new Set() });
+    return canvases.get(key);
   };
   // 竞态防御：画布 mount 早期会报空图；已有非空图时不回退到空。
   // AI 已产生更高版本后，拒绝旧版本前端的延迟回写。
@@ -207,9 +324,9 @@ export function apply(ctx, config) {
         if (cv.workflowId) {
           const wf = readWf(cv.workflowId);
           if (wf) writeWf({ ...wf, graph: r.graph, updatedAt: new Date().toISOString() });
-          else atomicJson(GRAPH_FILE, r.graph);
+          else atomicJson(currentStore().graphFile, r.graph);
         } else {
-          atomicJson(GRAPH_FILE, r.graph);
+          atomicJson(currentStore().graphFile, r.graph);
         }
         const check = checkPatchResult(r.graph);
         // workflowId 一并广播：切换工作流的瞬间若有在飞 patch，画布侧据此丢弃，避免旧图的改动落到新工作流上
@@ -241,6 +358,7 @@ export function apply(ctx, config) {
         const globals = (() => { try { return globalContext(); } catch { return { globalVariables: {} }; } })();
         const { runId } = startRun(graph, {
           triggerInput: args.triggerInput ?? '', workflowName: null, workflowId: cv.workflowId,
+          canvasId: exec.canvasId,
           globalVariables: globals.globalVariables,
           source: 'assistant',
         });
@@ -252,7 +370,7 @@ export function apply(ctx, config) {
       parameters: { runId: { type: 'string', required: true, description: 'canvas_run_workflow 返回的 runId' } },
       async execute(args) {
         const entry = orch.runs.get(args.runId);
-        if (entry) {
+        if (entry?.run?.workspaceRoot === currentStore().workspaceRoot) {
           const run = entry.run;
           return JSON.stringify({
             status: run.status || 'running',
@@ -291,20 +409,30 @@ export function apply(ctx, config) {
       parameters: def.parameters,
       output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: String(v) }] },
       async execute(args, exec) {
+        const sid = exec?.agent?.session?.id || exec?.sessionId || exec?.session?.id;
         const canvasId = resolveCanvasId(exec);
-        if (!canvasId) return '此工具只在绑定了工作流画布的会话里可用（在画布「工作流」标签页发起对话）。';
-        return def.execute(args, { ...exec, canvasId });
+        if (!sid || !canvasId) return '此工具只在绑定了工作流画布的会话里可用（在画布「工作流」标签页发起对话）。';
+        try {
+          return await workspaceContext.run(sessionStore(String(sid)), () => {
+            hydrateHistory();
+            return def.execute(args, { ...exec, canvasId });
+          });
+        } catch (error) {
+          return `工作区不可用：${String(error.message || error)}`;
+        }
       },
     });
     try { ctx.tools.register(wrapped); } catch (e) { ctx.logger?.warn?.(`assistant tool ${name} 注册失败: ${e.message}`); }
   }
 
 
-  // ---- 运行历史（持久化 + 内存缓存）----
-  const runHistory = []; // 新 → 旧，内存前 50
+  // ---- 运行历史（按工作区持久化 + 内存缓存）----
   const hydrateHistory = () => {
+    const store = currentStore();
+    if (store.historyHydrated) return;
+    store.historyHydrated = true;
     const byId = new Map();
-    for (const dir of [RUNS_DIR, LEGACY_RUNS_DIR]) {
+    for (const dir of [store.paths.runs]) {
       try {
         for (const file of readdirSync(dir).filter((name) => name.endsWith('.json'))) {
           try {
@@ -315,7 +443,7 @@ export function apply(ctx, config) {
       } catch { /* 目录空 */ }
     }
     const rows = [...byId.values()].sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
-    runHistory.push(...rows.slice(0, 50));
+    store.runHistory.push(...rows.slice(0, 50));
   };
   const persistRun = (run, graph, workflowName, workflowId) => {
     try {
@@ -325,6 +453,7 @@ export function apply(ctx, config) {
         nodes: graph.nodes.map((n) => ({ id: n.id, type: n.type, position: n.position, data: n.data })),
         edges: graph.edges,
       } : undefined;
+      delete light.workspaceRoot;
       const base = normalizeRunDocument({
         ...light,
         workflowName: run.workflowName || workflowName || null,
@@ -342,11 +471,12 @@ export function apply(ctx, config) {
         artifactIndex: snapshot.artifacts,
         issues: [...(Array.isArray(base.issues) ? base.issues : []), ...snapshot.issues],
       });
-      atomicJson(join(RUNS_DIR, `${safeFileId(run.runId, 'invalid')}.json`), document);
+      atomicJson(join(currentPaths().runs, `${safeFileId(run.runId, 'invalid')}.json`), document);
       const historyRun = { ...document, graph: graphSnapshot };
-      const idx = runHistory.findIndex((r) => r.runId === run.runId);
-      if (idx >= 0) runHistory[idx] = historyRun;
-      else runHistory.unshift(historyRun);
+      const history = currentRunHistory();
+      const idx = history.findIndex((r) => r.runId === run.runId);
+      if (idx >= 0) history[idx] = historyRun;
+      else history.unshift(historyRun);
       pruneRuns();
       broadcast('run-results-ready', {
         runId: document.runId,
@@ -364,45 +494,45 @@ export function apply(ctx, config) {
   // 保留策略：超过 RUNS_KEEP 的旧运行文件删除（内存列表同步裁剪）
   const pruneRuns = () => {
     try {
-      const files = readdirSync(RUNS_DIR)
+      const runsDir = currentPaths().runs;
+      const history = currentRunHistory();
+      const files = readdirSync(runsDir)
         .filter((f) => f.endsWith('.json'))
-        .map((f) => ({ f, t: statSync(join(RUNS_DIR, f)).mtimeMs }))
+        .map((f) => ({ f, t: statSync(join(runsDir, f)).mtimeMs }))
         .sort((a, b) => b.t - a.t);
       for (const { f } of files.slice(RUNS_KEEP)) {
         try {
-          const run = normalizeRunDocument(JSON.parse(readFileSync(join(RUNS_DIR, f), 'utf8')));
+          const run = normalizeRunDocument(JSON.parse(readFileSync(join(runsDir, f), 'utf8')));
           rmSync(STORAGE.runRoot({ workflowId: run.workflowId || 'draft', runId: run.runId }), { recursive: true, force: true });
         } catch { /* 单条记录损坏或并发删除 */ }
-        try { unlinkSync(join(RUNS_DIR, f)); } catch { /* 并发删除 */ }
+        try { unlinkSync(join(runsDir, f)); } catch { /* 并发删除 */ }
       }
-      if (runHistory.length > RUNS_KEEP) runHistory.length = RUNS_KEEP;
+      if (history.length > RUNS_KEEP) history.length = RUNS_KEEP;
     } catch { /* 目录不可读 */ }
   };
   const readRun = (runId) => {
     const filename = `${safeFileId(runId, 'invalid')}.json`;
-    for (const dir of [RUNS_DIR, LEGACY_RUNS_DIR]) {
+    for (const dir of [currentPaths().runs]) {
       try { return normalizeRunDocument(JSON.parse(readFileSync(join(dir, filename), 'utf8'))); } catch { /* 回退下一位置 */ }
     }
     return null;
   };
   const writeRun = (run) => {
     const document = normalizeRunDocument(run);
-    atomicJson(join(RUNS_DIR, `${safeFileId(document.runId, 'invalid')}.json`), document);
-    const idx = runHistory.findIndex((row) => row.runId === document.runId);
-    if (idx >= 0) runHistory[idx] = document;
-    else runHistory.unshift(document);
+    atomicJson(join(currentPaths().runs, `${safeFileId(document.runId, 'invalid')}.json`), document);
+    const history = currentRunHistory();
+    const idx = history.findIndex((row) => row.runId === document.runId);
+    if (idx >= 0) history[idx] = document;
+    else history.unshift(document);
     return document;
   };
-  hydrateHistory();
 
   // ---- 工作流库 ----
-  const WF_DIR = STORAGE.workflows;
-  const LEGACY_WF_DIR = STORAGE.legacy.workflows;
-  const wfFile = (id, dir = WF_DIR) => join(dir, `${safeFileId(id, 'invalid')}.json`);
-  const wfTombstone = (id) => join(WORKFLOW_TOMBSTONE_DIR, safeFileId(id, 'invalid'));
+  const wfFile = (id, dir = currentPaths().workflows) => join(dir, `${safeFileId(id, 'invalid')}.json`);
+  const wfTombstone = (id) => join(currentStore().workflowTombstoneDir, safeFileId(id, 'invalid'));
   const readWf = (id) => {
     if (existsSync(wfTombstone(id))) return null;
-    for (const dir of [WF_DIR, LEGACY_WF_DIR]) {
+    for (const dir of [currentPaths().workflows]) {
       try { return normalizeWorkflowDocument(JSON.parse(readFileSync(wfFile(id, dir), 'utf8'))); } catch { /* 回退下一位置 */ }
     }
     return null;
@@ -421,11 +551,10 @@ export function apply(ctx, config) {
       if (file && existsSync(file) && statSync(file).isFile()) return file;
     }
     const filename = safeFilename(attachment?.filename || attachment);
-    const legacy = resolveInside(STORAGE.legacy.attachments, filename);
-    return legacy && existsSync(legacy) && statSync(legacy).isFile() ? legacy : null;
+    const flatFile = resolveInside(STORAGE.attachments, filename);
+    return flatFile && existsSync(flatFile) && statSync(flatFile).isFile() ? flatFile : null;
   };
 
-  const globalVariableStore = new GlobalVariableStore(GLOBAL_VARIABLES_FILE);
   const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
   const globalContext = () => {
     const document = globalVariableStore.read();
@@ -467,23 +596,32 @@ export function apply(ctx, config) {
   orch.nodeRunner = async (node, run, s, ctl) => runAgentNode(ctx, node, run, s, ctl);
   orch.scriptRunner = async ({ node, input, signal, timeoutMs, workflowId, runId }) => {
     const ws = workspaceFor(node, { workflowId: workflowId || 'draft', runId });
-    const result = await runScript({ code: node.data?.code, input, workspaceDir: ws, signal, timeoutMs });
+    const result = await runScript({
+      code: node.data?.code,
+      input,
+      workspaceDir: ws,
+      readWorkspaceDir: currentStore().workspaceRoot,
+      signal,
+      timeoutMs,
+    });
     return { ...result, artifacts: safeWsList(ws) };
   };
 
   const startRun = (graph, {
-    triggerInput, workflowName, workflowId, source,
+    triggerInput, workflowName, workflowId, canvasId, source,
     globalVariables = {}, workflowVariables = {}, runInputs = {}, runId: providedRunId, replayOf,
   } = {}) => {
+    const store = currentStore();
     const runId = providedRunId || `run_${Date.now().toString(36)}_${++runIdSeq}`;
-    const promise = orch.run(graph, {
-      triggerInput, workflowName, workflowId, runId, globalVariables, workflowVariables, runInputs,
-    }).then((run) => {
-      if (source) run.source = source;
+    const promise = workspaceContext.run(store, () => Promise.resolve().then(() => orch.run(graph, {
+      triggerInput, workflowName, workflowId, canvasId, source, runId,
+      workspaceRoot: store.workspaceRoot,
+      globalVariables, workflowVariables, runInputs,
+    })).then((run) => {
       if (replayOf) run.replayOf = replayOf;
       persistRun(run, graph, workflowName, workflowId);
       return run;
-    }).catch((error) => {
+    })).catch((error) => {
       ctx.logger?.error?.(`dsh-ccpg 运行失败（${runId}）：${error.message}`);
       return null;
     });
@@ -492,7 +630,9 @@ export function apply(ctx, config) {
 
   // ---- agent 节点执行（升级版）----
   async function runAgentNode(ctx, node, run, s, { signal, emit, runId }) {
+    const store = currentStore();
     const ws = workspaceFor(node, { workflowId: run.workflowId || 'draft', runId });
+    const outputDir = relative(store.workspaceRoot, ws).split(sep).join('/');
     const d = node.data || {};
 
     // 系统提示词支持显式变量，但不会隐式拼入上游；业务输入统一由 inputTemplate 承载。
@@ -510,7 +650,8 @@ export function apply(ctx, config) {
     let systemPrompt = `${renderedPrompt.text}
 
 你是一个独立运行的智能体，自主决定步骤完成下面的任务：
-- 当前目录是你的工作区，交付物（报告/工单/回复稿等）必须写成文件落盘；中间产物也建议落盘。
+- 当前目录是用户工作区根，可直接读取其中已有文件。
+- 本节点的专属输出目录是 ${outputDir}；交付物（报告/工单/回复稿等）必须写入该目录，中间产物也应写入该目录，不要修改工作区中的其他文件。
 - 会话技能目录里匹配任务的技能，先用 skill 工具加载对应规范再动手，输出遵守规范。
 - 完成后在最终回复里给出交付物文件清单（文件名 + 一句话说明），不要复述全文。`;
     const skillIds = Array.isArray(d.skills) ? d.skills.slice() : [];
@@ -553,7 +694,7 @@ export function apply(ctx, config) {
           }
         } catch { /* 单个附件失败不阻塞 */ }
       }
-      userPrompt += `\n\n可用附件（已放入你的工作区，用 read 工具读取）：${attachments.map((a) => a.filename).join(', ')}`;
+      userPrompt += `\n\n可用附件已放入节点输出目录 ${outputDir}，用 read 工具读取：${attachments.map((a) => `${outputDir}/${a.filename}`).join(', ')}`;
     }
 
     // 节点级模型：默认取全局选择；channel 仅透传给支持的 provider
@@ -595,7 +736,7 @@ export function apply(ctx, config) {
     try {
       handle = await ctx.get('agents').create({
         sessionId: SessionId(`wf1-${node.id}-${randomUUID().slice(0, 8)}`),
-        meta: { cwd: ws },
+        meta: { cwd: store.workspaceRoot },
         agentOptions: { provider, model },
         setup: async (agentCtx) => {
           // 加入 standard preset：bash/fs/skill 等模型面工具经 standing scope 覆盖本 agent
@@ -721,10 +862,11 @@ export function apply(ctx, config) {
 
   // ---------------- HTTP 路由 ----------------
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/graph', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/graph', async handler(req, res) {
     if (req.method === 'GET') {
-      if (!existsSync(GRAPH_FILE)) return json(res, 200, defaultGraph());
-      try { return json(res, 200, JSON.parse(readFileSync(GRAPH_FILE, 'utf8'))); }
+      const graphFile = currentStore().graphFile;
+      if (!existsSync(graphFile)) return json(res, 200, defaultGraph());
+      try { return json(res, 200, JSON.parse(readFileSync(graphFile, 'utf8'))); }
       catch { return json(res, 200, defaultGraph()); }
     }
     if (req.method === 'PUT') {
@@ -732,18 +874,18 @@ export function apply(ctx, config) {
       if (!body || !Array.isArray(body.nodes) || !Array.isArray(body.edges)) {
         return json(res, 400, { error: 'graph 需要 { nodes, edges }' });
       }
-      atomicJson(GRAPH_FILE, body);
+      atomicJson(currentStore().graphFile, body);
       return json(res, 200, { ok: true });    }
     json(res, 405, { error: 'method' });
   } });
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/graph/reset', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/graph/reset', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
-    atomicJson(GRAPH_FILE, defaultGraph());
+    atomicJson(currentStore().graphFile, defaultGraph());
     json(res, 200, { ok: true });
   } });
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/global-variables', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/global-variables', async handler(req, res) {
     try {
       if (req.method === 'GET') return json(res, 200, globalVariableStore.read());
       const body = await readBody(req);
@@ -772,7 +914,7 @@ export function apply(ctx, config) {
   } });
 
   // 模板试渲染：可使用历史运行，也可直接传 outputs/structuredOutputs 做无运行预览。
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/template/render', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/template/render', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
     try { rejectInlineGlobalContext(body); } catch (error) { return routeError(res, error); }
@@ -821,7 +963,7 @@ export function apply(ctx, config) {
     });
   } });
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/template/validate', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/template/validate', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
     try { rejectInlineGlobalContext(body); } catch (error) { return routeError(res, error); }
@@ -843,7 +985,7 @@ export function apply(ctx, config) {
     }));
   } });
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/variables/describe', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/variables/describe', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
     try { rejectInlineGlobalContext(body); } catch (error) { return routeError(res, error); }
@@ -881,7 +1023,7 @@ export function apply(ctx, config) {
     json(res, 200, { schemaVersion: RUN_SCHEMA_VERSION, ...schema });
   } });
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/graph/lint', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/graph/lint', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
     if (!body?.graph) return json(res, 400, { error: '缺少 graph' });
@@ -889,10 +1031,10 @@ export function apply(ctx, config) {
   } });
 
   // ---- 工作流库 ----
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/workflows', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/workflows', async handler(req, res) {
     if (req.method === 'GET') {
       const ids = new Set();
-      for (const dir of [WF_DIR, LEGACY_WF_DIR]) {
+      for (const dir of [currentPaths().workflows]) {
         try { for (const file of readdirSync(dir).filter((name) => name.endsWith('.json'))) ids.add(file.replace(/\.json$/, '')); }
         catch { /* 目录空 */ }
       }
@@ -935,7 +1077,7 @@ export function apply(ctx, config) {
         return routeError(res, error);
       }
       // 命名工作流保存后镜像到草稿图并写入绑定指针：刷新/重开页面时画布恢复到该工作流。
-      atomicJson(GRAPH_FILE, { nodes: wf.graph.nodes, edges: wf.graph.edges, workflowId: wf.id });
+      atomicJson(currentStore().graphFile, { nodes: wf.graph.nodes, edges: wf.graph.edges, workflowId: wf.id });
       return json(res, 200, {
         ok: true,
         id: wf.id,
@@ -956,7 +1098,7 @@ export function apply(ctx, config) {
     json(res, 405, { error: 'method' });
   } });
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/workflows/detail', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/workflows/detail', async handler(req, res) {
     const url = new URL(req.url, 'http://x');
     const id = url.searchParams.get('id') || '';
     if (!id) return json(res, 400, { error: '缺少 id' });
@@ -986,7 +1128,7 @@ export function apply(ctx, config) {
   } });
 
   // ---- 运行 ----
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/run', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/run', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
     try { rejectInlineGlobalContext(body); } catch (error) { return routeError(res, error); }
@@ -1020,6 +1162,7 @@ export function apply(ctx, config) {
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });
     const { runId } = startRun(graph, {
       triggerInput: body.triggerInput ?? '', workflowName, workflowId,
+      canvasId: body.canvasId || null,
       globalVariables: globals.globalVariables,
       workflowVariables: variableDefinitionsToValues(definitions),
       runInputs,
@@ -1056,7 +1199,7 @@ export function apply(ctx, config) {
   };
 
   // ---- 飞书凭据管理（画布配置，多套，掩码返回）----
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/feishu-credentials', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/feishu-credentials', async handler(req, res) {
     if (req.method === 'GET') {
       return json(res, 200, { credentials: listFeishuCreds(), envFallback: Boolean(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET) });
     }
@@ -1084,15 +1227,18 @@ export function apply(ctx, config) {
     json(res, 405, { error: 'method' });
   } });
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/run/cancel', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/run/cancel', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
-    const ok = orch.cancel(body?.runId, '用户取消');
+    const entry = orch.runs.get(body?.runId);
+    const ok = entry?.run?.workspaceRoot === currentStore().workspaceRoot
+      ? orch.cancel(body?.runId, '用户取消')
+      : false;
     json(res, 200, { ok, runId: body?.runId || null });
   } });
 
   // 单节点试运行：走引擎注册表（与真实运行同一执行路径）；支持手填假输入。
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/node/test', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/node/test', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
     const node = body?.node;
@@ -1173,8 +1319,8 @@ export function apply(ctx, config) {
   } });
 
   // ---- 运行历史 ----
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/runs', handler(_req, res) {
-    const live = orch.currentRunIds();
+  register({ kind: 'exact', path: '/wf1/api/runs', handler(_req, res) {
+    const live = [...orch.runs.values()].filter((entry) => entry.run.workspaceRoot === currentStore().workspaceRoot).map((entry) => entry.run.runId);
     json(res, 200, {
       runs: runHistory.slice(0, 20).map((r) => {
         const { structuredOutputs, graph, ...summary } = r;
@@ -1183,7 +1329,7 @@ export function apply(ctx, config) {
     });
   } });
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/runs/detail', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/runs/detail', async handler(req, res) {
     const url = new URL(req.url, 'http://x');
     const id = url.searchParams.get('id') || '';
     if (!id) return json(res, 400, { error: '缺少 id' });
@@ -1192,7 +1338,7 @@ export function apply(ctx, config) {
     json(res, 200, { ...r, structuredOutputs: r.structuredOutputs || {} });
   } });
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/run-results', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/run-results', async handler(req, res) {
     if (req.method !== 'GET') return json(res, 405, { error: 'method' });
     const url = new URL(req.url, 'http://x');
     const id = url.searchParams.get('id') || '';
@@ -1205,11 +1351,11 @@ export function apply(ctx, config) {
   const artifactLocationsForRun = (run) => ({
     artifactRunDirs: [
       STORAGE.artifactRunDir({ workflowId: run.workflowId || 'draft', runId: run.runId }),
-      STORAGE.legacy.runArtifacts,
+      ...currentPaths().legacyRoots.map((legacy) => legacy.runArtifacts),
     ],
   });
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/run-artifact', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/run-artifact', async handler(req, res) {
     if (req.method !== 'GET') return json(res, 405, { error: 'method' });
     const url = new URL(req.url, 'http://x');
     const runId = url.searchParams.get('run') || '';
@@ -1230,7 +1376,7 @@ export function apply(ctx, config) {
     });
   } });
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/run-artifacts/save', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/run-artifacts/save', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
     const runId = String(body?.runId || '');
@@ -1241,6 +1387,7 @@ export function apply(ctx, config) {
     const session = ctx.get('sessions')?.get?.(SessionId(sessionId));
     const cwd = session?.header?.cwd;
     if (!cwd) return json(res, 409, { error: '当前会话没有可用的工作目录' });
+    if (storeForWorkspace(cwd) !== currentStore()) return json(res, 403, { error: '当前会话不属于此工作区' });
     const run = readRun(runId);
     if (!run) return json(res, 404, { error: '运行记录不存在' });
     const results = createRunResults(run);
@@ -1260,7 +1407,7 @@ export function apply(ctx, config) {
     }
   } });
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/runs/export', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/runs/export', async handler(req, res) {
     if (req.method !== 'GET') return json(res, 405, { error: 'method' });
     const url = new URL(req.url, 'http://x');
     const id = url.searchParams.get('id') || '';
@@ -1279,7 +1426,7 @@ export function apply(ctx, config) {
 
   // 节点详情：输入（渲染后的模板）/ 输出全文 / 状态 / agent 过程轨迹（轮次、工具调用与结果）。
   // 轨迹在运行完成时已随 run 落盘；旧运行或轨迹缺失时现场从 dsh session 存档回放补齐。
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/node-detail', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/node-detail', async handler(req, res) {
     const url = new URL(req.url, 'http://x');
     const runId = url.searchParams.get('run') || '';
     const nodeId = url.searchParams.get('node') || '';
@@ -1320,7 +1467,7 @@ export function apply(ctx, config) {
   } });
 
   // 运行重放：用历史运行当时的图快照 + 原触发输入再跑一次（排查失败不改图）
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/runs/replay', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/runs/replay', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
     const prev = readRun(body?.runId);
@@ -1343,7 +1490,7 @@ export function apply(ctx, config) {
   } });
 
   // 工作流导出 / 导入（画布间分享：{ name, graph } 单文件）
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/workflows/transfer', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/workflows/transfer', async handler(req, res) {
     if (req.method === 'GET') {
       const url = new URL(req.url, 'http://x');
       const id = url.searchParams.get('id') || '';
@@ -1376,8 +1523,8 @@ export function apply(ctx, config) {
   } });
 
   // 刷新恢复快照：进行中运行的最新状态（供页面加载时补齐 SSE 错过的事件）
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/state', handler(_req, res) {
-    const runningIds = orch.currentRunIds();
+  register({ kind: 'exact', path: '/wf1/api/state', handler(_req, res) {
+    const runningIds = [...orch.runs.values()].filter((entry) => entry.run.workspaceRoot === currentStore().workspaceRoot).map((entry) => entry.run.runId);
     const latest = runHistory[0];
     const lastRun = latest ? (() => {
       const { structuredOutputs, graph, ...summary } = latest;
@@ -1392,30 +1539,35 @@ export function apply(ctx, config) {
   // ---- webhook + 定时触发（落盘 data/triggers.json，重启自动恢复）----
   // hooks: [{ id, token, workflowId, workflowName, createdAt }]
   // schedules: [{ key, workflowId, workflowName, cron, input, createdAt }]
-  const HOOKS = new Map();
   const loadTriggers = () => {
+    const store = currentStore();
+    if (store.triggersLoaded) return { hooks: [...store.hooks.values()], schedules: [...store.schedulerMeta.values()] };
+    store.triggersLoaded = true;
     try {
-      const t = JSON.parse(readFileSync(TRIGGERS_FILE, 'utf8'));
-      for (const h of t.hooks || []) HOOKS.set(h.id, h);
+      const t = JSON.parse(readFileSync(store.triggersFile, 'utf8'));
+      for (const h of t.hooks || []) {
+        store.hooks.set(h.id, h);
+        publicHooks.set(h.id, { store, hook: h });
+      }
       return t;
     } catch { return { hooks: [], schedules: [] }; }
   };
-  const savedTriggers = loadTriggers();
 
   const persistTriggers = () => {
     try {
-      atomicJson(TRIGGERS_FILE, {
-        hooks: [...HOOKS.values()].map(({ id, token, workflowId, workflowName, createdAt }) => ({ id, token, workflowId, workflowName, createdAt })),
-        schedules: [...schedulerMeta.entries()].map(([key, m]) => ({
+      const store = currentStore();
+      atomicJson(store.triggersFile, {
+        hooks: [...currentHooks().values()].map(({ id, token, workflowId, workflowName, createdAt }) => ({ id, token, workflowId, workflowName, createdAt })),
+        schedules: [...currentSchedulerMeta().entries()].map(([key, m]) => ({
           key, workflowId: m.workflowId, workflowName: m.workflowName, cron: m.cron, input: m.input, createdAt: m.createdAt,
         })),
       });
     } catch { /* 落盘失败不影响运行 */ }
   };
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/hooks', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/hooks', async handler(req, res) {
     if (req.method === 'GET') {
-      return json(res, 200, { hooks: [...HOOKS.values()].map((h) => ({ ...h, url: `/wf1/api/hooks/${h.id}` })) });
+      return json(res, 200, { hooks: [...currentHooks().values()].map((h) => ({ ...h, url: `/wf1/api/hooks/${h.id}` })) });
     }
     if (req.method === 'POST') {
       const body = await readBody(req);
@@ -1423,60 +1575,71 @@ export function apply(ctx, config) {
       if (!wf) return json(res, 404, { error: '工作流不存在' });
       const id = `hk_${randomUUID().slice(0, 8)}`;
       const token = randomUUID().replace(/-/g, '');
-      HOOKS.set(id, { id, token, workflowId: wf.id, workflowName: wf.name, createdAt: new Date().toISOString() });
+      const hook = { id, token, workflowId: wf.id, workflowName: wf.name, createdAt: new Date().toISOString() };
+      currentHooks().set(id, hook);
+      publicHooks.set(id, { store: currentStore(), hook });
       persistTriggers();
       return json(res, 200, { ok: true, id, token, url: `/wf1/api/hooks/${id}` });
     }
     if (req.method === 'DELETE') {
       const url = new URL(req.url, 'http://x');
       const id = url.searchParams.get('id') || '';
-      json(res, 200, { ok: HOOKS.delete(id) });
+      const deleted = currentHooks().delete(id);
+      publicHooks.delete(id);
+      json(res, 200, { ok: deleted });
       persistTriggers();
       return;
     }
     json(res, 405, { error: 'method' });
   } });
 
-  ctx.webServer.register({ kind: 'prefix', path: '/wf1/api/hooks', async handler(req, res) {
+  register({ kind: 'prefix', path: '/wf1/api/hooks', async handler(req, res) {
     const m = new URL(req.url, 'http://x').pathname.match(/^\/wf1\/api\/hooks\/([A-Za-z0-9_-]+)$/);
     if (!m) return json(res, 404, { error: 'not found' });
-    const hook = HOOKS.get(m[1]);
-    if (!hook) return json(res, 404, { error: 'hook 不存在' });
-    // token 鉴权：?token= / Authorization: Bearer / X-Hook-Token
-    const u = new URL(req.url, 'http://x');
-    const presented = u.searchParams.get('token')
-      || String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')
-      || String(req.headers['x-hook-token'] || '');
-    if (!presented || presented !== hook.token) {
-      return json(res, 401, { error: '缺少或错误的 hook token（?token= 或 Authorization: Bearer 或 X-Hook-Token）' });
-    }
-    const wf = readWf(hook.workflowId);
-    if (!wf) return json(res, 404, { error: 'hook 指向的工作流已删除' });
-    let triggerInput = '';
-    let runInputs = {};
-    try {
-      triggerInput = u.searchParams.get('input') || '';
-      if (req.method === 'POST') {
-        const body = await readBody(req);
-        if (!triggerInput) triggerInput = String(body?.input || body?.text || (typeof body === 'string' ? body : ''));
-        runInputs = assertSafeContextObject(body?.inputs, 'inputs');
+    let owner = publicHooks.get(m[1]);
+    if (!owner) {
+      for (const workspaceRoot of registeredWorkspaceRoots()) {
+        const store = storeForWorkspace(workspaceRoot);
+        workspaceContext.run(store, ensureTriggers);
       }
-    } catch (error) { return routeError(res, error); }
-    let globals; try { globals = globalContext(); } catch (error) { return routeError(res, error); }
-    const { runId } = startRun(wf.graph, {
-      triggerInput, workflowName: wf.name, workflowId: wf.id,
-      globalVariables: globals.globalVariables,
-      workflowVariables: variableDefinitionsToValues(wf.variables),
-      runInputs,
-      source: 'webhook',
+      owner = publicHooks.get(m[1]);
+    }
+    if (!owner) return json(res, 404, { error: 'hook 不存在' });
+    return workspaceContext.run(owner.store, async () => {
+      const hook = owner.hook;
+      const u = new URL(req.url, 'http://x');
+      const presented = u.searchParams.get('token')
+        || String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')
+        || String(req.headers['x-hook-token'] || '');
+      if (!presented || presented !== hook.token) {
+        return json(res, 401, { error: '缺少或错误的 hook token（?token= 或 Authorization: Bearer 或 X-Hook-Token）' });
+      }
+      const wf = readWf(hook.workflowId);
+      if (!wf) return json(res, 404, { error: 'hook 指向的工作流已删除' });
+      let triggerInput = '';
+      let runInputs = {};
+      try {
+        triggerInput = u.searchParams.get('input') || '';
+        if (req.method === 'POST') {
+          const body = await readBody(req);
+          if (!triggerInput) triggerInput = String(body?.input || body?.text || (typeof body === 'string' ? body : ''));
+          runInputs = assertSafeContextObject(body?.inputs, 'inputs');
+        }
+      } catch (error) { return routeError(res, error); }
+      let globals; try { globals = globalContext(); } catch (error) { return routeError(res, error); }
+      const { runId } = startRun(wf.graph, {
+        triggerInput, workflowName: wf.name, workflowId: wf.id,
+        globalVariables: globals.globalVariables,
+        workflowVariables: variableDefinitionsToValues(wf.variables),
+        runInputs,
+        source: 'webhook',
+      });
+      return json(res, 200, { ok: true, triggered: wf.name, runId });
     });
-    json(res, 200, { ok: true, triggered: wf.name, runId });
-  } });
+  } }, { scoped: false });
 
   // ---- 定时触发 ----
   // POST /wf1/api/schedule { workflowId, cron, input? } —— cron-parser 算下次触发，ctx.timer.timeout 链式调度
-  const schedulers = new Map(); // key → { meta, stop() }
-  const schedulerMeta = new Map(); // key → meta（列表数据）
   const startSchedule = (key, meta) => {
     const state = { stopped: false, timer: null, rawTimer: null, nextAt: null, fireCount: 0 };
     const armNext = () => {
@@ -1490,7 +1653,7 @@ export function apply(ctx, config) {
         return;
       }
       state.nextAt = new Date(Date.now() + nextMs).toISOString();
-      schedulerMeta.set(key, { ...meta, nextAt: state.nextAt, fireCount: state.fireCount });
+      currentSchedulerMeta().set(key, { ...meta, nextAt: state.nextAt, fireCount: state.fireCount });
       const fire = () => {
         if (state.stopped) return;
         state.fireCount += 1;
@@ -1525,10 +1688,24 @@ export function apply(ctx, config) {
       },
     };
   };
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/schedule', async handler(req, res) {
+  ensureTriggers = () => {
+    const store = currentStore();
+    const saved = loadTriggers();
+    if (store.triggersRestored) return;
+    store.triggersRestored = true;
+    for (const meta of saved.schedules || []) {
+      if (!readWf(meta.workflowId)) continue;
+      try {
+        currentSchedulers().set(meta.key, startSchedule(meta.key, meta));
+        currentSchedulerMeta().set(meta.key, meta);
+      } catch { /* 单条失败不阻塞 */ }
+    }
+  };
+
+  register({ kind: 'exact', path: '/wf1/api/schedule', async handler(req, res) {
     if (req.method === 'GET') {
       const rows = [];
-      for (const [key, meta] of schedulerMeta) rows.push({ ...meta, key });
+      for (const [key, meta] of currentSchedulerMeta()) rows.push({ ...meta, key });
       return json(res, 200, { schedules: rows });
     }
     if (req.method === 'POST') {
@@ -1544,36 +1721,26 @@ export function apply(ctx, config) {
       const key = `sch_${randomUUID().slice(0, 8)}`;
       const meta = { workflowId: wf.id, workflowName: wf.name, cron: body.cron, input: body.input || '', createdAt: new Date().toISOString() };
       const entry = startSchedule(key, meta);
-      schedulers.set(key, entry);
-      schedulerMeta.set(key, meta);
+      currentSchedulers().set(key, entry);
+      currentSchedulerMeta().set(key, meta);
       persistTriggers();
       return json(res, 200, { ok: true, key, cron: body.cron });
     }
     if (req.method === 'DELETE') {
       const url = new URL(req.url, 'http://x');
       const key = url.searchParams.get('key') || '';
-      const entry = schedulers.get(key);
+      const entry = currentSchedulers().get(key);
       if (entry) entry.stop();
-      schedulers.delete(key);
-      schedulerMeta.delete(key);
+      currentSchedulers().delete(key);
+      currentSchedulerMeta().delete(key);
       persistTriggers();
       return json(res, 200, { ok: true });
     }
     json(res, 405, { error: 'method' });
   } });
-  // 重启恢复：工作流还在的调度重新挂上
-  for (const m of savedTriggers.schedules || []) {
-    if (!readWf(m.workflowId)) continue;
-    try {
-      schedulers.set(m.key, startSchedule(m.key, m));
-      schedulerMeta.set(m.key, m);
-    } catch { /* 单条失败不阻塞 */ }
-  }
-  if (schedulerMeta.size) ctx.logger?.info?.(`dsh-ccpg 恢复 ${schedulerMeta.size} 条定时调度`);
 
   // ---- 附件 ----
-  const ATTACH_DIR = STORAGE.attachments;
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/attachments', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/attachments', async handler(req, res) {
     if (req.method === 'POST') {
       const body = await readBody(req);
       const { filename, contentBase64 } = body || {};
@@ -1582,7 +1749,7 @@ export function apply(ctx, config) {
       const buf = Buffer.from(contentBase64, 'base64');
       if (buf.length > 5 * 1024 * 1024) return json(res, 413, { error: '附件超过 5MB' });
       const id = `att_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
-      const dir = resolveInside(ATTACH_DIR, id);
+      const dir = resolveInside(currentPaths().attachments, id);
       const file = dir && resolveInside(dir, safe);
       if (!dir || !file) return json(res, 400, { error: '附件名称无效' });
       mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -1593,26 +1760,20 @@ export function apply(ctx, config) {
     if (req.method === 'GET') {
       const files = [];
       try {
-        for (const id of readdirSync(ATTACH_DIR)) {
+        for (const id of readdirSync(currentPaths().attachments)) {
           try {
-            const meta = JSON.parse(readFileSync(join(ATTACH_DIR, id, 'meta.json'), 'utf8'));
+            const meta = JSON.parse(readFileSync(join(currentPaths().attachments, id, 'meta.json'), 'utf8'));
             files.push(meta);
           } catch { /* 损坏条目跳过 */ }
         }
       } catch { /* 新目录为空 */ }
-      try {
-        for (const filename of readdirSync(STORAGE.legacy.attachments)) {
-          const st = statSync(join(STORAGE.legacy.attachments, filename));
-          if (st.isFile()) files.push({ filename, size: st.size, uploadedAt: st.mtime.toISOString(), legacy: true });
-        }
-      } catch { /* 旧目录为空 */ }
       return json(res, 200, { attachments: files });
     }
     if (req.method === 'DELETE') {
       const url = new URL(req.url, 'http://x');
       const id = url.searchParams.get('id') || '';
       if (id) {
-        const target = resolveInside(ATTACH_DIR, safeFileId(id, 'invalid'));
+        const target = resolveInside(currentPaths().attachments, safeFileId(id, 'invalid'));
         if (target && existsSync(target)) {
           rmSync(target, { recursive: true, force: true });
           return json(res, 200, { ok: true });
@@ -1624,7 +1785,7 @@ export function apply(ctx, config) {
   } });
 
   // ---- 产物下载/预览：?node=&file=&preview=1 读该节点工作区文件 ----
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/artifact', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/artifact', async handler(req, res) {
     const url = new URL(req.url, 'http://x');
     const nodeLabel = safeFileId(url.searchParams.get('node') || '', '');
     const file = url.searchParams.get('file') || '';
@@ -1643,7 +1804,7 @@ export function apply(ctx, config) {
   } });
 
   // ---- 技能目录：dsh 原生 ctx.skills（skill-filesystem 发现 ~/.dsh/skills 等根）----
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/skills', async handler(_req, res) {
+  register({ kind: 'exact', path: '/wf1/api/skills', async handler(_req, res) {
     try {
       const all = await ctx.skills.list();
       const skills = all
@@ -1656,7 +1817,7 @@ export function apply(ctx, config) {
   } });
 
   // ---- LLM 配置：直接读取 dsh 运行时注册的渠道和模型目录 ----
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/llm-config', async handler(_req, res) {
+  register({ kind: 'exact', path: '/wf1/api/llm-config', async handler(_req, res) {
     const sel = ctx.get('agentDefaultModel')?.currentSelection?.() || {};
     const failures = [];
     const providers = await Promise.all(ctx.llm.listProviders().map(async (provider) => {
@@ -1685,11 +1846,11 @@ export function apply(ctx, config) {
   } });
 
   // runtime 徽标数据源：插件形态下 agent 恒走 dsh 底座
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/runtime-config', handler(_req, res) {
+  register({ kind: 'exact', path: '/wf1/api/runtime-config', handler(_req, res) {
     json(res, 200, { runtime: { available: true, runtime: 'dsh-plugin', reasons: [] } });
   } });
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/tools', handler(_req, res) {
+  register({ kind: 'exact', path: '/wf1/api/tools', handler(_req, res) {
     try {
       const schemas = ctx.tools.schemas ? ctx.tools.schemas() : [];
       json(res, 200, {
@@ -1704,7 +1865,7 @@ export function apply(ctx, config) {
   // ---- 画布 AI 助手端点：绑定（聊天 session ↔ 画布）+ 画布状态上报 + persona ----
   // 绑定后该 session 的 agent 调 canvas_* 工具即作用于绑定的画布；
   // persona 经 /assistant/persona 由宿主注入（agents.setup 无官方钩子时退化为：绑定即注入 systemPrompt section）。
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/assistant/bind', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/assistant/bind', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
     const { sessionId, canvasId } = body || {};
@@ -1719,21 +1880,21 @@ export function apply(ctx, config) {
     json(res, 200, { ok: true, version: cv.version, graph: cv.graph, persona: canvasAssistantPersona(), canSaveToWorkspace });
   } });
 
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/assistant/unbind', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/assistant/unbind', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
     const sid = String(body?.sessionId || '');
     const cid = sessionCanvas.get(sid);
     if (cid) {
       sessionCanvas.delete(sid);
-      canvases.get(cid)?.boundSessions.delete(sid);
+      canvasOf(cid).boundSessions.delete(sid);
     }
     json(res, 200, { ok: true });
   } });
 
   // 画布状态：POST 上报前端图，GET 拉服务端权威图。AI patch 的 version 更高时，
   // 旧前端上报会被拒绝，SSE 漏包后前端也能用 GET 补回完整图。
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/assistant/canvas-state', async handler(req, res) {
+  register({ kind: 'exact', path: '/wf1/api/assistant/canvas-state', async handler(req, res) {
     if (req.method === 'GET') {
       const url = new URL(req.url, 'http://wf1.local');
       const canvasId = url.searchParams.get('canvasId');
@@ -1751,7 +1912,15 @@ export function apply(ctx, config) {
   } });
 
   // SSE 端点（含快照：连接即推送最近一次运行状态）
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/events', handler(req, res) {
+  for (const workspaceRoot of registeredWorkspaceRoots()) {
+    const store = storeForWorkspace(workspaceRoot);
+    workspaceContext.run(store, () => {
+      hydrateHistory();
+      ensureTriggers();
+    });
+  }
+
+  register({ kind: 'exact', path: '/wf1/api/events', handler(req, res) {
     const requestedRunId = new URL(req.url, 'http://wf1.local').searchParams.get('runId') || null;
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -1761,11 +1930,24 @@ export function apply(ctx, config) {
     });
     res.write('retry: 2000\n\n');
     // 只恢复进行中运行；完成历史必须由带作用域的历史/详情接口读取，避免跨工作流串台。
-    const live = requestedRunId ? orch.runs.get(requestedRunId) : [...orch.runs.values()][0];
-    if (live) {
-      res.write(`event: snapshot\ndata: ${JSON.stringify({ runId: live.run.runId, schemaVersion: live.run.schemaVersion, status: 'running', nodeStates: summarizeNodeStates(live.run.nodeStates), outputs: summarizeOutputs(live.run.outputs, live.run.structuredOutputs), structuredOutputSummary: summarizeStructuredOutputs(live.run.structuredOutputs) })}\n\n`);
+    const liveRuns = (requestedRunId
+      ? [orch.runs.get(requestedRunId)].filter(Boolean)
+      : [...orch.runs.values()])
+      .filter((entry) => entry.run.workspaceRoot === currentStore().workspaceRoot);
+    for (const live of liveRuns) {
+      res.write(`event: snapshot\ndata: ${JSON.stringify({
+        runId: live.run.runId,
+        workflowId: live.run.workflowId ?? null,
+        canvasId: live.run.canvasId ?? null,
+        source: live.run.source ?? null,
+        schemaVersion: live.run.schemaVersion,
+        status: 'running',
+        nodeStates: summarizeNodeStates(live.run.nodeStates),
+        outputs: summarizeOutputs(live.run.outputs, live.run.structuredOutputs),
+        structuredOutputSummary: summarizeStructuredOutputs(live.run.structuredOutputs),
+      })}\n\n`);
     }
-    sseClients.set(res, requestedRunId);
+    sseClients.set(res, { store: currentStore(), runId: requestedRunId });
     const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 15000);
     req.on('close', () => { clearInterval(ping); sseClients.delete(res); });
   } });
@@ -1882,7 +2064,9 @@ function sumUsage(events, firstSeq) {
 }
 
 function workspaceFor(node, { workflowId, runId } = {}) {
-  const dir = STORAGE.workspaceForNode({
+  const store = workspaceContext.getStore();
+  if (!store) throw new Error('节点执行缺少工作区上下文');
+  const dir = store.paths.workspaceForNode({
     workflowId: workflowId || 'draft',
     runId: runId || `test-${Date.now().toString(36)}`,
     nodeId: node.id,

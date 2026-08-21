@@ -31,7 +31,7 @@ export function normalizeScriptTimeout(value) {
   return Math.max(SCRIPT_LIMITS.minTimeoutMs, Math.min(SCRIPT_LIMITS.maxTimeoutMs, Math.floor(number)));
 }
 
-export async function runScript({ code, input, workspaceDir, timeoutMs, signal, workspaceLimits } = {}) {
+export async function runScript({ code, input, workspaceDir, readWorkspaceDir, timeoutMs, signal, workspaceLimits } = {}) {
   const source = String(code || '');
   if (!source.trim()) throw new ScriptExecutionError('脚本代码不能为空', 'SCRIPT_EMPTY');
   if (Buffer.byteLength(source) > SCRIPT_LIMITS.maxCodeBytes) {
@@ -88,6 +88,7 @@ export async function runScript({ code, input, workspaceDir, timeoutMs, signal, 
       code: source,
       inputJson: encodedInput.json,
       workspaceDir,
+      readWorkspaceDir: readWorkspaceDir || workspaceDir,
       timeoutMs: effectiveTimeout,
       memoryLimitBytes: SCRIPT_LIMITS.memoryLimitBytes,
       stackLimitBytes: SCRIPT_LIMITS.stackLimitBytes,

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runScript } from '../lib/script-runner.js';
@@ -102,6 +102,30 @@ await test('工作区读写、列表、base64 和删除', async () => {
   assert.equal(result.value.list[0].path, 'nested/report.txt');
   assert.equal(result.value.removed, true);
   assert.equal(readFileSync(join(workspaceDir, 'blob.bin')).toString('hex'), '000102');
+});
+
+await test('可读取项目工作区，但写入和删除只作用于节点输出目录', async () => {
+  const projectDir = tempWorkspace();
+  const outputDir = join(projectDir, '.workflow-one', 'runtime', 'node-output');
+  mkdirSync(outputDir, { recursive: true });
+  writeFileSync(join(projectDir, 'source.txt'), 'project source');
+  writeFileSync(join(outputDir, 'temporary.txt'), 'node output');
+  const result = await runScript({
+    workspaceDir: outputDir,
+    readWorkspaceDir: projectDir,
+    input: {},
+    code: `function main(_input, workspace) {
+      const source = workspace.read('source.txt');
+      workspace.write('result.txt', source.toUpperCase());
+      const result = workspace.read('result.txt');
+      const removed = workspace.remove('temporary.txt');
+      return { source, result, removed };
+    }`,
+  });
+  assert.deepEqual(result.value, { source: 'project source', result: 'PROJECT SOURCE', removed: true });
+  assert.equal(readFileSync(join(projectDir, 'source.txt'), 'utf8'), 'project source');
+  assert.equal(readFileSync(join(outputDir, 'result.txt'), 'utf8'), 'PROJECT SOURCE');
+  assert.equal(existsSync(join(outputDir, 'temporary.txt')), false);
 });
 
 await test('源码、输入、输出和工作区写入上限生效', async () => {

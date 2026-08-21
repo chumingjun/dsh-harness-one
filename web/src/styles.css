@@ -338,8 +338,12 @@ body {
 .script-param-remove { color: var(--danger); }
 .script-param-error { margin: 0; color: #F87171; font-size: 11px; }
 .script-param-add { align-self: flex-start; }
-.script-json-input, .script-code-editor { font-family: var(--font-mono) !important; font-size: 12px !important; tab-size: 2; }
-.script-code-editor { min-height: 310px; white-space: pre; overflow: auto; resize: vertical; }
+.script-json-input { font-family: var(--font-mono) !important; font-size: 12px !important; tab-size: 2; }
+/* 脚本代码编辑器：容器样式继承 .tpl-cm，这里只调代码特有项 */
+.script-code-editor .cm-editor { font-size: 12.5px; line-height: 1.6; }
+.script-code-editor .cm-content { padding: 10px 12px; }
+.script-code-editor .cm-gutters { font-family: var(--font-mono); font-size: 11px; }
+.script-code-editor .cm-tooltip-autocomplete > ul > li { font-family: var(--font-mono); }
 .test-artifact-list { margin: 8px 0 0; padding-left: 20px; color: var(--fg-muted); font: 12px/1.6 var(--font-mono); }
 @media (max-width: 520px) { .script-param-head { grid-template-columns: minmax(0, 1fr) 28px; } .script-param-mode { grid-column: 1 / 3; grid-row: 2; } }
 

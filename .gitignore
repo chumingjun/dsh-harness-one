@@ -21,7 +21,10 @@ dist-release/
 # runtime state (top-level Express fallback demo)
 data/graph.json
 
-# runtime state (dsh plugin): secrets, run history, agent workspaces, uploads
+# workspace-local Workflow One state (graph, workflows, runs, node outputs, uploads)
+.workflow-one/
+
+# legacy runtime state (dsh plugin package layout; read-only compatibility)
 dsh-plugins/dsh-ccpg-orchestrator/data/credentials.json
 dsh-plugins/dsh-ccpg-orchestrator/data/runs/
 dsh-plugins/dsh-ccpg-orchestrator/data/run-artifacts/
