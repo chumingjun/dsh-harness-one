@@ -12,14 +12,14 @@ const baseGraph = () => ({
 
 test('addNode with after auto-connects and generates stable id', () => {
   const r = validateGraphOps(baseGraph(), [
-    { op: 'addNode', type: 'approval', label: '人工审批', after: 'n_agent_1' },
+    { op: 'addNode', type: 'condition', label: '条件判断', after: 'n_agent_1' },
   ]);
   assert.equal(r.ok, true);
   assert.equal(r.graph.nodes.length, 3);
   assert.equal(r.graph.edges.length, 2);
   const added = r.patch[0];
   assert.match(added.id, /^n_a/);
-  assert.equal(added.data.label, '人工审批');
+  assert.equal(added.data.label, '条件判断');
   const edge = r.patch[1];
   assert.equal(edge.op, 'connect');
   assert.equal(edge.from, 'n_agent_1');
@@ -28,7 +28,7 @@ test('addNode with after auto-connects and generates stable id', () => {
 
 test('unknown node type rejects whole batch', () => {
   const r = validateGraphOps(baseGraph(), [
-    { op: 'addNode', type: 'approval', label: '审批', after: 'n_agent_1' },
+    { op: 'addNode', type: 'condition', label: '条件', after: 'n_agent_1' },
     { op: 'addNode', type: 'robot', label: '坏类型' },
   ]);
   assert.equal(r.ok, false);

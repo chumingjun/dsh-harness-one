@@ -29,7 +29,7 @@ function upstreamText(ctx, used) {
   return parts.join('\n\n');
 }
 
-const META_ALLOWLIST = ['status', 'chars', 'durationMs', 'model', 'runtime', 'turns', 'usage', 'writeback', 'approvedBy', 'approvalComment', 'toleratedError'];
+const META_ALLOWLIST = ['status', 'chars', 'durationMs', 'model', 'runtime', 'turns', 'usage', 'writeback', 'toleratedError'];
 
 function safeNodeMeta(id, ctx) {
   const state = ctx.nodeStates?.get?.(id) ?? ctx.nodeStates?.[id] ?? {};

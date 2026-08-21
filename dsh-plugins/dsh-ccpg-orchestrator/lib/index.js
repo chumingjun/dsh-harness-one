@@ -153,7 +153,7 @@ export function apply(ctx, config) {
       },
     },
     canvas_graph_patch: {
-      description: '批量修改画布图（原子生效，出错整批拒绝）。每批 ≤60 个操作。ops 元素字段：op（必填，addNode|updateNode|renameNode|deleteNode|connect|deleteEdge|updateEdge）；addNode: type 节点类型 input/agent/script/condition/approval/http/output/note、label 中文名、data 节点字段对象、after 上游节点id自动连线、connect=false 关闭自动连线、position {x,y}；updateNode/renameNode/deleteNode/deleteEdge/updateEdge: id 目标id（updateNode 另需 data，renameNode 另需 label）；connect: from/to 源目标id，branch 条件分支 true/false。',
+      description: '批量修改画布图（原子生效，出错整批拒绝）。每批 ≤60 个操作。ops 元素字段：op（必填，addNode|updateNode|renameNode|deleteNode|connect|deleteEdge|updateEdge）；addNode: type 节点类型 input/agent/script/condition/http/output/note、label 中文名、data 节点字段对象、after 上游节点id自动连线、connect=false 关闭自动连线、position {x,y}；updateNode/renameNode/deleteNode/deleteEdge/updateEdge: id 目标id（updateNode 另需 data，renameNode 另需 label）；connect: from/to 源目标id，branch 条件分支 true/false。',
       parameters: {
         ops: {
           type: 'array', required: true,
@@ -1003,29 +1003,6 @@ export function apply(ctx, config) {
     json(res, 405, { error: 'method' });
   } });
 
-  // ---- 审批：挂起列表 + 批准/拒绝 ----
-  ctx.webServer.register({ kind: 'exact', path: '/wf1/api/approvals', async handler(req, res) {
-    const url = new URL(req.url, 'http://x');
-    const runId = url.searchParams.get('run') || '';
-    if (req.method === 'GET') {
-      const ids = runId ? [runId] : orch.currentRunIds();
-      const items = ids.flatMap((id) => orch.waitingApprovals(id).map((a) => ({ runId: id, ...a })));
-      return json(res, 200, { approvals: items });
-    }
-    if (req.method === 'POST') {
-      const body = await readBody(req);
-      if (!body?.runId || !body?.nodeId || !['approve', 'reject'].includes(body.decision)) {
-        return json(res, 400, { error: '需要 runId、nodeId 和 decision=approve|reject' });
-      }
-      const ok = orch.decide(body.runId, body.nodeId, body.decision, {
-        by: String(body.by || 'user').slice(0, 40),
-        comment: String(body.comment || '').slice(0, 500),
-      });
-      return json(res, 200, { ok, runId: body.runId, nodeId: body.nodeId, decision: body.decision });
-    }
-    json(res, 405, { error: 'method' });
-  } });
-
   ctx.webServer.register({ kind: 'exact', path: '/wf1/api/run/cancel', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
@@ -1033,8 +1010,7 @@ export function apply(ctx, config) {
     json(res, 200, { ok, runId: body?.runId || null });
   } });
 
-  // 单节点试运行：不落历史，结果直接返回
-  // 单节点试运行：走引擎注册表（与真实运行同一执行路径）；支持手填假输入与审批模拟。
+  // 单节点试运行：走引擎注册表（与真实运行同一执行路径）；支持手填假输入。
   ctx.webServer.register({ kind: 'exact', path: '/wf1/api/node/test', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
@@ -1046,7 +1022,7 @@ export function apply(ctx, config) {
     let workflowContext; try { workflowContext = previewWorkflowContext(body, persistedWorkflow); } catch (error) { return routeError(res, error); }
     let runInputs; try { runInputs = assertSafeContextObject(body?.runInputs ?? body?.inputs, 'runInputs'); } catch (error) { return routeError(res, error); }
 
-    // 手填假输入：{ nodeId: text }（前端弹窗可编辑/禁用各上游）；审批模拟：'approve'|'reject'
+    // 手填假输入：{ nodeId: text }（前端弹窗可编辑/禁用各上游）
     const fakeOutputs = new Map(Object.entries(body.upstreamOutputs || {}));
     const labels = new Map(Object.entries(body.upstreamLabels || {}));
     const runId = `test_${Date.now().toString(36)}`;
@@ -1059,7 +1035,6 @@ export function apply(ctx, config) {
       globalVariables: globals.globalVariables,
       workflowVariables: workflowContext.workflowVariables,
       runInputs,
-      pendingApprovals: new Map(),
       emit: broadcast, // runAgentNode 的流式事件直接进 SSE
       nodeRunner: (node, run, s, ctl) => runAgentNode(ctx, node, run, s, ctl), // agent kind 经此调用
       scriptRunner: orch.scriptRunner,
@@ -1084,29 +1059,7 @@ export function apply(ctx, config) {
     try {
       const kind = getKind(node.type);
       if (kind) {
-        // 审批模拟：不挂起，直接按 body.approvalDecision 出结果
-        if (node.type === 'approval') {
-          const decision = body.approvalDecision === 'reject' ? 'reject' : 'approve';
-          const tctx = orchLike.templateCtx(node);
-          const content = renderTemplate(node.data?.inputTemplate || '{{$upstream}}', tctx).text || '(无内容)';
-          const note = String(node.data?.note || '请人工确认后继续');
-          const output = decision === 'approve'
-            ? `【已批准·模拟】${note}\n审批内容：\n${content}`
-            : `【已拒绝·模拟】（真实运行中此节点会挂起等待人工决定）`;
-          const normalized = normalizeExecutionResult({
-            output,
-            data: {
-              decision,
-              by: 'test-user',
-              comment: '',
-              note,
-              content,
-            },
-          });
-          broadcast('node-status', { runId, nodeId: node.id, status: decision === 'approve' ? 'success' : 'error', test: true, hasStructured: true, outputType: 'json', simulated: decision });
-          return json(res, 200, { ok: true, output, structuredOutput: normalized.structuredOutput, simulated: decision });
-        }
-        // 其余类型：真实执行（agent 会流式推 agent-progress；输出节点 wantsSink 在试运行中跳过写回）
+        // 真实执行（agent 会流式推 agent-progress；输出节点 wantsSink 在试运行中跳过写回）
         const r = await kind.execute({
           node, s: orchLike, engine: orchLike,
           signal: testAbort.signal, emit: broadcast, runId,
@@ -1319,7 +1272,6 @@ export function apply(ctx, config) {
     json(res, 200, {
       running: runningIds,
       lastRun,
-      waitingApprovals: runningIds.flatMap((id) => orch.waitingApprovals(id).map((a) => ({ runId: id, ...a }))),
     });
   } });
 

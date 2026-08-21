@@ -18,17 +18,13 @@ const STATIC_DATA_SCHEMAS = {
   input: objectSchema({
     text: field('string', '输入节点配置文本'), triggerInput: field('string', '本次触发输入'), upstreamText: field('string', '直接上游拼接文本'),
   }),
-  approval: objectSchema({
-    decision: field('string', '审批决定', { enum: ['approve', 'reject'] }), by: field('string', '审批人'),
-    comment: field('string', '审批意见'), note: field('string', '审批说明'), content: field('string', '审批内容'),
-  }),
 };
 
 const META_SCHEMA = objectSchema({
   status: field('string', '节点执行状态'), chars: field('number', '文本输出字符数'), durationMs: field('number', '执行耗时（毫秒）'),
   model: field('string', '使用的模型'), runtime: field('string', '执行运行时'), turns: field('number', '智能体轮数'),
-  usage: objectSchema({}, 'Token 用量'), writeback: field('any', '输出写回结果'), approvedBy: field('string', '审批人'),
-  approvalComment: field('string', '审批意见'), toleratedError: field('string', '容错继续的错误'),
+  usage: objectSchema({}, 'Token 用量'), writeback: field('any', '输出写回结果'),
+  toleratedError: field('string', '容错继续的错误'),
 });
 
 function inferType(value, fallback = 'any') {

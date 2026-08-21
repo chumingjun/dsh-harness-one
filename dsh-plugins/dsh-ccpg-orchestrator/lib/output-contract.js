@@ -133,7 +133,7 @@ export function mergeExecutionResults(baseResult, patchResult) {
   };
 }
 
-const NODE_META_ALLOWLIST = ['status', 'chars', 'durationMs', 'model', 'runtime', 'turns', 'usage', 'writeback', 'approvedBy', 'approvalComment', 'toleratedError'];
+const NODE_META_ALLOWLIST = ['status', 'chars', 'durationMs', 'model', 'runtime', 'turns', 'usage', 'writeback', 'toleratedError'];
 
 export function safeNodeStateMeta(state = {}) {
   return Object.fromEntries(NODE_META_ALLOWLIST.filter((key) => state[key] !== undefined).map((key) => [key, state[key]]));
@@ -159,7 +159,6 @@ export function describeNodeOutput(node) {
   if (type === 'http') data.fields = ['status', 'ok', 'headers', 'body', 'json'];
   else if (type === 'condition') data.fields = ['branch', 'source', 'include', 'exclude'];
   else if (type === 'input') data.fields = ['text', 'triggerInput', 'upstreamText'];
-  else if (type === 'approval') data.fields = ['decision', 'by', 'comment', 'note', 'content'];
   else if (type === 'script' && node?.data?.outputSchema) data.schema = node.data.outputSchema;
   return base;
 }

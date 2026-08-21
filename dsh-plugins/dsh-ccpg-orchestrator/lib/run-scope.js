@@ -74,7 +74,7 @@ export function selectScopedRun({ runId, workflowId, graph }, { readRun, runs = 
   return { run: null, scope: 'draft' };
 }
 
-const STATE_SUMMARY_KEYS = ['status', 'chars', 'durationMs', 'model', 'runtime', 'turns', 'usage', 'writeback', 'approvedBy', 'approvalComment', 'toleratedError', 'error'];
+const STATE_SUMMARY_KEYS = ['status', 'chars', 'durationMs', 'model', 'runtime', 'turns', 'usage', 'writeback', 'toleratedError', 'error'];
 
 export function summarizeNodeStates(nodeStates = {}) {
   return Object.fromEntries(Object.entries(nodeStates || {}).map(([nodeId, state]) => [nodeId,

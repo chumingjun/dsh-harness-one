@@ -23,7 +23,7 @@ function nodeEnvelope(id, ctx) {
   const text = String(ctx.outputs?.get(id) ?? '');
   const state = ctx.nodeStates?.get?.(id) ?? ctx.nodeStates?.[id] ?? {};
   const meta = {};
-  for (const key of ['status', 'chars', 'durationMs', 'model', 'runtime', 'turns', 'usage', 'writeback', 'approvedBy', 'approvalComment', 'toleratedError']) {
+  for (const key of ['status', 'chars', 'durationMs', 'model', 'runtime', 'turns', 'usage', 'writeback', 'toleratedError']) {
     if (state[key] !== undefined) meta[key] = state[key];
   }
   return { text, data: structured?.value ?? extractJson(text), meta };

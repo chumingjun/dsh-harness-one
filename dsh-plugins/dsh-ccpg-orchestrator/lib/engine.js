@@ -30,7 +30,7 @@ let runSeq = 0;
 //   kind.edgeTaken       可选。(s, node, edge) => boolean，控制分支边是否放行
 //   kind.lint            可选。(node, lintCtx) => issues[]（{level:'error'|'warn', message}）
 //   kind.wantsSink       可选。true = 成功后调用 engine.outputSink（输出写回等后处理）
-// 新增节点类型：export const myKind = {...}; registerKind(myKind) —— 引擎/审批挂起/
+// 新增节点类型：export const myKind = {...}; registerKind(myKind) —— 引擎/
 // 超时/取消/失败传播/历史持久化全部自动获得。
 export const nodeKinds = new Map();
 
@@ -96,7 +96,6 @@ export class Orchestrator {
       activeCount: 0, concurrency: 4,
       finished: false, startedAtMs: Date.now(),
       nodeAbort: new Map(),
-      pendingApprovals: new Map(), // nodeId → { resolve, reject, payload }
     };
     for (const n of graph.nodes) {
       s.incoming.set(n.id, []);
@@ -170,40 +169,15 @@ export class Orchestrator {
     for (const ac of s.nodeAbort.values()) {
       try { ac.abort(); } catch { /* 已中止 */ }
     }
-    for (const ap of s.pendingApprovals.values()) {
-      try { ap.resolve({ decision: 'canceled' }); } catch { /* noop */ }
-    }
     this._maybeFinish(s);
   }
 
   currentRunIds() { return [...this.runs.keys()]; }
 
-  // 人工审批：批准/拒绝一个挂起的审批节点（by/comment 进入决定结果与运行记录）
-  decide(runId, nodeId, decision, { by, comment } = {}) {
-    const entry = this.runs.get(runId);
-    const ap = entry?.s.pendingApprovals.get(nodeId);
-    if (!ap) return false;
-    entry.s.pendingApprovals.delete(nodeId);
-    ap.resolve({ decision: decision === 'approve' ? 'approve' : 'reject', by: by || 'user', comment: comment || '' });
-    return true;
-  }
-
-  waitingApprovals(runId) {
-    const entry = this.runs.get(runId);
-    if (!entry) return [];
-    return [...entry.s.pendingApprovals.entries()].map(([nodeId, ap]) => ({ nodeId, ...ap.payload }));
-  }
-
   _maybeFinish(s) {
     if (s.finished) return;
-    // 收敛判据：全部完成（remaining≤0），或剩余的未完成节点全部是挂起审批（孤立审批等）
-    if (s.remaining <= 0 || (s.pendingApprovals.size > 0 && s.remaining <= s.pendingApprovals.size)) {
+    if (s.remaining <= 0) {
       s.finished = true;
-      // 兜底：settle 挂起审批，让审批 Promise 以 canceled 返回、节点正常收尾，不留 queued 僵尸
-      for (const [nodeId, ap] of s.pendingApprovals) {
-        s.pendingApprovals.delete(nodeId);
-        try { ap.resolve({ decision: 'canceled' }); } catch { /* noop */ }
-      }
       this.runs.delete(s.run.runId);
       s.resolve?.();
     }
@@ -230,6 +204,7 @@ export class Orchestrator {
     const ac = new AbortController();
     s.nodeAbort.set(nodeId, ac);
     const t0 = Date.now();
+    const startedAt = new Date(t0).toISOString();
     this.emit('node-status', { runId: run.runId, nodeId, status: 'running' });
     const timeoutMs = Number(node.data?.timeoutSec) > 0 ? Number(node.data.timeoutSec) * 1000 : NODE_TIMEOUT_MS;
     let timedOut = false;
@@ -246,7 +221,7 @@ export class Orchestrator {
         const result = normalizeExecutionResult(out);
         run.outputs[node.id] = result.output;
         run.structuredOutputs[node.id] = result.structuredOutput;
-        run.nodeStates[node.id] = { status: 'success', chars: out.length, durationMs: 0, passThrough: true };
+        run.nodeStates[node.id] = { status: 'success', chars: out.length, durationMs: 0, startedAt, passThrough: true };
         this.emit('node-status', { runId: run.runId, nodeId: node.id, status: 'success', passThrough: true, chars: out.length });
         return this._onNodeDone(s, node.id, false);
       }
@@ -274,7 +249,7 @@ export class Orchestrator {
       extra = result.extra;
       run.outputs[node.id] = output;
       run.structuredOutputs[node.id] = result.structuredOutput;
-      run.nodeStates[node.id] = { ...extra, status: 'success', chars: output.length, durationMs: Date.now() - t0 };
+      run.nodeStates[node.id] = { ...extra, status: 'success', chars: output.length, durationMs: Date.now() - t0, startedAt };
       // 详情弹窗数据：extra 携带的输入/轨迹只进运行记录，不进高频事件流
       this.emit('node-status', {
         runId: run.runId, nodeId: node.id, status: 'success', chars: output.length,
@@ -312,7 +287,7 @@ export class Orchestrator {
         const out = `(节点失败后继续：${msg})`;
         run.outputs[node.id] = out;
         run.structuredOutputs[node.id] = normalizeExecutionResult(out).structuredOutput;
-        run.nodeStates[node.id] = { status: 'success', chars: out.length, durationMs: Date.now() - t0, toleratedError: msg };
+        run.nodeStates[node.id] = { status: 'success', chars: out.length, durationMs: Date.now() - t0, startedAt, toleratedError: msg };
         this.emit('node-status', { runId: run.runId, nodeId: node.id, status: 'success', toleratedError: msg, chars: out.length, outputPreview: out });
         return this._onNodeDone(s, node.id, false);
       }
@@ -320,7 +295,7 @@ export class Orchestrator {
       run.nodeStates[node.id] = {
         ...errDetails,
         status: canceled ? 'canceled' : 'error', error: canceled ? '运行已取消' : msg,
-        durationMs: Date.now() - t0,
+        durationMs: Date.now() - t0, startedAt,
       };
       this.emit('node-status', {
         runId: run.runId, nodeId: node.id, status: canceled ? 'canceled' : 'error', error: canceled ? '运行已取消' : msg,
@@ -442,40 +417,6 @@ export class Orchestrator {
     return { output: text, data: { branch, source: src, include, exclude } };
   }
 
-  // 审批节点：挂起等待人工决定。批准 → 输出审批说明继续下游；拒绝 → 抛错走失败传播。
-  // 超时/取消由 _executeNode 的 timer/abort 统一处理（resolve 后 ac.abort 已触发也不会重复 settle）。
-  async _runApprovalNode(node, s, ac) {
-    const ctx = this.templateCtx(node, s);
-    const content = this.renderTemplate(node.data?.inputTemplate || '{{$upstream}}', ctx).text || '(无内容)';
-    const note = String(node.data?.note || '请人工确认后继续');
-    const runId = s.run.runId;
-    this.emit('node-status', { runId, nodeId: node.id, status: 'waiting' });
-    this.emit('approval-pending', {
-      runId, nodeId: node.id,
-      label: node.data?.label || node.id,
-      note, content: content.slice(0, 1500),
-    });
-    const decision = await new Promise((resolve, reject) => {
-      s.pendingApprovals.set(node.id, {
-        resolve,
-        reject,
-        payload: { label: node.data?.label || node.id, note, content: content.slice(0, 1500) },
-      });
-      ac.signal.addEventListener('abort', () => {
-        if (s.pendingApprovals.delete(node.id)) resolve({ decision: 'canceled' });
-      }, { once: true });
-    });
-    if (decision.decision === 'approve') {
-      return `【已批准】${note}
-审批内容：
-${content}`;
-    }
-    if (decision.decision === 'reject') {
-      throw new Error('人工审批拒绝');
-    }
-    throw new Error('运行已取消');
-  }
-
   _runOutputNode(node, s) {
     const ctx = this.templateCtx(node, s);
     const rendered = this.renderTemplate(node.data?.inputTemplate || '', ctx);
@@ -525,44 +466,6 @@ registerKind({
     const out = s.run.outputs[node.id] || '';
     const m = out.match(CONDITION_VERDICT_RE);
     return String(structuredBranch || (m ? m[1] : 'true')) === String(want);
-  },
-});
-
-registerKind({
-  type: 'approval',
-  async execute({ node, s, engine, emit, runId, signal }) {
-    const content = engine.renderTemplate(node.data?.inputTemplate || '{{$upstream}}', engine.templateCtx(node, s)).text || '(无内容)';
-    const note = String(node.data?.note || '请人工确认后继续');
-    emit('node-status', { runId, nodeId: node.id, status: 'waiting' });
-    emit('approval-pending', {
-      runId, nodeId: node.id,
-      label: node.data?.label || node.id,
-      note, content: content.slice(0, 1500),
-    });
-    const decision = await new Promise((resolve) => {
-      s.pendingApprovals.set(node.id, {
-        resolve,
-        reject: resolve,
-        payload: { label: node.data?.label || node.id, note, content: content.slice(0, 1500) },
-      });
-      signal.addEventListener('abort', () => {
-        if (s.pendingApprovals.delete(node.id)) resolve({ decision: 'canceled' });
-      }, { once: true });
-    });
-    if (decision.decision === 'approve') {
-      return {
-        output: `【已批准】${note}\n审批人：${decision.by || 'user'}${decision.comment ? `\n审批意见：${decision.comment}` : ''}\n审批内容：\n${content}`,
-        data: { decision: 'approve', by: decision.by || 'user', comment: decision.comment || '', note, content },
-        approvedBy: decision.by || 'user',
-        approvalComment: decision.comment || '',
-      };
-    }
-    if (decision.decision === 'reject') {
-      const err = new Error(`人工审批拒绝${decision.comment ? `（${decision.comment}）` : ''}`);
-      err.approval = { by: decision.by || 'user', comment: decision.comment || '' };
-      throw err;
-    }
-    throw new Error('运行已取消');
   },
 });
 

@@ -28,7 +28,7 @@ const TOOL_LABELS = {
   feishu_doc_write: '写飞书文档',
 };
 
-const TYPE_TEXT = { input: '输入', agent: '智能体', output: '输出', condition: '条件', approval: '审批', http: 'HTTP', script: '脚本', note: '注释' };
+const TYPE_TEXT = { input: '输入', agent: '智能体', output: '输出', condition: '条件', http: 'HTTP', script: '脚本', note: '注释' };
 
 /** 可折叠分区：open 受控（非受控时 defaultOpen 兜底），标题 + 提示 + 计数徽标 */
 function Section({ title, hint, count, defaultOpen = true, open, onToggle, children }) {
@@ -332,33 +332,6 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
                 placeholder="咨询, 无需上门" />
             </Field>
             <p className="sec-hint">命中「是」走 branch=true 连线；「否」走 false。选中连线可改分支。</p>
-          </Section>
-        </>
-      )}
-
-      {nodeType === 'approval' && (
-        <>
-          <Section title="审批设置">
-            <TemplateEditor
-              {...templateProps}
-              label="审批说明" hint="展示给审批人"
-              rows={2}
-              value={d.note || ''}
-              onChange={(v) => set({ note: v })}
-              placeholder="请人工确认后继续"
-              compact
-            />
-          </Section>
-          <Section title="送审内容">
-            <TemplateEditor
-              {...templateProps}
-              label="送审内容" hint="留空时取全部上游输出"
-              rows={3}
-              value={d.inputTemplate || ''}
-              onChange={(v) => set({ inputTemplate: v })}
-              placeholder="留空 = 全部上游输出"
-            />
-            <p className="sec-hint">运行到此节点会挂起，等待画布顶部审批条的批准 / 拒绝；拒绝则下游跳过。</p>
           </Section>
         </>
       )}

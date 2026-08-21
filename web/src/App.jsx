@@ -62,7 +62,6 @@ export default function App() {
   const [dirty, setDirty] = useState(false);
   const [modal, setModal] = useState(null); // { type: 'confirm'|'prompt'|'rename', ... }
   const [progress, setProgress] = useState({}); // nodeId → { turns, preview }
-  const [approvals, setApprovals] = useState([]); // 挂起审批 [{runId,nodeId,label,note,content}]
   const [credOpen, setCredOpen] = useState(false);
   const [variableCenterOpen, setVariableCenterOpen] = useState(false);
   const [globalVariableEpoch, setGlobalVariableEpoch] = useState(0);
@@ -71,8 +70,6 @@ export default function App() {
   const [testNode, setTestNode] = useState(null); // 试运行弹窗目标节点
   const [nodeDetail, setNodeDetail] = useState(null); // 日志行点击 → { runId, nodeId }
   const [feishuCreds, setFeishuCreds] = useState([]);
-  const [approverName, setApproverName] = useState(() => localStorage.getItem('wf1:approver') || '');
-  const [approvalDrafts, setApprovalDrafts] = useState({}); // `${runId}:${nodeId}` → 意见草稿
   const { screenToFlowPosition, fitView } = useReactFlow();
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
@@ -176,14 +173,13 @@ export default function App() {
     (async () => {
       const j = (p) => fetch(apiUrl(p)).then((r) => r.json()).catch(() => null);
       // 并行拉取全部初始数据（原先逐条 await 串行，首屏时间被逐段叠加）
-      const [catalogData, skillsData, llmData, runtimeData, approvalsData, credsData, larkData, runsData] = await Promise.all([
-        j('/tools'), j('/skills'), j('/llm-config'), j('/runtime-config'), j('/approvals'), j('/feishu-credentials'), j('/lark-auth'), j('/runs'),
+      const [catalogData, skillsData, llmData, runtimeData, credsData, larkData, runsData] = await Promise.all([
+        j('/tools'), j('/skills'), j('/llm-config'), j('/runtime-config'), j('/feishu-credentials'), j('/lark-auth'), j('/runs'),
       ]);
       if (catalogData) setCatalog(catalogData);
       if (skillsData) setSkills(skillsData.skills || []);
       if (llmData) setLLMConfig(llmData);
       if (runtimeData) setRuntime(runtimeData.runtime || { available: false });
-      if (approvalsData) setApprovals(approvalsData.approvals || []);
       if (credsData) setFeishuCreds(credsData.credentials || []);
       if (larkData) setLarkStatus(larkData.status || null);
       const latest = runsData?.runs?.[0];
@@ -248,16 +244,10 @@ export default function App() {
         completed.add(p.nodeId);
         terminalNodesByRunRef.current.set(p.runId, completed);
         setRunStatus((s) => (s.runId === p.runId ? { ...s, done: completed.size } : s));
-        setApprovals((list) => list.filter((a) => !(a.runId === p.runId && a.nodeId === p.nodeId)));
       }
     };
 
     es.addEventListener('node-status', (e) => applyStatus(JSON.parse(e.data)));
-    es.addEventListener('approval-pending', (e) => {
-      const p = JSON.parse(e.data);
-      setApprovals((list) => [...list.filter((a) => !(a.runId === p.runId && a.nodeId === p.nodeId)), p]);
-      toast(`⏸ 「${p.label}」等待人工审批`, 'warn', 5000);
-    });
     es.addEventListener('agent-progress', (e) => {
       const p = JSON.parse(e.data);
       setProgress((prev) => ({ ...prev, [p.nodeId]: p }));
@@ -591,17 +581,6 @@ export default function App() {
     if (!res.ok) toast(`启动失败：${data.error}`, 'error');
     else if (data.lint?.issues?.length) toast(`提示：${data.lint.issues.length} 条警告（见图检查）`, 'warn');
   }, [save, setNodes, toGraph, triggerInput, runInputs, currentWf, toast, doLint]);
-
-  const decideApproval = useCallback(async (ap, decision, comment = '') => {
-    setApprovals((list) => list.filter((a) => !(a.runId === ap.runId && a.nodeId === ap.nodeId)));
-    const res = await fetch(apiUrl('/approvals'), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ runId: ap.runId, nodeId: ap.nodeId, decision, by: approverName, comment }),
-    });
-    const d = await res.json();
-    if (d.ok) toast(decision === 'approve' ? `已批准「${ap.label}」` : `已拒绝「${ap.label}」`, decision === 'approve' ? 'success' : 'warn');
-    else toast('审批失败：该挂起已不存在', 'error');
-  }, [toast, approverName]);
 
   const cancelRun = useCallback(async () => {
     if (!runStatus.runId) return;
@@ -1151,38 +1130,6 @@ export default function App() {
       </header>
 
       <div className="main">
-        {approvals.length > 0 && (
-          <div className="approval-bar">
-            <div className="approval-me">
-              <input
-                className="approval-name" placeholder="你的名字（审批人）"
-                value={approverName}
-                onChange={(e) => { setApproverName(e.target.value); localStorage.setItem('wf1:approver', e.target.value); }}
-              />
-            </div>
-            {approvals.map((ap) => {
-              const k = `${ap.runId}:${ap.nodeId}`;
-              return (
-              <div key={k} className="approval-card">
-                <div className="approval-main">
-                  <strong>⏸ {ap.label}</strong>
-                  <span className="sec-hint">{ap.note}</span>
-                  <details className="approval-content"><summary>查看内容</summary><pre>{ap.content}</pre></details>
-                  <input
-                    className="approval-comment" placeholder="审批意见（可选，随决定留痕）"
-                    value={approvalDrafts[k] || ''}
-                    onChange={(e) => setApprovalDrafts((m) => ({ ...m, [k]: e.target.value }))}
-                  />
-                </div>
-                <div className="approval-actions">
-                  <button className="btn btn-primary btn-sm" onClick={() => decideApproval(ap, 'approve', approvalDrafts[k] || '')}>✓ 批准</button>
-                  <button className="btn btn-danger btn-sm" onClick={() => decideApproval(ap, 'reject', approvalDrafts[k] || '')}>✗ 拒绝</button>
-                </div>
-              </div>
-              );
-            })}
-          </div>
-        )}
         {view === 'workflows' ? (
           <div className="wf-view">
             <WorkflowList currentId={currentWf?.id} onOpen={openWorkflow} onNew={newWorkflow} />
@@ -1232,7 +1179,7 @@ export default function App() {
             <MiniMap
               pannable
               zoomable
-              nodeColor={(n) => ({ agent: '#8B5CF6', input: '#38BDF8', script: '#F97316', condition: '#F59E0B', approval: '#FB7185', http: '#34D399', output: '#A3E635', note: '#78716C' })[n.data?.nodeType] || '#57534E'}
+              nodeColor={(n) => ({ agent: '#8B5CF6', input: '#38BDF8', script: '#F97316', condition: '#F59E0B', http: '#34D399', output: '#A3E635', note: '#78716C' })[n.data?.nodeType] || '#57534E'}
               maskColor="rgba(20,18,15,0.7)"
             />
           </ReactFlow>

@@ -111,6 +111,8 @@ export class Orchestrator extends EventEmitter {
     const s = this._scheduler;
     const { run } = s;
     const toolCtx = { attachments: s.attachmentRefs };
+    const t0 = Date.now();
+    const startedAt = new Date(t0).toISOString();
     this.emit('node-status', { runId: run.runId, nodeId: node.id, status: 'running' });
     try {
       let output;
@@ -135,6 +137,7 @@ export class Orchestrator extends EventEmitter {
       if (extra?.data !== undefined) run.structuredOutputs[node.id] = { version: 1, type: 'json', mediaType: 'application/json', value: extra.data, ...(extra.schema ? { schema: extra.schema } : {}) };
       const state = {
         status: 'success', chars: output.length,
+        durationMs: Date.now() - t0, startedAt,
         ...(modelUsed ? { model: modelUsed } : {}),
         ...(extra?.provenance || extra?.trace ? { ...extra.provenance, ...(extra.trace ? { planTrace: extra.trace } : {}) } : {}),
         ...(extra?.artifacts?.length ? { artifacts: extra.artifacts } : {}),
@@ -154,7 +157,7 @@ export class Orchestrator extends EventEmitter {
       this._onNodeDone(node.id, false);
     } catch (err) {
       const msg = String(err.message || err);
-      run.nodeStates[node.id] = { status: 'error', error: msg };
+      run.nodeStates[node.id] = { status: 'error', error: msg, durationMs: Date.now() - t0, startedAt };
       this.emit('node-status', { runId: run.runId, nodeId: node.id, status: 'error', error: msg });
       this._onNodeDone(node.id, true);
     }

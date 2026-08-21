@@ -278,69 +278,6 @@ await test('lint：模板引用缺失/空提示词/孤立输出可检出', () =>
   assert.match(msgs, /没有上游连线/);
 });
 
-await test('审批节点：挂起 → 批准 → 下游继续', async () => {
-  const { orch } = makeOrch(async (node) => ({ output: `[${node.data.label}]` }));
-  const p = orch.run({
-    nodes: [
-      { id: 'in', type: 'input', data: { label: '输入', text: '紧急工单内容' } },
-      { id: 'ap', type: 'approval', data: { label: '主管审批', note: '确认派单' } },
-      { id: 'out', type: 'output', data: { label: '输出' } },
-    ],
-    edges: [{ id: 'e1', source: 'in', target: 'ap' }, { id: 'e2', source: 'ap', target: 'out' }],
-  });
-  await delay(150);
-  const runId = orch.currentRunIds()[0];
-  const waiting = orch.waitingApprovals(runId);
-  assert.equal(waiting.length, 1);
-  assert.equal(waiting[0].nodeId, 'ap');
-  assert.ok(waiting[0].content.includes('紧急工单内容'));
-  orch.decide(runId, 'ap', 'approve');
-  const run = await p;
-  assert.equal(run.nodeStates.ap.status, 'success');
-  assert.ok(run.outputs.ap.includes('已批准'));
-  assert.equal(run.nodeStates.out.status, 'success');
-  assert.equal(run.status, 'success');
-});
-
-await test('审批节点：拒绝 → 节点 error，下游跳过，运行 error', async () => {
-  const { orch } = makeOrch(async (node) => ({ output: 'x' }));
-  const p = orch.run({
-    nodes: [
-      { id: 'in', type: 'input', data: { label: '输入', text: '内容' } },
-      { id: 'ap', type: 'approval', data: { label: '审批' } },
-      { id: 'out', type: 'output', data: { label: '输出' } },
-    ],
-    edges: [{ id: 'e1', source: 'in', target: 'ap' }, { id: 'e2', source: 'ap', target: 'out' }],
-  });
-  await delay(150);
-  const runId = orch.currentRunIds()[0];
-  orch.decide(runId, 'ap', 'reject');
-  const run = await p;
-  assert.equal(run.nodeStates.ap.status, 'error');
-  assert.match(run.nodeStates.ap.error, /拒绝/);
-  assert.equal(run.nodeStates.out.status, 'skipped');
-  assert.equal(run.status, 'error');
-});
-
-await test('审批节点：运行取消 → 挂起审批被清空', async () => {
-  const { orch } = makeOrch(async () => ({ output: 'x' }));
-  const p = orch.run({
-    nodes: [
-      { id: 'in', type: 'input', data: { label: '输入', text: '内容' } },
-      { id: 'ap', type: 'approval', data: { label: '审批', timeoutSec: 30 } },
-      { id: 'out', type: 'output', data: { label: '输出' } },
-    ],
-    edges: [{ id: 'e1', source: 'in', target: 'ap' }, { id: 'e2', source: 'ap', target: 'out' }],
-  });
-  await delay(150);
-  const runId = orch.currentRunIds()[0];
-  assert.equal(orch.waitingApprovals(runId).length, 1);
-  orch.cancel(runId, '用户取消');
-  const run = await p;
-  assert.equal(run.status, 'canceled');
-  assert.ok(['canceled', 'skipped'].includes(run.nodeStates.ap.status));
-});
-
 await test('outputSink：输出节点后处理被调用并可改写输出', async () => {
   const { orch } = makeOrch(async () => ({ output: 'x' }));
   let sinkCalled = false;
@@ -356,22 +293,6 @@ await test('outputSink：输出节点后处理被调用并可改写输出', asyn
   assert.ok(sinkCalled);
   assert.ok(run.outputs.out.includes('+SINK'));
   assert.deepEqual(run.nodeStates.out.writeback, { ok: true });
-});
-
-await test('孤立审批节点：主链收敛 → 自动 settle，不留 queued 僵尸', async () => {
-  const { orch } = makeOrch(async () => ({ output: 'x' }));
-  const p = orch.run({
-    nodes: [
-      { id: 'in', type: 'input', data: { label: '输入', text: '内容' } },
-      { id: 'out', type: 'output', data: { label: '输出' } },
-      { id: 'lonely', type: 'approval', data: { label: '孤立审批', timeoutSec: 60 } },
-    ],
-    edges: [{ id: 'e1', source: 'in', target: 'out' }],
-  });
-  const run = await p;
-  assert.equal(run.status, 'success');
-  assert.equal(run.nodeStates.lonely.status, 'canceled');
-  assert.equal(orch.currentRunIds().length, 0);
 });
 
 await test('HTTP 节点：真实请求本地服务（allowPrivate 放行）', async () => {
@@ -638,19 +559,6 @@ await test('condition 与 HTTP 首批结构化输出可用', async () => {
   });
   assert.equal(run.structuredOutputs.c.value.branch, 'true');
   assert.equal(run.structuredOutputs.c.type, 'json');
-});
-
-await test('approval 成功输出包含结构化决定', async () => {
-  const { orch } = makeOrch(null);
-  const p = orch.run({
-    nodes: [{ id: 'ap', type: 'approval', data: { label: 'AP', note: 'go' } }], edges: [],
-  });
-  await delay(80);
-  const runId = orch.currentRunIds()[0];
-  orch.decide(runId, 'ap', 'approve', { by: 'alice', comment: 'ok' });
-  const run = await p;
-  assert.deepEqual(run.structuredOutputs.ap.value.decision, 'approve');
-  assert.equal(run.structuredOutputs.ap.value.by, 'alice');
 });
 
 await test('lint 检出 canonical 非直接上游与无效 agent schema', () => {

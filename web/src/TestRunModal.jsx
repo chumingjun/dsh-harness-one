@@ -1,5 +1,5 @@
 // 试运行弹窗：手填/编辑假输入（默认取各上游最近运行输出，可禁用单个上游）、
-// 审批节点选模拟分支；进行中显示流式轮次与预览；结果与最近几次对比。
+// 进行中显示流式轮次与预览；结果与最近几次对比。
 import { useEffect, useRef, useState } from 'react';
 import { apiUrl } from './api.js';
 import { parseJsonResponseText } from './json-response.js';
@@ -17,7 +17,6 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
     }
     return init;
   });
-  const [approvalDecision, setApprovalDecision] = useState('approve');
   const [trigger, setTrigger] = useState(triggerInput || '');
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(null); // { turns, preview }
@@ -27,7 +26,6 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
   const esRef = useRef(null);
   const requestAbortRef = useRef(null);
 
-  const isApproval = node.data.nodeType === 'approval';
   const hasUpstream = upstreamNodes.length > 0;
 
   // 流式进度：监听 agent-progress（runId 匹配 test_ 前缀即试运行）
@@ -87,7 +85,6 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
           inputSchema,
           runInputs,
           triggerInput: trigger,
-          approvalDecision,
         }),
       };
       const d = await fetchTrialJson(url, request);
@@ -152,18 +149,6 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
         </div>
       )}
 
-      {/* 审批模拟 */}
-      {isApproval && (
-        <div className="test-approval">
-          <div className="test-sec-title">审批模拟（真实运行会挂起等人工决定）</div>
-          <div className="tool-chips">
-            {[['approve', '模拟批准'], ['reject', '模拟拒绝']].map(([v, l]) => (
-              <button key={v} className={`chip ${approvalDecision === v ? 'chip-on' : ''}`} onClick={() => setApprovalDecision(v)}>{l}</button>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* 流式进度 */}
       {running && progress && (
         <div className="test-progress">
@@ -199,7 +184,6 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
               </ul>
             </details>
           )}
-          {result.simulated && <p className="sec-hint">模拟分支：{result.simulated === 'approve' ? '批准' : '拒绝'}（未产生真实审批）</p>}
         </div>
       )}
 
