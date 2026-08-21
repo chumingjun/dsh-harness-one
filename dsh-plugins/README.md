@@ -4,7 +4,7 @@
 
 | 包 | 职责 |
 |---|---|
-| `dsh-ccpg-tools` | feishu_doc_read / feishu_doc_write / load_skill 注册 `ctx.tools` |
+| `dsh-ccpg-tools` | feishu_doc_read / feishu_doc_write 注册 `ctx.tools` |
 | `dsh-ccpg-orchestrator` | DAG 编排 + 节点级 `ctx.agents` 进程内 agent + QuickJS 脚本节点 + `/wf1/api/*` HTTP/SSE |
 | `dsh-ccpg-web` | 画布静态托管 `/wf1/` |
 | `dsh-ccpg-canvasui` | 官方 dsh Web UI 的画布视图（conversation.view tab，iframe 载 /wf1/）+ better-sidebar「对话记录」tab（软依赖，`shared/chat-pane.js` 构建期内联） |
@@ -16,12 +16,14 @@
 
 ```sh
 # 前提：node>=20、npm i -g @deepseek-ai/dsh
-cd mvp-canvas/dsh-plugins
+cd dsh-plugins
 
 sh build-web.sh                                    # 1. 构建画布
 sh setup.sh [profile名] [端口]                     # 2. 一条龙安装（默认 dsh-ccpg / 4021）
-GLM_API_KEY=xxx sh start.sh [profile名]            # 3. 启动
+sh start.sh [profile名]                            # 3. 启动
 ```
+
+> 模型不归插件配置：agent 全部走 dsh 自己的模型配置（profile 的 `cordis.patch.yml`）。setup.sh 写的 GLM provider 示例声明了 `apiKeyEnv: GLM_API_KEY`，此时启动前 `export GLM_API_KEY=你的key` 即可；换 provider 后变量名以对应 `apiKeyEnv` 为准。
 
 画布：`http://127.0.0.1:4021/wf1/`
 
@@ -37,11 +39,11 @@ GLM_API_KEY=xxx sh start.sh [profile名]            # 3. 启动
 8. 写 `cordis.patch.yml`（GLM provider 示例 + 七插件行 + webserver 端口）
 9. 装 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（npm 包，自带 bundle patch 一步挂载）：官方 UI 右侧工作台侧边栏——canvasui 往它注册「对话记录」tab（+ 菜单第一位，切工作流视图自动展开）。软依赖：装不上仅损失该 tab，画布不受影响；不打入分发包，装包机器从 npm 拉取
 
-换模型：改 patch 里 `llm-pi-ai.providers`（openai-completions / anthropic-messages 均可），key 用对应环境变量。
+换模型：改 patch 里 `llm-pi-ai.providers`（openai-completions / anthropic-messages 均可），key 环境变量名由 provider 的 `apiKeyEnv` 声明——示例为 `GLM_API_KEY`，换 provider 后以新的 `apiKeyEnv` 为准。插件自身不存任何 key。
 
 ## 数据位置
 
-- 技能目录：`~/.dsh/workflow-one-skills/*.md`（`WF1_SKILLS_DIR` 可覆盖；feishu-cli 技能由 larkauth 启动时自动种子）
+- 技能目录：dsh 原生 `~/.dsh/skills` / `~/.agents/skills`（`ctx.skills` 发现；feishu-cli 技能由 larkauth 启动时自动种子到 `~/.dsh/skills`）
 - 附件：`<orchestrator 包>/data/attachments/`（运行时复制进节点工作区）
 - 节点工作区/产物：`<orchestrator 包>/data/workspaces/<节点名>/`
 - 运行历史/快照产物：`<orchestrator 包>/data/runs/`、`data/run-artifacts/`（gitignore）

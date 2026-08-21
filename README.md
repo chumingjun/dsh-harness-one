@@ -1,11 +1,12 @@
-# Workflow One — 物业智能体工作流编排
+# harness-one — dsh 插件开发工作区
 
-拖拽式工作流画布，跑在 dsh（DeepSeek Harness）进程内：**每个智能体节点是一个真实 dsh agent**（自主循环、bash/文件系统工具、会话持久化、技能系统），工作区即节点目录。画布 → 拓扑调度 → 节点状态实时回流，全链路闭环。
+本仓库是 **dsh（DeepSeek Harness）插件开发工作区**：在这里开发、构建、分发跑在 dsh 进程内的 Cordis 插件；未来任何新 dsh 插件都在这里孵化，命名延续 `dsh-ccpg-*` 前缀（ccpg 系列）。
+
+当前主体是 **Workflow One 物业智能体编排套件**（`dsh-plugins/dsh-ccpg-*` 七插件 + `web/` 画布）：拖拽式工作流画布跑在 dsh 进程内，**每个智能体节点是一个真实 dsh agent**（自主循环、bash/文件系统工具、会话持久化、技能系统），工作区即节点目录。画布 → 拓扑调度 → 节点状态实时回流，全链路闭环。
 
 - 画布入口：`http://127.0.0.1:4021/wf1/`（dsh web profile）
 - 官方 dsh Web UI：`http://127.0.0.1:4021/`（同进程同端口；画布注册为 conversation.view 一等视图，侧边栏 🧩 进入）
 - 右侧工作台侧边栏：官方 UI 右侧为 [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（setup.sh 默认从 npm 安装）；我们的「对话记录」tab 排在其 + 菜单第一位，切到工作流视图时自动展开
-- 旧 Express 兼容入口：`http://127.0.0.1:4020/`（仅保留演示，不再扩展）
 
 > 远程访问：setup.sh 里 webserver host 默认 `127.0.0.1`，局域网/Tailscale 需改 `0.0.0.0`（dsh agent 有 bash 能力，仅在可信网络开放）。官方 UI 的 settings/credentials 等特权页仅限 loopback（远程 403 属安全设计），插件自有路由不受影响。
 
@@ -13,12 +14,14 @@
 
 ```sh
 # 前提：node>=20、npm i -g @deepseek-ai/dsh
-cd mvp-canvas/dsh-plugins
+cd dsh-plugins
 
 sh build-web.sh                          # 1. 构建画布（含 document-preview）
 sh setup.sh [profile] [端口]             # 2. 一条龙安装（默认 dsh-ccpg / 4021）
-GLM_API_KEY=xxx sh start.sh [profile]    # 3. 启动
+sh start.sh [profile]                    # 3. 启动
 ```
+
+**模型不归本仓库配置**：插件里的 agent 全部走 dsh 自己的模型配置（profile 的 `cordis.patch.yml`）。`setup.sh` 会写入一份 GLM provider 示例（`apiKeyEnv: GLM_API_KEY`），此时 `GLM_API_KEY=xxx sh start.sh [profile]` 生效；想换模型/渠道，改 patch 里的 `llm-pi-ai.providers`（openai-completions / anthropic-messages 均可），key 环境变量名跟着 `apiKeyEnv` 走——变量名由 dsh profile 声明，本仓库与插件不写死、不存任何 key。
 
 > lark-cli（飞书官方 CLI）由 setup.sh 自动安装；忘了装也没关系，larkauth 插件启动时会自举补装。
 
@@ -27,7 +30,7 @@ GLM_API_KEY=xxx sh start.sh [profile]    # 3. 启动
 **8 种节点类型**：输入 / 智能体 / **脚本（QuickJS 沙箱）** / 条件分支 / 人工审批 / HTTP 请求 / 输出 / 注释。
 
 - **可拖拽画布**（React Flow）：连线（禁自环/环检测）、缩放、小地图、框选、快捷键（Cmd+S 保存 / Cmd+Z 撤销 / Delete 删除 / Cmd+D 复制 / F 定位错误）
-- **智能体节点**：提示词 + 工具勾选（read_file / web_fetch / feishu_doc_read / feishu_doc_write / load_skill）；节点级模型与渠道（GLM anthropic 订阅 / openai 按量、DeepSeek），同图不同节点可组队；工具循环轮数上限；Plan-Execute 三阶段模式（规划→逐步执行→总结，planTrace 全程记录）
+- **智能体节点**：提示词 + 工具勾选（read_file / web_fetch / feishu_doc_read / feishu_doc_write）；节点级模型与渠道（GLM anthropic 订阅 / openai 按量、DeepSeek），同图不同节点可组队；工具循环轮数上限；Plan-Execute 三阶段模式（规划→逐步执行→总结，planTrace 全程记录）；技能 = dsh 原生 skill 工具（`ctx.skills` 目录，节点可勾选定向提示）
 - **脚本节点**：QuickJS 沙箱执行同步 `function main(input, workspace)` 返回 JSON。命名参数支持「表达式」（完整变量，仅直接上游）或「JSON 常量」；workspace 仅可 list/read/write/remove 本节点目录（拒绝穿越/反斜杠/符号链接）；超时 100–10000ms；可选 outputSchema 校验（失败即节点失败）；返回值进变量树
 - **变量系统**：模板编辑器（输入 `{{` 或 `/变量` 搜索字段树）覆盖全部模板位；稳定 ID 引用 `{{node["n_http_1"].data.json.customer.name}}`、缺省值 `| default("x")`、`{{$trigger}}` / `{{$upstream}}`；改名联动全图替换；旧 `{{节点名}}` 语法兼容
 - **运行与调试**：SSE 实时状态（queued/running/success/error/skipped）；就绪即发并发调度；分支容错（单支失败不拖垮其余）；节点重试 / 失败继续 / 超时；运行取消 / 重放 / 导出；试运行（手填假输入、审批模拟、关闭即中断）；节点级运行详情（实际输入、产物、token 用量、trace）
@@ -43,14 +46,14 @@ GLM_API_KEY=xxx sh start.sh [profile]    # 3. 启动
 ## 飞书
 
 - **账号登录**：官方 dsh Web UI 设置面板「飞书账号」扫码（lark-cli Device Flow，token 由 CLI 自管零落盘）；user token 后台自动续约（refresh 轮换，授权长期有效）
-- **凭据**：画布 ⚙ 设置弹窗管理多套自建应用凭据（掩码/默认切换/输出节点可选），与 4020 入口共享同一存储
-- **技能**：feishu-cli 技能默认对全部 agent 开放（lark-cli 已装时自动注入索引）；agent 默认 `--as user`，失败降级 `--as bot`
+- **凭据**：画布 ⚙ 设置弹窗管理多套自建应用凭据（掩码/默认切换/输出节点可选）
+- **技能**：feishu-cli 技能由 larkauth 种子到 dsh 原生技能根 `~/.dsh/skills`（官方聊天 agent 与画布 agent 共用）；agent 默认 `--as user`，失败降级 `--as bot`
 
 ## 插件形态（dsh-ccpg 系，七插件）
 
 | 包 | 职责 |
 |---|---|
-| `dsh-ccpg-tools` | feishu_doc_read / feishu_doc_write / load_skill 注册 `ctx.tools` |
+| `dsh-ccpg-tools` | feishu_doc_read / feishu_doc_write 注册 `ctx.tools` |
 | `dsh-ccpg-orchestrator` | DAG 调度 + 节点级 `ctx.agents` 进程内 agent + QuickJS 脚本节点 + `/wf1/api/*` HTTP/SSE |
 | `dsh-ccpg-web` | 画布静态托管 `/wf1/`（SPA fallback） |
 | `dsh-ccpg-canvasui` | 官方 dsh Web UI 画布视图（conversation.view tab）+ canvas_* 工具 + better-sidebar「对话记录」tab（软依赖） |
@@ -77,16 +80,8 @@ GLM_API_KEY=xxx sh start.sh [profile]    # 3. 启动
 
 ## 环境变量
 
-| 变量 | 作用 | 缺省 |
-|---|---|---|
-| `GLM_API_KEY` | 启用 GLM 真实模型 | mock 模式 |
-| `GLM_MODEL` | GLM 模型名 | `glm-5.3` |
-| `GLM_COMPAT` | `anthropic`（Coding Plan 订阅）/ `openai`（paas/v4 按量） | `anthropic` |
-| `DEEPSEEK_API_KEY` | 启用 DeepSeek 模型 | mock 模式 |
-| `FEISHU_APP_ID/SECRET` | 飞书自建应用凭据（也可画布 ⚙ 弹窗配置） | 链接解析返回占位 |
-| `WF1_SKILLS_DIR` | 技能目录 | `~/.dsh/workflow-one-skills` |
+本仓库没有自己的配置文件，模型/渠道完全跟随 dsh profile 的配置（`apiKeyEnv` 声明 key 变量名），技能目录走 dsh 原生 `~/.dsh/skills` / `~/.agents/skills` 发现根。插件路径没有自创的环境变量。
 
-> 智谱同一 Key 两通道计费独立：订阅走 `/api/anthropic`，余额走 `/api/paas/v4`。余额不足报 1113 时切换 `GLM_COMPAT`。模型/渠道恒以 dsh 数据源为准（llm-config 端点 + agents.create agentOptions），插件自身不存 key。
 
 ## 架构
 
@@ -100,8 +95,6 @@ dsh-plugins/
   dsh-ccpg-orchestrator/  引擎：NodeKind 注册表（execute/lint/edgeTaken/wantsSink）
                           + agent 进程内驱动 + QuickJS 脚本运行器 + HTTP/SSE
   shared/chat-pane.js     聊天记录栏源片段（构建期内联进各插件 client bundle）
-server/                 旧 Express 兼容入口（4020，能力冻结）
-data/                   旧入口运行时数据（gitignore）
 ```
 
 双端节点注册表：引擎 NodeKind（调度/审批/超时/重试）+ 前端 registry（图标/表单/徽标），新节点两处注册即得全部能力。agent 节点 = `ctx.agents.create` 进程内真实 dsh agent（followup → whenIdle → session events 聚合，同官方 headless 驱动）。
@@ -128,4 +121,3 @@ cd web && npm test                                                              
 
 - 飞书写回为追加段落块，不保留富文本格式
 - 存储 = 每实体一 JSON 文件（多人编辑需求出现再迁 SQLite）
-- 旧 Express 入口（4020）能力冻结，新功能只在插件路径
