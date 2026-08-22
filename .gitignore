@@ -38,3 +38,7 @@ dsh-plugins/dsh-ccpg-tools/data/credentials.json
 # top-level Express fallback runtime artifacts (login QR / agent outputs)
 data/workspaces/
 data/tmp-e2e/
+
+# dsh-ccpg-one 本地 pnpm install 产物（overrides 钉 SDK 版本的锁定文件；
+# 分发走 pack.sh 已排除，CI 不消费，仅本机聚合安装复现用）
+dsh-plugins/dsh-ccpg-one/pnpm-lock.yaml

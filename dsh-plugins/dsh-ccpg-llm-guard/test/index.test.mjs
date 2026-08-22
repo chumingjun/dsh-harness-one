@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { guardToolCalls } from '../lib/index.js';
 
 async function collect(chunks) {
-  return Array.fromAsync(guardToolCalls((async function* () { yield* chunks; })()));
+  // Array.fromAsync 需 node>=22，CI 是 node 20——手写聚合
+  const out = [];
+  for await (const chunk of guardToolCalls((async function* () { yield* chunks; })())) out.push(chunk);
+  return out;
 }
 
 const finish = { type: 'finish', reason: { kind: 'tool-calls' } };
