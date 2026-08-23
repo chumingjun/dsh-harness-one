@@ -212,28 +212,9 @@ assert.equal(client.__test.runDotState({ status: "canceled" }), "error");
 assert.equal(client.__test.runDotState(null, "running"), "running");
 assert.equal(client.__test.runDotState(null), "running"); // 无数据按运行中
 
-// GraphPatchCard：running（无 content）→ 应用中；settled 成功带 lint 通过 → 已应用；
-// settled isError → 被拒绝。args 解析从 call.argsRaw（JSON 字符串）。
-function patchCardOf(block) {
-  const calls = [];
-  const reactShim = {
-    createElement(tag, props, ...children) {
-      calls.push({ tag, props, children });
-      return { tag, props, children };
-    },
-    useRef() { return { current: null }; },
-    useState(v) { return [v, () => {}]; },
-    useEffect() {},
-    useMemo(fn) { return fn(); },
-  };
-  const saved = globalThis.__wf1ReactShim;
-  // 直接在 vm context 里再 require 一次 react shim 太重；组件只依赖参数化 react——
-  // 借 exports.__test 拿组件后以 shim 调用不可行（闭包引用模块级 react），
-  // 所以这里改为：走 vm 重跑 bundle，react require 返回 shim。
-  return { calls, reactShim, saved };
-}
-// 简化：GraphPatchCard/WorkflowRunCard 的渲染链在 vm 内闭包引用 react——
-// 用第二批 vm context 以 react shim 加载，专门渲染卡片组件断言 props。
+// 卡片组件渲染断言：GraphPatchCard/WorkflowRunCard 的渲染链在 vm 内闭包引用 react——
+// 用第二批 vm context 以 react shim 加载（createElement 记录调用），专门断言 props：
+// running → 应用中；settled 成功带 lint 通过 → 已应用；settled isError → 被拒绝。
 let cardClient;
 const cardCalls = [];
 const cardContext = {

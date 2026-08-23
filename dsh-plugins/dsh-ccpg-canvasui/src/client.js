@@ -67,7 +67,7 @@ window.__ModuleLoader__.load({
         ".wf1-canvas-fill{position:absolute;inset:0;display:flex;}",
         ".wf1-canvas-fill iframe{width:100%;height:100%;border:0;display:block;flex:1;}",
         // ---- 消息流工作流卡片（tool.call.toolview）----
-        ".wf1-card{border:1px solid var(--dsw-alias-border-l1);border-radius:12px;padding:10px 14px;display:flex;flex-direction:column;gap:6px;cursor:pointer;transition:border-color 100ms ease;background:var(--dsw-alias-bg-base);text-align:left;width:100%;}",
+        ".wf1-card{font:inherit;color:inherit;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;padding:10px 14px;display:flex;flex-direction:column;gap:6px;cursor:pointer;transition:border-color 100ms ease;background:var(--dsw-alias-bg-base);text-align:left;width:100%;}",
         ".wf1-card:hover{border-color:var(--dsw-alias-border-l2);}",
         ".wf1-card:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
         ".wf1-card-head{display:flex;align-items:center;gap:8px;min-width:0;}",
