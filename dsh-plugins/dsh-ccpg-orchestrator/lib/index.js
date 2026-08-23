@@ -248,7 +248,7 @@ export function apply(ctx, config) {
     }
   };
 
-  // ---- 画布 AI 助手（官方 UI 工作流 tab + 聊天同 session 改图）----
+  // ---- 画布 AI 助手（官方 UI 工作流侧栏 + 聊天同 session 改图）----
   // canvasId（前端生成、localStorage 持久）→ { graph, version, workflowId, boundSessions:Set }
   // version 只在 AI patch 后递增；前端上报必须基于当前 version，防止延迟的旧图覆盖 AI 新图。
   const canvases = new Map();
@@ -613,6 +613,18 @@ export function apply(ctx, config) {
   } = {}) => {
     const store = currentStore();
     const runId = providedRunId || `run_${Date.now().toString(36)}_${++runIdSeq}`;
+    // 启动即落盘运行中快照：成果面板在 run-start 后立刻拉 /run-results，
+    // 只等最终 persistRun 的话长运行期间 readRun 一直 404（前端退避耗尽即报「运行记录不存在」）。
+    try {
+      writeRun(normalizeRunDocument({
+        runId, status: 'running', startedAt: new Date().toISOString(),
+        triggerInput: triggerInput ?? '', workflowName: workflowName || null, workflowId: workflowId || null,
+        canvasId: canvasId || null, source: source || null, replayOf: replayOf || null,
+        nodeStates: {}, outputs: {}, structuredOutputs: {}, issues: [],
+        graph: graph ? { nodes: graph.nodes.map((n) => ({ id: n.id, type: n.type, position: n.position, data: n.data })), edges: graph.edges } : undefined,
+        graphFingerprint: graph ? graphFingerprint(graph) : null,
+      }));
+    } catch { /* 快照写失败不阻塞运行；最终 persistRun 仍会落盘 */ }
     const promise = workspaceContext.run(store, () => Promise.resolve().then(() => orch.run(graph, {
       triggerInput, workflowName, workflowId, canvasId, source, runId,
       workspaceRoot: store.workspaceRoot,

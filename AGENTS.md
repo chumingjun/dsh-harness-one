@@ -1,6 +1,6 @@
 # AGENTS.md — 给 AI 编码代理的仓库指南
 
-本仓库（harness-one）是 **dsh（DeepSeek Harness）插件开发工作区**：开发、构建、分发跑在 dsh 里的 Cordis 插件。当前主体是 Workflow One 物业编排套件（`dsh-plugins/dsh-ccpg-*` 八插件 + `web/` 画布），但仓库不限于它——未来任何新 dsh 插件都在这里开发，命名延续 `dsh-ccpg-*` 前缀（ccpg 系列）。
+本仓库（harness-one）是 **dsh（DeepSeek Harness）插件开发工作区**：开发、构建、分发跑在 dsh 里的 Cordis 插件。当前主体是 Workflow One 物业编排套件（7 个默认 `dsh-ccpg-*` 插件 + 独立可选 brand + `web/` 画布），但仓库不限于它——未来任何新 dsh 插件都在这里开发，命名延续 `dsh-ccpg-*` 前缀（ccpg 系列）。
 
 - 仓库通用规则（环境、dsh 插件事实、提交规范）见下方各节，**对所有插件适用**
 - Workflow One 专属的架构铁律集中在「Workflow One」一节
@@ -42,20 +42,20 @@
 - `ctx.webServer.register` 形状 `{kind:'exact'|'prefix', path, handler}`；重复 path 抛错
 - 给 `ctx` 挂自定义属性必须先 `provide` 声明
 - 插件里 `@deepseek-ai/*` 依赖不会从 dsh 主安装解析——`dsh-plugins/bootstrap-deps.sh` 软链解决，勿用 registry 版本
-- 浏览器端 module-loader **禁跨插件值导入**（构建纯度门）；插件 client bundle 必须自包含。共享 UI 抽成 `dsh-plugins/shared/*.js` 源片段，经 `build-canvasui.sh` 的 `@include` 构建期内联进消费者
+- 浏览器端 module-loader **禁跨插件值导入**（构建纯度门）；插件 client bundle 必须自包含，跨插件 UI 逻辑不得做运行时值导入
 - dsh 进程内 `fetch 127.0.0.1` 自请求 404，用 LAN IP
 - 官方 UI 特权页（settings/credentials 等）远程必 403（PRIVILEGED_METHODS 钉 loopback），属安全设计不是 bug；插件自有路由不受限
 - dsh HMR 会缓存插件模块：改插件代码后必须彻底结束 dsh 进程再重启（macOS/Linux `pkill`，Windows/WSL 用任务管理器或 `taskkill`），半重启不生效
-- 新插件上线清单：加进 `setup.sh` 与 `pack.sh` 的 `PLUGINS=` 清单（两处同步）、写包内 `cordis.patch.yml` 并在 package.json 声明 `dsh.bundle.patch`（挂载全靠它，profile patch 不再手写插件行）；有前端产物则接入 `build-web.sh`；setup.sh 会校验 package name 与目录名一致
+- 新默认插件上线清单：加进 `setup.sh` 与 `pack.sh` 的 `PLUGINS=` 清单（两处同步）、写包内 `cordis.patch.yml` 并在 package.json 声明 `dsh.bundle.patch`（挂载全靠它，profile patch 不再手写插件行）；独立可选插件只进入 `pack.sh` 的 `OPTIONAL_PLUGINS=`；有前端产物则接入 `build-web.sh`；setup.sh 会校验 package name 与目录名一致
 
 ## Workflow One（当前主体）
 
-八插件：tools / orchestrator（引擎+HTTP+SSE）/ web（静态托管）/ canvasui（官方 UI 视图）/ document-preview（文档预览）/ larkauth（飞书登录）/ brand / llm-guard（畸形工具调用防护）。画布 `web/`（Vite + React 18 + @xyflow/react + CodeMirror）。
+7 个默认插件：tools / orchestrator（引擎+HTTP+SSE）/ web（静态托管）/ canvasui（官方 UI 视图）/ document-preview（文档预览）/ larkauth（飞书登录）/ llm-guard（畸形工具调用防护）。brand 为独立可选插件，默认安装与 `dsh-ccpg-one` 聚合包均不包含。画布 `web/`（Vite + React 18 + @xyflow/react + CodeMirror）。
 
 ### 常用命令
 
 ```sh
-npm test                                   # 全量单测聚合（scripts/run-tests.sh：web 10 套 + orchestrator 13 套 + shared + document-preview）
+npm test                                   # 全量单测聚合（scripts/run-tests.sh：web 10 套 + orchestrator 13 套 + llm-guard + canvasui + document-preview）
 sh dsh-plugins/build-web.sh                 # 画布双构建（/wf1/ base + 根 base），改前端后必跑（产物不入库，仅落工作区）
 sh dsh-plugins/setup.sh [profile] [端口]    # 安装（默认 dsh-ccpg / 4021）
 sh dsh-plugins/start.sh <profile>           # 启动
@@ -64,7 +64,7 @@ sh dsh-plugins/pack.sh <tag>                # 打包 release（CI 同源）
 # 分套运行（改哪跑哪）
 cd web && npm test                          # 前端 10 套
 cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # 引擎 13 套
-node dsh-plugins/shared/chat-pane.test.mjs                       # 10 例
+node dsh-plugins/dsh-ccpg-canvasui/test/client.test.mjs         # canvasui 客户端
 node dsh-plugins/dsh-ccpg-document-preview/test/index.test.mjs  # 4 例
 ```
 
@@ -73,7 +73,7 @@ CI：`.github/workflows/ci.yml` 在 PR 与 main push 上跑 `npm test` + `build-
 ### 架构铁律（Workflow One 专属）
 
 1. **双端节点注册表**：新增节点类型必须两处注册——引擎 `orchestrator/lib/engine.js` 的 `registerKind({execute, lint, edgeTaken, wantsSink})` + 前端 `web/src/registry.jsx`（icon/色/preset/summary/badges）。AI 助手侧同步 `lib/assistant.js`（NODE_TYPES + persona 契约）与 `lib/variable-schema.js`（变量树）。两处注册即得调度/审批/超时/重试/UI 全部能力，不要另起旁路。
-2. **canvasui bundle 是构建产物**：`lib/client.js` 由 `src/client.js` 内联 `shared/` 片段生成（gitignore 不入库），直接改会被覆盖；改后重跑 `build-canvasui.sh`（`--check` 逐字比对防漂移）。
+2. **canvasui bundle 是构建产物**：`lib/client.js` 由 `src/client.js` 生成（gitignore 不入库），直接改会被覆盖；改后重跑 `build-canvasui.sh`（`--check` 逐字比对防漂移）。
 3. **4020 Express 回退能力冻结**：新功能只做插件路径（`/wf1/api/*`）；`server/` 仅修 bug。同语义端点双入口实现时以插件端为准。
 4. **工作区本地存储**：每实体一 JSON 文件，统一位于当前 dsh 会话工作目录的 `.workflow-one/`（state/workflows/runs/attachments/runtime），节点 agent 以工作区根为 cwd、成果只收集各节点 runtime 输出目录；`.workflow-one/` 必须 gitignore，**绝不提交**。飞书凭据仍是 dsh 用户级数据，不迁入工作区。
 5. **构建产物一律不入库**（`web-dist/`、`canvasui lib/client.js`、`document-preview/dist/`、`web/dist/` 全部 gitignore）：分发包「拿到即装」由 `pack.sh` 现场重跑构建保证；源码安装先 `build-web.sh` 再 `setup.sh`（setup 已前置校验）。绝不为省一步构建把产物提交进仓库。
@@ -88,5 +88,5 @@ CI：`.github/workflows/ci.yml` 在 PR 与 main push 上跑 `npm test` + `build-
 ### 测试与验证
 
 - 单测全部是零依赖 node 断言脚本（`node:assert` + 自写 runner），直接 `node <file>` 运行；新插件照此约定写测试
-- 改引擎跑 orchestrator 13 套；改前端跑 web 10 套；改 shared 跑 chat-pane 10 例；改预览跑 document-preview 4 例
+- 改引擎跑 orchestrator 13 套；改前端跑 web 10 套；改 canvasui 跑其 client 测试并重建 bundle；改预览跑 document-preview 4 例
 - E2E 用 CDP（chrome-devtools）跑真实浏览器验证；dsh 官方 UI 首载慢，等待时间放宽（画布就绪 3.5s→6s），wait text 偶超时先多等几秒再判失败

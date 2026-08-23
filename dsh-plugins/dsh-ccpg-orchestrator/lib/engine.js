@@ -215,7 +215,8 @@ export class Orchestrator {
     s.nodeAbort.set(nodeId, ac);
     const t0 = Date.now();
     const startedAt = new Date(t0).toISOString();
-    this.emit('node-status', { runId: run.runId, nodeId, status: 'running' });
+    run.nodeStates[nodeId] = { status: 'running', startedAt };
+    this.emit('node-status', { runId: run.runId, nodeId, status: 'running', startedAt });
     const timeoutMs = Number(node.data?.timeoutSec) > 0 ? Number(node.data.timeoutSec) * 1000 : NODE_TIMEOUT_MS;
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; ac.abort(); }, timeoutMs);

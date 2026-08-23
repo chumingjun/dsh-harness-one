@@ -247,6 +247,7 @@ export default function App() {
         nds.map((n) => {
           if (n.id !== p.nodeId) return n;
           const data = { ...n.data, runStatus: p.status };
+          if (p.status === 'running' && p.startedAt) data.runStartedAt = p.startedAt;
           if (p.status === 'success') { data.runChars = p.chars; data.runError = null; data.durationMs = p.durationMs; }
           if (p.turns != null) data.runTurns = p.turns;
           if (p.status === 'error' || p.status === 'canceled') data.runError = p.error;
@@ -387,6 +388,7 @@ export default function App() {
         setNodes((nds) => nds.map((n) => {
           if (n.id !== nodeId) return n;
           const data = { ...n.data, runStatus: st.status };
+          if (st.status === 'running' && st.startedAt) data.runStartedAt = st.startedAt;
           if (st.chars != null) data.runChars = st.chars;
           if (st.turns != null) data.runTurns = st.turns;
           if (st.error) data.runError = st.error;
@@ -653,7 +655,7 @@ export default function App() {
       return;
     }
     setProgress({});
-    setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, runStatus: 'idle', runError: null, runOutput: undefined, runtimeStructuredOutput: undefined, livePreview: undefined, liveTurns: undefined, runTurns: undefined } })));
+    setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, runStatus: 'idle', runError: null, runOutput: undefined, runtimeStructuredOutput: undefined, livePreview: undefined, liveTurns: undefined, runTurns: undefined, runStartedAt: undefined } })));
     const res = await fetch(apiUrl('/run'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1065,6 +1067,13 @@ export default function App() {
   useEffect(() => {
     if (!embedded) return;
     try { window.parent.postMessage({ type: 'wf1-ready' }, window.location.origin); } catch { /* 宿主未监听 */ }
+    // 宿主按 wf1-ready 重发 sessionId（画布内刷新按钮 reload 后的身份重建）；
+    // 保险起见稍等后仍未收到则再要一次（宿主 ready 标记已 true 的窗口期）。
+    const reRequest = setTimeout(() => {
+      if (!hostSessionRef.current) {
+        try { window.parent.postMessage({ type: 'wf1-ready' }, window.location.origin); } catch { /* 宿主未监听 */ }
+      }
+    }, 600);
     reportCanvasState(true);
     let stopped = false;
     const sync = () => fetch(apiUrl(`/assistant/canvas-state?canvasId=${encodeURIComponent(canvasIdRef.current)}`))
@@ -1077,7 +1086,7 @@ export default function App() {
       .catch(() => {});
     const timer = setInterval(sync, 2000);
     sync();
-    return () => { stopped = true; clearInterval(timer); };
+    return () => { stopped = true; clearInterval(timer); clearTimeout(reRequest); };
   }, [embedded, reportCanvasState]);
 
   const workflowVariables = currentWf?.variables;
@@ -1206,7 +1215,6 @@ export default function App() {
           <button className={`view-tab ${historyOpen ? 'view-tab-on' : ''}`} onClick={() => setHistoryOpen(true)}>历史</button>
         </nav>
         {view === 'canvas' && currentWf && <span className="mode-badge" title="当前编辑的工作流">{currentWf.name}{dirty ? ' •' : ''}</span>}
-        {!catalog.feishuEnabled && <span className="mode-badge">飞书未配置</span>}
         {runtime && (
           <span className={`mode-badge ${runtime.available ? 'mode-glm' : ''}`} title={runtime.available ? 'agent 节点默认由 dsh (DeepSeek Harness) 驱动' : (runtime.reasons || []).join('；')}>
             {runtime.available ? '⚡ dsh 底座' : '内置循环（dsh 不可用）'}

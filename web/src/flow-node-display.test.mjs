@@ -9,16 +9,18 @@ import { dirname, join } from 'node:path';
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'FlowNode.jsx'), 'utf8');
 
-// 从源码里提取 statusText 表达式所在组件逻辑，重执行一遍（同构验证源码没写歪）
 function statusTextFor(data, status) {
   const turns = status === 'running' ? data.liveTurns : data.runTurns;
   const STATUS_TEXT = {
-    queued: '排队中', running: '⏳ 执行中', waiting: '⏸ 待审批',
+    queued: '排队中', running: '执行中', waiting: '⏸ 待审批',
     error: '✗ 失败', skipped: '跳过', canceled: '已取消',
   };
-  return status === 'success'
+  const detail = status === 'success'
     ? `✓ ${data.runChars ?? 0} 字${turns != null ? ` · ${turns} 轮` : ''}`
-    : `${STATUS_TEXT[status] || ''}${status === 'running' && turns != null ? ` 第 ${turns} 轮` : ''}${status !== 'running' && turns != null ? ` · ${turns} 轮` : ''}`;
+    : status === 'running'
+      ? (turns != null ? ` 第 ${turns} 轮` : '')
+      : `${STATUS_TEXT[status] || ''}${turns != null ? ` · ${turns} 轮` : ''}`;
+  return status === 'running' ? `${STATUS_TEXT.running}${detail}` : detail;
 }
 
 test('源码包含轮次拼接逻辑（liveTurns/runTurns 双路）', () => {
@@ -27,14 +29,22 @@ test('源码包含轮次拼接逻辑（liveTurns/runTurns 双路）', () => {
   assert.ok(src.includes('轮'), '应有轮次文案');
 });
 
+test('运行中视觉：脉动类名 + 实时计时徽标 + startedAt 数据源', () => {
+  assert.ok(src.includes('flow-node-is-running'), '运行中节点应有脉动光晕类名');
+  assert.ok(src.includes('useElapsedBadge'), '应有实时计时 hook');
+  assert.ok(src.includes('flow-node-elapsed'), '应有计时徽标元素');
+  assert.ok(src.includes('runStartedAt'), '计时应读 runStartedAt');
+});
+
 test('成功态：字数 + 轮次', () => {
   assert.equal(statusTextFor({ runChars: 1234, runTurns: 3 }, 'success'), '✓ 1234 字 · 3 轮');
   assert.equal(statusTextFor({ runChars: 10 }, 'success'), '✓ 10 字');
 });
 
-test('运行中：显示第 N 轮（用 liveTurns）', () => {
-  assert.equal(statusTextFor({ liveTurns: 2, runTurns: 9 }, 'running'), '⏳ 执行中 第 2 轮');
-  assert.equal(statusTextFor({}, 'running'), '⏳ 执行中');
+test('运行中：状态元素与轮次分开渲染，不出现 [object Object]', () => {
+  assert.equal(statusTextFor({ liveTurns: 2, runTurns: 9 }, 'running'), '执行中 第 2 轮');
+  assert.equal(statusTextFor({}, 'running'), '执行中');
+  assert.equal(src.includes("`${STATUS_TEXT[status] || ''}${status === 'running'"), false, 'React 状态元素不能参与模板字符串拼接');
 });
 
 test('失败/取消态：状态 + 轮次（用 runTurns）', () => {

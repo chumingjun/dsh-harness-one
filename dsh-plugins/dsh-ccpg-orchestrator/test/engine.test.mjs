@@ -79,6 +79,25 @@ await test('草稿运行事件显式携带 null workflowId', async () => {
   assert.equal(started.canvasId, 'cv_draft');
 });
 
+await test('执行期间内存快照保留 running 状态与 startedAt', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const { orch } = makeOrch(async () => {
+    await gate;
+    return { output: 'done' };
+  });
+  const running = orch.run({
+    nodes: [{ id: 'agent', type: 'agent', data: { label: 'Agent' } }],
+    edges: [],
+  }, { runId: 'run_live_snapshot' });
+  await delay(0);
+  const state = orch.runs.get('run_live_snapshot')?.run.nodeStates.agent;
+  assert.equal(state?.status, 'running');
+  assert.match(state?.startedAt || '', /^\d{4}-\d{2}-\d{2}T/);
+  release();
+  await running;
+});
+
 await test('scoped execution context renders and persists runInputs only', async () => {
   const { orch } = makeOrch();
   const run = await orch.run({

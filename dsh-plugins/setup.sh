@@ -2,11 +2,11 @@
 # Workflow One 插件本地分发安装脚本（模拟别人拿到这个仓库后的完整安装）。
 # 前提：已 npm i -g @deepseek-ai/dsh，且 node >= 20
 # 用法：
-#   sh setup.sh                  # 安装到默认 profile dsh-ccpg（端口 4021，八插件逐个挂载）
+#   sh setup.sh                  # 安装到默认 profile dsh-ccpg（端口 4021，七插件逐个挂载）
 #   sh setup.sh <profile> <端口> # 安装到自定义 profile
 #   sh setup.sh --one <profile> <端口>  # 聚合安装：dsh plugin add 只装 dsh-ccpg-one 一个包，
-#                                       # 八插件挂载全由聚合包的 bundle patch 提供；
-#                                       可选件用环境变量开关（CCPG_NO_LARK/NO_BRAND/NO_PREVIEW/
+#                                       # 七插件挂载全由聚合包的 bundle patch 提供；
+#                                       可选件用环境变量开关（CCPG_NO_LARK/NO_PREVIEW/
 #                                       NO_SIDEBAR/NO_GUARD、CCPG_ONLY_CORE，见 dsh-ccpg-one/cordis.patch.yml）
 set -e
 AGGREGATE=0
@@ -15,7 +15,7 @@ PROFILE="${1:-dsh-ccpg}"
 PORT="${2:-4021}"
 HERE=$(cd "$(dirname "$0")" && pwd)
 export DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
-PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-brand dsh-ccpg-llm-guard"
+PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-llm-guard"
 
 # 安装前先校验完整分发目录，避免 plugin add 部分成功后留下半成品 profile。
 for pkg in $PLUGINS; do
@@ -61,8 +61,8 @@ if [ ! -f "$HERE/dsh-ccpg-web/web-dist/index.html" ]; then
 fi
 echo "✓ 画布产物就绪"
 
-# canvasui 客户端 bundle 兜底构建：lib/client.js 是 src/client.js 内联 shared/ 片段的
-# 拼接产物（gitignore，不入库）。源码安装或改过 shared/ 后以 --check 校验，不一致则重建。
+# canvasui 客户端 bundle 兜底构建：lib/client.js 由 src/client.js 生成（gitignore，不入库）。
+# 源码安装或改过 src/client.js 后以 --check 校验，不一致则重建。
 if ! sh "$HERE/build-canvasui.sh" --check >/dev/null 2>&1; then
   echo "· canvasui bundle 缺失或与源不一致，重建…"
   sh "$HERE/build-canvasui.sh"
@@ -79,7 +79,7 @@ done
 
 # 1. 建_profile（已存在则跳过）
 # bundles 必须含 dsh-web-app：官方 Web UI（聊天/侧边栏/会话管理）是它的 surface；
-# dsh-ccpg-canvasui 的工作流 tab 和 larkauth 的设置面板都注册进官方 UI——缺它就没有 tab。
+# dsh-ccpg-canvasui 的工作流侧栏入口和 larkauth 的设置面板都注册进官方 UI。
 PDIR="$DSH_HOME/profiles/$PROFILE"
 if [ ! -f "$PDIR/package.json" ]; then
   mkdir -p "$PDIR"
@@ -101,8 +101,8 @@ cd "$PDIR"
 PLUGIN_LOG=$(mktemp "${TMPDIR:-/tmp}/dsh-ccpg-plugin-add.XXXXXX")
 trap 'rm -f "$PLUGIN_LOG"' EXIT HUP INT TERM
 if [ "$AGGREGATE" = 1 ]; then
-  # ---- 聚合安装：只 add dsh-ccpg-one（八插件 + better-sidebar 全由它的 bundle patch 挂载）----
-  # 先装聚合包自身的 file: 依赖（八插件实体进聚合包 node_modules；overrides 钉 SDK 版本，
+  # ---- 聚合安装：只 add dsh-ccpg-one（七插件 + better-sidebar 全由它的 bundle patch 挂载）----
+  # 先装聚合包自身的 file: 依赖（七插件实体进聚合包 node_modules；overrides 钉 SDK 版本，
   # 见 dsh-ccpg-one/pnpm-workspace.yaml——registry latest 停 0.0.1-rc.1，0.1.x 只在 next tag）。
   (cd "$HERE/dsh-ccpg-one" && pnpm install --no-frozen-lockfile) >/dev/null 2>&1 \
     || { echo "✗ dsh-ccpg-one 依赖安装失败（在该目录跑 pnpm install 看详情）"; exit 1; }
@@ -155,7 +155,7 @@ done
 echo "✓ 依赖已引导"
 
 # 4. patch 组装（不覆盖已有 patch —— 已有则提示）
-# 八插件的挂载行不再手写：各插件自带 dsh.bundle.patch（cordis.patch.yml），
+# 七个默认插件的挂载行不再手写：各插件自带 dsh.bundle.patch（cordis.patch.yml），
 # dsh plugin add 依据声明自动进 bundles 层并挂载——手写行会双挂载（duplicate route）。
 # patch 只保留用户配置：模型 provider + webserver 端口。
 if [ -f "$PDIR/cordis.patch.yml" ] && grep -q "llm-pi-ai\|dsh-host-webserver" "$PDIR/cordis.patch.yml"; then
@@ -198,15 +198,15 @@ EOF
   echo "✓ patch 已写入（端口 $PORT）"
 fi
 
-# 4.5 DSH-better-sidebar（社区侧边栏工作台，npm 安装）——「对话记录」tab 的宿主。
-# canvasui 对它是软依赖：装不上只损失聊天记录 tab，工作流画布不受影响，故失败仅告警。
+# 4.5 DSH-better-sidebar（社区侧边栏工作台，npm 安装）——「工作流」侧栏的宿主。
+# canvasui 对它是软依赖：装不上时官方 UI 内无法打开画布，独立 /wf1/ 入口仍可用，故失败仅告警。
 # 逐插件模式：走 registry npm 包单独 add（自带 dsh.bundle.patch 一步挂载）。
 # 聚合模式：聚合包 peer(optional) 已带 + bundle patch 已挂，单独 add 会 duplicate id——跳过。
 if [ "$AGGREGATE" != 1 ]; then
   if ! node "$DSH_BIN" plugin --profile "$PROFILE" add dsh-better-sidebar@latest >/dev/null 2>&1; then
-    echo "⚠ dsh-better-sidebar 安装失败（侧边栏「对话记录」tab 不可用；可稍后手动：dsh plugin --profile $PROFILE add dsh-better-sidebar）"
+    echo "⚠ dsh-better-sidebar 安装失败（官方 UI 工作流侧栏不可用；可稍后手动：dsh plugin --profile $PROFILE add dsh-better-sidebar）"
   else
-    echo "✓ dsh-better-sidebar 已安装（侧边栏工作台 + 对话记录 tab）"
+    echo "✓ dsh-better-sidebar 已安装（侧边栏工作台 + 工作流画布）"
   fi
 fi
 
@@ -234,8 +234,8 @@ echo "安装完成。启动："
 echo "  GLM_API_KEY=你的key $HERE/start.sh $PROFILE"
 if [ "$AGGREGATE" = 1 ]; then
   echo "聚合安装：可选件开关（启动前 export）——"
-  echo "  CCPG_NO_LARK=1 关飞书登录 · CCPG_NO_BRAND=1 关品牌 · CCPG_NO_PREVIEW=1 关文档预览"
+  echo "  CCPG_NO_LARK=1 关飞书登录 · CCPG_NO_PREVIEW=1 关文档预览"
   echo "  CCPG_NO_SIDEBAR=1 关侧边栏 · CCPG_NO_GUARD=1 关防护 · CCPG_ONLY_CORE=1 只留核心五件"
 fi
-echo "主入口（官方 UI + 聊天 + 工作流 tab）: http://127.0.0.1:$PORT/"
+echo "主入口（官方 UI 对话 + 右侧工作流画布）: http://127.0.0.1:$PORT/"
 echo "独立画布入口: http://127.0.0.1:$PORT/wf1/"

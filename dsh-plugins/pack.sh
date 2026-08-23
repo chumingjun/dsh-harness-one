@@ -1,7 +1,7 @@
 #!/bin/sh
 # 打包 dsh-ccpg-* 插件为可分发 tarball（release 用，CI 与本地同源）。
 #
-# 产物：dsh-ccpg-plugins-<tag>.tar.gz，内容 = dsh-plugins/ 里八个插件 + setup/start/build/bootstrap 脚本，
+# 产物：dsh-ccpg-plugins-<tag>.tar.gz，内容 = 七个默认插件 + 独立可选 brand 插件 + setup/start/build/bootstrap 脚本，
 # 且满足"拿到即装"（产物不入库，本脚本现场构建）：
 #   - 画布已构建：dsh-ccpg-web/web-dist/ 由第 1 步 build-web.sh 现场生成，装包机无需再跑构建
 #   - orchestrator 真依赖已装：ajv/cron-parser 在 dsh-ccpg-orchestrator/node_modules/（本地 setup.sh 直接
@@ -24,8 +24,9 @@ OUT="${PACK_DIR:-/tmp/dsh-ccpg-pack}"
 DIST_DIR="$REPO_ROOT/dist-release"
 PKG="dsh-ccpg-plugins-$TAG"
 TAR="$DIST_DIR/$PKG.tar.gz"
-PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-brand dsh-ccpg-llm-guard"
-# 聚合壳（bundle patch 挂载八插件 + better-sidebar，可选件 env 门控）；其 node_modules 是本地安装产物，不打包
+PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-llm-guard"
+OPTIONAL_PLUGINS="dsh-ccpg-brand"
+# 聚合壳（bundle patch 挂载七插件 + better-sidebar，可选件 env 门控）；其 node_modules 是本地安装产物，不打包
 AGG="dsh-ccpg-one"
 
 # ---- 0. node（>=20）----
@@ -37,12 +38,12 @@ PATH=$(dirname "$NODE_BIN"):$PATH
 export PATH
 
 # ---- 0.1 插件清单 ----
-for p in $PLUGINS; do
+for p in $PLUGINS $OPTIONAL_PLUGINS; do
   [ -f "$HERE/$p/package.json" ] || { echo "✗ 插件缺失: $p/package.json"; exit 1; }
   "$NODE_BIN" -e "const p=require(process.argv[1]); if(p.name!==process.argv[2]) throw new Error('package name 应为 '+process.argv[2])" \
     "$HERE/$p/package.json" "$p"
 done
-echo "✓ 八个插件清单已校验"
+echo "✓ 七个默认插件 + 独立可选 brand 清单已校验"
 
 # ---- 1. 构建画布（生成 dsh-ccpg-web/web-dist）----
 sh "$HERE/build-web.sh"
@@ -58,7 +59,7 @@ fi
 echo "✓ orchestrator 依赖已装"
 
 # ---- 2.5 canvasui bundle 重建（必须在 rsync 组装之前）----
-# lib/client.js 是拼接产物（src/client.js @include shared/ 片段）：先重建源码目录再组装，
+# lib/client.js 由 src/client.js 生成：先重建源码目录再组装，
 # rsync 才会把新产物带进归档——放组装之后就只校验了源码目录，归档仍是旧文件。
 sh "$HERE/build-canvasui.sh"
 sh "$HERE/build-canvasui.sh" --check
@@ -79,7 +80,7 @@ rsync -a --delete \
 rsync -a "$HERE/dsh-ccpg-web/web-dist/" "$OUT/dsh-plugins/dsh-ccpg-web/web-dist/"
 
 # 清理插件包内运行时数据与残余
-for p in $PLUGINS; do
+for p in $PLUGINS $OPTIONAL_PLUGINS; do
   rm -rf "$OUT/dsh-plugins/$p/data/runs" \
          "$OUT/dsh-plugins/$p/data/run-artifacts" \
          "$OUT/dsh-plugins/$p/data/workspaces" \
@@ -93,9 +94,9 @@ done
 mkdir -p "$OUT/dsh-plugins/dsh-ccpg-orchestrator/data/runs"
 rmdir "$OUT/dsh-plugins/dsh-ccpg-orchestrator/data/runs" 2>/dev/null || true
 
-# 校验：web-dist、八插件目录、bundle patch 与 document-preview 构建入口必须完整。
+# 校验：web-dist、默认/独立插件目录、bundle patch 与 document-preview 构建入口必须完整。
 [ -f "$OUT/dsh-plugins/dsh-ccpg-web/web-dist/index.html" ] || { echo "✗ web-dist/index.html 缺失（构建失败？）"; exit 1; }
-for p in $PLUGINS $AGG; do
+for p in $PLUGINS $OPTIONAL_PLUGINS $AGG; do
   [ -f "$OUT/dsh-plugins/$p/package.json" ] || { echo "✗ 打包目录缺失: $p/package.json"; exit 1; }
   # dsh.bundle.patch 声明与 patch 文件必须在场：setup.sh 的挂载全靠它
   "$NODE_BIN" -e "const p=require(process.argv[1]+'/package.json'); if(!p.dsh?.bundle?.patch) throw new Error('缺 dsh.bundle.patch 声明')" \
@@ -146,12 +147,12 @@ NODE
 echo "✓ QuickJS WASM 归档 smoke 通过"
 
 # 说明：dsh-better-sidebar（侧边栏工作台宿主）不打进 tarball —— 它是 registry npm 包，
-# setup.sh 安装时从 npm 拉取（canvasui 软依赖它，失败仅损失「对话记录」tab）。
+# setup.sh 安装时从 npm 拉取（canvasui 软依赖它；失败时独立 /wf1/ 画布仍可用）。
 
 # ---- 4. 打包 ----
 cd "$OUT"
 tar -czf "$TAR" dsh-plugins
-for p in $PLUGINS $AGG; do
+for p in $PLUGINS $OPTIONAL_PLUGINS $AGG; do
   tar -tzf "$TAR" "dsh-plugins/$p/package.json" >/dev/null 2>&1 \
     || { echo "✗ tarball 缺失: $p/package.json"; exit 1; }
 done

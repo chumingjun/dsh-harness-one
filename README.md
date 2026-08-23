@@ -2,11 +2,11 @@
 
 本仓库是 **dsh（DeepSeek Harness）插件开发工作区**：在这里开发、构建、分发跑在 dsh 进程内的 Cordis 插件；未来任何新 dsh 插件都在这里孵化，命名延续 `dsh-ccpg-*` 前缀（ccpg 系列）。
 
-当前主体是 **Workflow One 物业智能体编排套件**（`dsh-plugins/dsh-ccpg-*` 八插件 + `web/` 画布）：拖拽式工作流画布跑在 dsh 进程内，**每个智能体节点是一个真实 dsh agent**（自主循环、bash/文件系统工具、会话持久化、技能系统），以当前 dsh 会话工作目录为 cwd 读取项目文件，节点交付物隔离写入工作区 `.workflow-one/runtime/`。画布 → 拓扑调度 → 节点状态实时回流，全链路闭环。
+当前主体是 **Workflow One 物业智能体编排套件**（7 个默认 `dsh-ccpg-*` 插件 + 独立可选 brand + `web/` 画布）：拖拽式工作流画布跑在 dsh 进程内，**每个智能体节点是一个真实 dsh agent**（自主循环、bash/文件系统工具、会话持久化、技能系统），以当前 dsh 会话工作目录为 cwd 读取项目文件，节点交付物隔离写入工作区 `.workflow-one/runtime/`。画布 → 拓扑调度 → 节点状态实时回流，全链路闭环。
 
 - 画布入口：`http://127.0.0.1:4021/wf1/`（dsh web profile）
-- 官方 dsh Web UI：`http://127.0.0.1:4021/`（同进程同端口；画布注册为 conversation.view 一等视图，侧边栏 🧩 进入）
-- 右侧工作台侧边栏：官方 UI 右侧为 [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（setup.sh 默认从 npm 安装）；我们的「对话记录」tab 排在其 + 菜单第一位，切到工作流视图时自动展开
+- 官方 dsh Web UI：`http://127.0.0.1:4021/`（同进程同端口；主区保留官方对话，点击输入框旁工作流按钮展开右侧画布）
+- 右侧工作台侧边栏：官方 UI 右侧为 [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（setup.sh 默认从 npm 安装）；我们的「工作流」tab 排在其 + 菜单第一位
 
 > 远程访问：setup.sh 里 webserver host 默认 `127.0.0.1`，局域网/Tailscale 需改 `0.0.0.0`（dsh agent 有 bash 能力，仅在可信网络开放）。官方 UI 的 settings/credentials 等特权页仅限 loopback（远程 403 属安全设计），插件自有路由不受影响。
 
@@ -41,7 +41,7 @@ sh start.sh [profile]                    # 3. 启动
 
 ## 画布 AI 助手
 
-官方 dsh Web UI 的聊天里直接改图（同 session，经 canvas_* 工具落图）：`canvas_get_graph` / `canvas_graph_summary` / `canvas_graph_patch`（批量原子操作，含 script 节点契约）/ `canvas_lint_graph` / `canvas_run_workflow` / `canvas_run_status`。聊天记录在右侧 better-sidebar 的「对话记录」tab 实时显示该 session 的消息与工具调用流（不可见时自动暂停轮询）。
+官方 dsh Web UI 的聊天里直接改图（同 session，经 canvas_* 工具落图）：`canvas_get_graph` / `canvas_graph_summary` / `canvas_graph_patch`（批量原子操作，含 script 节点契约）/ `canvas_lint_graph` / `canvas_run_workflow` / `canvas_run_status`。点击对话输入框旁的工作流按钮，在右侧 better-sidebar 打开当前 session 的画布；主区对话持续可见。
 
 ## 飞书
 
@@ -49,18 +49,18 @@ sh start.sh [profile]                    # 3. 启动
 - **凭据**：画布 ⚙ 设置弹窗管理多套自建应用凭据（掩码/默认切换/输出节点可选）
 - **技能**：feishu-cli 技能由 larkauth 种子到 dsh 原生技能根 `~/.dsh/skills`（官方聊天 agent 与画布 agent 共用）；agent 默认 `--as user`，失败降级 `--as bot`
 
-## 插件形态（dsh-ccpg 系，八插件）
+## 插件形态（dsh-ccpg 系）
 
-| 包 | 职责 |
-|---|---|
-| `dsh-ccpg-tools` | feishu_doc_read / feishu_doc_write 注册 `ctx.tools` |
-| `dsh-ccpg-orchestrator` | DAG 调度 + 节点级 `ctx.agents` 进程内 agent + QuickJS 脚本节点 + `/wf1/api/*` HTTP/SSE |
-| `dsh-ccpg-web` | 画布静态托管 `/wf1/`（SPA fallback） |
-| `dsh-ccpg-canvasui` | 官方 dsh Web UI 画布视图（conversation.view tab）+ canvas_* 工具 + better-sidebar「对话记录」tab（软依赖） |
-| `dsh-ccpg-document-preview` | 文档全屏预览（pdfjs / docx-preview / sheetjs / @file-viewer/pptx，inline workers、无第三方上传） |
-| `dsh-ccpg-larkauth` | 飞书扫码登录（启动自举、token 续约、技能种子）；官方设置面板「飞书账号」section |
-| `dsh-ccpg-brand` | 品牌定制（CCPG logo + 聊天 hero 标题） |
-| `dsh-ccpg-llm-guard` | 模型工具调用完整性防护：空 id/name/arguments 自动重试，不写入会话 |
+| 包 | 安装方式 | 职责 |
+|---|---|---|
+| `dsh-ccpg-tools` | 默认 | feishu_doc_read / feishu_doc_write 注册 `ctx.tools` |
+| `dsh-ccpg-orchestrator` | 默认 | DAG 调度 + 节点级 `ctx.agents` 进程内 agent + QuickJS 脚本节点 + `/wf1/api/*` HTTP/SSE |
+| `dsh-ccpg-web` | 默认 | 画布静态托管 `/wf1/`（SPA fallback） |
+| `dsh-ccpg-canvasui` | 默认 | 官方 dsh Web UI 输入框工作流按钮 + better-sidebar「工作流」画布（软依赖） |
+| `dsh-ccpg-document-preview` | 默认 | 文档全屏预览（pdfjs / docx-preview / sheetjs / @file-viewer/pptx，inline workers、无第三方上传） |
+| `dsh-ccpg-larkauth` | 默认 | 飞书扫码登录（启动自举、token 续约、技能种子）；官方设置面板「飞书账号」section |
+| `dsh-ccpg-llm-guard` | 默认 | 模型工具调用完整性防护：空 id/name/arguments 自动重试，不写入会话 |
+| `dsh-ccpg-brand` | 独立可选 | 品牌定制（CCPG logo + 聊天 hero 标题）；`setup.sh` 与 `dsh-ccpg-one` 均不安装 |
 
 安装 / 打包 / 数据位置见 [dsh-plugins/README.md](dsh-plugins/README.md)。
 
@@ -95,7 +95,7 @@ web/                    前端（Vite + React 18 + @xyflow/react + CodeMirror）
 dsh-plugins/
   dsh-ccpg-orchestrator/  引擎：NodeKind 注册表（execute/lint/edgeTaken/wantsSink）
                           + agent 进程内驱动 + QuickJS 脚本运行器 + HTTP/SSE
-  shared/chat-pane.js     聊天记录栏源片段（构建期内联进各插件 client bundle）
+  dsh-ccpg-canvasui/      官方对话输入按钮 + better-sidebar 工作流画布
 ```
 
 双端节点注册表：引擎 NodeKind（调度/超时/重试）+ 前端 registry（图标/表单/徽标），新节点两处注册即得全部能力。agent 节点 = `ctx.agents.create` 进程内真实 dsh agent（followup → whenIdle → session events 聚合，同官方 headless 驱动）。
@@ -105,17 +105,17 @@ dsh-plugins/
 - `defineTool` 必须带 `output: { schema, render }`（文本工具 schema `{type:'string'}`）
 - `ctx.webServer.register` 路由形状 `{kind:'exact'|'prefix', path, handler}`，重复 path 抛错
 - 给 `ctx` 挂自定义属性需 `provide` 声明；插件包里 `@deepseek-ai/*` 依赖需 file: 软链（`bootstrap-deps.sh`）
-- dsh 浏览器端 module-loader 禁跨插件值导入——共享 UI 抽源片段构建期内联（见 `shared/chat-pane.js`）
+- dsh 浏览器端 module-loader 禁跨插件值导入——插件 client bundle 必须自包含
 - dsh 官方 UI 远程 403 = PRIVILEGED_METHODS 钉死 loopback（安全设计）；插件自有路由不受影响
 - dsh 进程内 fetch 127.0.0.1 自请求 404，需换 LAN IP；官方 UI 首载慢，E2E 等待要放宽
 
 ## 测试
 
 ```sh
-cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # 10 套
-node dsh-plugins/shared/chat-pane.test.mjs                                             # 7/7
+cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # 13 套
+node dsh-plugins/dsh-ccpg-canvasui/test/client.test.mjs                               # canvasui 客户端
 node dsh-plugins/dsh-ccpg-document-preview/test/index.test.mjs                        # 4/4
-cd web && npm test                                                                    # 9 套
+cd web && npm test                                                                    # 10 套
 ```
 
 ## 已知限制
