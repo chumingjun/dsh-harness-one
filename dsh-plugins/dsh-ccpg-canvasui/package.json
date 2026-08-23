@@ -4,19 +4,7 @@
   "private": false,
   "type": "module",
   "main": "lib/index.js",
-  "description": "工作流画布进官方 Web UI：conversation.view 注册 workflow tab（iframe 载 /wf1/ 画布），与官方聊天同会话共存",
-  "peerDependencies": {
-    "@deepseek-ai/dsh-commands": "*",
-    "@deepseek-ai/schemastery": "*"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-commands": {
-      "optional": true
-    },
-    "@deepseek-ai/schemastery": {
-      "optional": true
-    }
-  },
+  "description": "工作流画布进官方 Web UI：better-sidebar 注册工作流侧栏（iframe 载 /wf1/ 画布），与官方聊天同会话共存",
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
