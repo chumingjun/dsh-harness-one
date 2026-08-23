@@ -21,7 +21,7 @@ sh setup.sh [profile] [端口]             # 2. 一条龙安装（默认 dsh-ccp
 sh start.sh [profile]                    # 3. 启动
 ```
 
-**模型不归本仓库配置**：插件里的 agent 全部走 dsh 自己的模型配置（profile 的 `cordis.patch.yml`）。`setup.sh` 会写入一份 GLM provider 示例（`apiKeyEnv: GLM_API_KEY`），此时 `GLM_API_KEY=xxx sh start.sh [profile]` 生效；想换模型/渠道，改 patch 里的 `llm-pi-ai.providers`（openai-completions / anthropic-messages 均可），key 环境变量名跟着 `apiKeyEnv` 走——变量名由 dsh profile 声明，本仓库与插件不写死、不存任何 key。
+**模型完全交给 dsh 自带配置**：插件里的 agent 走 dsh 默认模型栈（`deepseek-official`，默认模型在官方 UI「模型」页选择、key 保存进 dsh 用户级 credentials），也可以像 dsh 原生那样在 profile 的 `cordis.patch.yml` / `~/.dsh/settings.yaml` 里自行追加 provider。`setup.sh` 只写端口覆盖，不写任何模型 provider——本仓库与插件不写死、不存任何 key。
 
 > lark-cli（飞书官方 CLI）由 setup.sh 自动安装；忘了装也没关系，larkauth 插件启动时会自举补装。
 

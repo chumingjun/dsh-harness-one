@@ -42,7 +42,7 @@ sh setup.sh --one [profile名] [端口]               # dsh plugin add 只装 ds
 
 > `dsh-ccpg-brand` 不属于聚合包，需要时必须单独安装。聚合模式不要再单独 add 其余 7 个子插件或手写 insert 行——双层挂载 = duplicate prefix route。`dsh plugin --profile <name> remove dsh-ccpg-one` 一次卸掉聚合包包含的默认插件。
 
-> 模型不归插件配置：agent 全部走 dsh 自己的模型配置（profile 的 `cordis.patch.yml`）。setup.sh 写的 GLM provider 示例声明了 `apiKeyEnv: GLM_API_KEY`，此时启动前 `export GLM_API_KEY=你的key` 即可；换 provider 后变量名以对应 `apiKeyEnv` 为准。
+> 模型完全交给 dsh 自带配置：agent 走 dsh 默认模型栈（`deepseek-official`），key 与选型在官方 UI「模型」页配置；setup.sh 的 patch 只写端口覆盖，不写任何 provider。要加自定义 provider，按 dsh 原生方式改 profile `cordis.patch.yml` 或 `~/.dsh/settings.yaml`。
 
 画布：`http://127.0.0.1:4021/wf1/`
 
@@ -75,7 +75,7 @@ dsh plugin --profile myprofile add dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg
 dsh plugin --profile myprofile add dsh-ccpg-brand
 ```
 
-换模型：改 patch 里 `llm-pi-ai.providers`（openai-completions / anthropic-messages 均可），key 环境变量名由 provider 的 `apiKeyEnv` 声明——示例为 `GLM_API_KEY`，换 provider 后以新的 `apiKeyEnv` 为准。插件自身不存任何 key。
+模型：dsh 默认模型栈（`deepseek-official`）开箱即用，key 在官方 UI「模型」页保存；自定义 provider 走 dsh 原生配置（profile `cordis.patch.yml` 的 `llm-pi-ai.providers`，key 由 `apiKeyEnv` 声明走环境变量）。插件自身不存任何 key。
 
 ## 数据位置
 

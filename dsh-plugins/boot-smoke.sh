@@ -7,8 +7,8 @@
 #
 # 用法：sh boot-smoke.sh <tarball> [端口]
 # 环境隔离：DSH_HOME / HOME 之外的全局态不触碰；profile 与临时目录用完即删。
-# 依赖：node>=20、npm i -g @deepseek-ai/dsh、curl；GLM_API_KEY 用 dummy 值即可
-#（smoke 不发真实 LLM 请求）。
+# 依赖：node>=20、npm i -g @deepseek-ai/dsh、curl；模型不需要 key
+#（smoke 只验证插件挂载与页面可服务，不发真实 LLM 请求）。
 set -e
 
 TARBALL="${1:?用法: sh boot-smoke.sh <tarball> [端口]}"
@@ -40,7 +40,7 @@ BS_VER=$(node -e "console.log(require(process.argv[1]).version)" "$BS_DIR/packag
 echo "✓ better-sidebar 装入: $BS_VER"
 
 echo "· 启动 dsh（$PROFILE @ $PORT）…"
-( cd "$SMOKE_ROOT" && GLM_API_KEY=smoke-dummy DSH_HOME="$DSH_HOME" \
+( cd "$SMOKE_ROOT" && DSH_HOME="$DSH_HOME" \
     sh dsh-plugins/start.sh "$PROFILE" --no-open >"$SMOKE_ROOT/boot.log" 2>&1 ) &
 BOOT_PID=$!
 
