@@ -12,14 +12,27 @@
 
 ## 快速开始
 
+**普通用户（release 包，无需本仓库源码）**：
+
 ```sh
 # 前提：node>=20、npm i -g @deepseek-ai/dsh
-cd dsh-plugins
-
-sh build-web.sh                          # 1. 构建画布（含 document-preview）——产物不入库，源码安装必跑
-sh setup.sh [profile] [端口]             # 2. 一条龙安装（默认 dsh-ccpg / 4021）
-sh start.sh [profile]                    # 3. 启动
+curl -LO https://github.com/chumingjun/harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
+tar -xzf dsh-ccpg-plugins-<tag>.tar.gz && cd dsh-plugins
+sh setup.sh --one wf1 4021               # 一键安装（自带全部构建产物）
+sh start.sh wf1                          # 启动 → http://127.0.0.1:4021/
 ```
+
+**开发者（源码）**：
+
+```sh
+git clone https://github.com/chumingjun/harness-one.git && cd harness-one/dsh-plugins
+npm test                                 # （可选）全量单测
+sh build-web.sh                          # 构建画布（含 document-preview）——产物不入库，源码安装必跑
+sh setup.sh --one dev 4021               # 安装（或逐插件：sh setup.sh dev 4021）
+sh start.sh dev
+```
+
+详细安装/使用/开发循环见 [`dsh-plugins/README.md`](dsh-plugins/README.md)。
 
 **模型完全交给 dsh 自带配置**：插件里的 agent 走 dsh 默认模型栈（`deepseek-official`，默认模型在官方 UI「模型」页选择、key 保存进 dsh 用户级 credentials），也可以像 dsh 原生那样在 profile 的 `cordis.patch.yml` / `~/.dsh/settings.yaml` 里自行追加 provider。`setup.sh` 只写端口覆盖，不写任何模型 provider——本仓库与插件不写死、不存任何 key。
 

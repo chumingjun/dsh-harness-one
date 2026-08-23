@@ -123,7 +123,8 @@ if [ "$AGGREGATE" = 1 ]; then
   WS_YML="$HERE/dsh-ccpg-one/pnpm-workspace.yaml"
   rm_vendor_ov() {
     [ -f "$WS_YML" ] || return 0
-    sed -i.bak "/\"dsh-better-sidebar\": \"file:/d" "$WS_YML" && rm -f "$WS_YML.bak"
+    # 只删真正注入的 override 行（行首缩进+键名开头）；裸匹配 "file: 会连注释行一起吃掉
+    sed -i.bak '/^[[:space:]]*"dsh-better-sidebar": "file:/d' "$WS_YML" && rm -f "$WS_YML.bak"
   }
   if [ -n "$SIDEBAR_TGZ" ]; then
     sed -i.bak "/^overrides:/a\\
