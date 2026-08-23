@@ -506,6 +506,26 @@ body {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+/* 运行中节点：边框呼吸光晕 + 头部微光，一眼可辨「谁在跑」 */
+.flow-node-is-running { animation: node-running-glow 1.6s ease-in-out infinite; }
+@keyframes node-running-glow {
+  0%, 100% { box-shadow: 0 0 6px rgba(245, 158, 11, .45); }
+  50% { box-shadow: 0 0 18px rgba(245, 158, 11, .85); }
+}
+.flow-node-is-running .flow-node-head { animation: node-head-sheen 1.6s ease-in-out infinite; }
+@keyframes node-head-sheen {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.18); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .flow-node-is-running, .flow-node-is-running .flow-node-head { animation: none; }
+}
+/* 实时执行时长徽标：等宽跳秒 */
+.flow-node-elapsed {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  padding: 1px 6px; margin-right: 6px; border-radius: 999px;
+  background: rgba(245, 158, 11, .18); color: #b45309;
+}
 .flow-node-body { padding: 9px 12px; }
 .flow-node-hint { margin: 0; font-size: 12px; color: var(--fg-muted); line-height: 1.45; }
 .flow-node-live {
@@ -699,6 +719,24 @@ body {
 .plan-trace summary { font-size: 12px; font-weight: 600; color: #F9A8D4; cursor: pointer; user-select: none; }
 .plan-trace .panel-output { margin-top: 4px; max-height: 200px; }
 .live-progress .live-out { max-height: 120px; overflow: auto; background: rgba(245,158,11,.07); }
+/* 面板置顶实时活动条：运行中节点点开第一眼可见 */
+.live-strip {
+  display: grid; grid-template-columns: auto auto auto 1fr; gap: 8px; align-items: center;
+  padding: 10px 12px; margin-bottom: 10px; border-radius: 10px;
+  background: rgba(245, 158, 11, .1); border: 1px solid rgba(245, 158, 11, .35);
+}
+.live-strip-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: #f59e0b;
+  animation: log-pulse 1.2s ease-in-out infinite;
+}
+.live-strip-title { font-size: 13px; font-weight: 700; color: #b45309; }
+.live-strip-elapsed { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: #92400e; }
+.live-strip-turns { font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+.live-strip-preview {
+  grid-column: 1 / -1; margin: 0; padding: 8px 10px; max-height: 132px; overflow: auto;
+  font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  background: rgba(245, 158, 11, .07); border-radius: 8px; color: var(--fg-muted);
+}
 
 /* ============ 工作流列表页 ============ */
 .wf-view { flex: 1; overflow-y: auto; background: var(--bg); padding: 28px 36px; }

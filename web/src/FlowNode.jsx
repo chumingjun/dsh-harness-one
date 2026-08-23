@@ -1,6 +1,7 @@
 // 节点视觉 v5：类型元数据/徽标/摘要全部来自 registry.jsx（新增节点类型零改动这里）。
 // 自定义节点必须渲染 Handle 才能拖拽建线、锚定已有连线。
 
+import { useEffect, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { NODE_REGISTRY, kindOf } from './registry.jsx';
 
@@ -15,6 +16,21 @@ const STATUS_STYLE = {
   canceled: { border: '2px dotted #94a3b8', opacity: 0.7 },
 };
 
+/** 运行中节点的实时计时：mm:ss，每秒自跳（节点结束即停，开销一个 interval） */
+function useElapsedBadge(startedAt, active) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  if (!active || !startedAt) return '';
+  const sec = Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000));
+  const mm = Math.floor(sec / 60);
+  const ss = String(sec % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+
 const STATUS_TEXT = {
   queued: '排队中', running: <span className="flow-node-running"><span className="spinner" />执行中</span>,
   waiting: '⏸ 待审批',
@@ -27,20 +43,27 @@ export function FlowNode({ data, selected, id, onAddChild }) {
   const meta = kindOf(data.nodeType);
   const status = data.runStatus || 'idle';
   const turns = status === 'running' ? data.liveTurns : data.runTurns;
-  const statusText = status === 'success'
+  const elapsed = useElapsedBadge(data.runStartedAt, status === 'running');
+  const statusDetail = status === 'success'
     ? `✓ ${data.runChars ?? 0} 字${turns != null ? ` · ${turns} 轮` : ''}`
-    : `${STATUS_TEXT[status] || ''}${status === 'running' && turns != null ? ` 第 ${turns} 轮` : ''}${status !== 'running' && turns != null ? ` · ${turns} 轮` : ''}`;
+    : status === 'running'
+      ? (turns != null ? ` 第 ${turns} 轮` : '')
+      : `${STATUS_TEXT[status] || ''}${turns != null ? ` · ${turns} 轮` : ''}`;
   const badges = [
     ...extraBadges(data),
     ...((meta.badges || (() => []))(data) || []),
   ].filter(Boolean);
 
   return (
-    <div className="flow-node" style={{ borderColor: meta.color, ...STATUS_STYLE[status] }}>
+    <div className={`flow-node ${status === 'running' ? 'flow-node-is-running' : ''}`} style={{ borderColor: meta.color, ...STATUS_STYLE[status] }}>
       <Handle type="target" position={Position.Left} className="flow-handle flow-handle-target" />
       <div className="flow-node-head" style={{ background: meta.color }}>
         <span className="flow-node-title"><span dangerouslySetInnerHTML={{ __html: meta.icon }} />{data.label || meta.label}</span>
-        <span className="flow-node-badge">{statusText}</span>
+        <span className="flow-node-badge">
+          {status === 'running' && elapsed && <span className="flow-node-elapsed" title="已执行时长">{elapsed}</span>}
+          {status === 'running' && STATUS_TEXT.running}
+          {statusDetail}
+        </span>
       </div>
       <div className="flow-node-body">
         <p className="flow-node-hint">{clip(meta.summary(data), 60)}</p>

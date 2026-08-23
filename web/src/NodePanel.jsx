@@ -30,6 +30,23 @@ const TOOL_LABELS = {
 
 const TYPE_TEXT = { input: '输入', agent: '智能体', output: '输出', condition: '条件', http: 'HTTP', script: '脚本', note: '注释' };
 
+/** 面板实时活动区的跳秒计时：每秒重渲染（仅运行中挂载） */
+function useElapsedTick(active) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!active) return undefined;
+    const timer = setInterval(() => setTick((v) => v + 1), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+}
+
+function formatElapsed(startedAt) {
+  const sec = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+  const mm = Math.floor(sec / 60);
+  const ss = String(sec % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+
 /** 可折叠分区：open 受控（非受控时 defaultOpen 兜底），标题 + 提示 + 计数徽标 */
 function Section({ title, hint, count, defaultOpen = true, open, onToggle, children }) {
   const [selfOpen, setSelfOpen] = useState(defaultOpen);
@@ -120,6 +137,7 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
   const [testing, setTesting] = useState(false);
   const d = node.data || {};
   const nodeType = d.nodeType || node.type;
+  useElapsedTick(d.runStatus === 'running');
   const set = (patch) => onChange(node.id, patch);
   const selectedTools = Array.isArray(d.tools) ? d.tools : [];
   const selectedSkills = Array.isArray(d.skills) ? d.skills : [];
@@ -283,6 +301,18 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
       </header>
 
       <div className="node-panel-scroll">
+      {/* 运行中实时活动区：置顶第一屏——计时/轮次/流式预览，点开节点立刻知道它在干嘛 */}
+      {d.runStatus === 'running' && (
+        <div className="live-strip">
+          <span className="live-strip-dot" aria-hidden="true" />
+          <span className="live-strip-title">正在执行</span>
+          {d.runStartedAt && <span className="live-strip-elapsed">{formatElapsed(d.runStartedAt)}</span>}
+          {progress?.turns != null && <span className="live-strip-turns">第 {progress.turns} 轮{progress.maxRounds ? ` / 上限 ${progress.maxRounds}` : ''}</span>}
+          {(d.livePreview || progress?.preview) && (
+            <pre className="live-strip-preview">{String(d.livePreview || progress.preview).slice(-400)}</pre>
+          )}
+        </div>
+      )}
       {nodeType === 'input' && (
         <>
           <Section title="输入内容" hint="支持 {{上游变量}}">
@@ -654,13 +684,13 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
       )}
 
       <section className="panel-sec sec-result">
-        {progress && d.runStatus === 'running' && (
+        {d.runStatus === 'running' && (
           <div className="live-progress">
             <div className="result-head">
               <span className="result-title">执行中</span>
-              <span className="sec-hint">第 {progress.turns || '?'} 轮{progress.maxRounds ? ` / 上限 ${progress.maxRounds}` : ''}</span>
+              <span className="sec-hint">第 {progress?.turns || '?'} 轮{progress?.maxRounds ? ` / 上限 ${progress.maxRounds}` : ''}</span>
             </div>
-            {progress.preview && <pre className="panel-output live-out">{String(progress.preview).slice(-400)}</pre>}
+            {progress?.preview && <pre className="panel-output live-out">{String(progress.preview).slice(-400)}</pre>}
           </div>
         )}
         {d.runOutput !== undefined && (

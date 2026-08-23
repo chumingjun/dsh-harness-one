@@ -118,10 +118,11 @@ try {
   const newRunId = runRes.json().runId;
   let storedRun;
   const runsDirB = join(workspaceB, '.workflow-one', 'runs');
+  // startRun 即落盘 running 快照（成果面板运行中可读），这里等运行完结状态（success/error/canceled）
   for (let attempt = 0; attempt < 30; attempt += 1) {
     const files = existsSync(runsDirB) ? readdirSync(runsDirB).filter((file) => file.endsWith('.json')) : [];
     storedRun = files.map((file) => JSON.parse(readFileSync(join(runsDirB, file), 'utf8'))).find((run) => run.runId === newRunId);
-    if (storedRun) break;
+    if (storedRun && storedRun.status !== 'running') break;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   assert.equal(storedRun?.status, 'success');
