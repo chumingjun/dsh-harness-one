@@ -123,7 +123,8 @@ if [ "$AGGREGATE" = 1 ]; then
   WS_YML="$HERE/dsh-ccpg-one/pnpm-workspace.yaml"
   rm_vendor_ov() {
     [ -f "$WS_YML" ] || return 0
-    sed -i.bak "/\"dsh-better-sidebar\": \"file:/d" "$WS_YML" && rm -f "$WS_YML.bak"
+    # 只删真正注入的 override 行（行首缩进+键名开头）；裸匹配 "file: 会连注释行一起吃掉
+    sed -i.bak '/^[[:space:]]*"dsh-better-sidebar": "file:/d' "$WS_YML" && rm -f "$WS_YML.bak"
   }
   if [ -n "$SIDEBAR_TGZ" ]; then
     sed -i.bak "/^overrides:/a\\
@@ -187,36 +188,15 @@ echo "✓ 依赖已引导"
 # 4. patch 组装（不覆盖已有 patch —— 已有则提示）
 # 七个默认插件的挂载行不再手写：各插件自带 dsh.bundle.patch（cordis.patch.yml），
 # dsh plugin add 依据声明自动进 bundles 层并挂载——手写行会双挂载（duplicate route）。
-# patch 只保留用户配置：模型 provider + webserver 端口。
-if [ -f "$PDIR/cordis.patch.yml" ] && grep -q "llm-pi-ai\|dsh-host-webserver" "$PDIR/cordis.patch.yml"; then
-  echo "✓ patch 已含 provider/webserver 配置（跳过）"
+# patch 只写端口；模型 provider 完全交给 dsh 自带体系（deepseek-official 默认，
+# key 与选型在官方 UI「模型」页 / ~/.dsh/settings.yaml 配置），插件不掺和。
+if [ -f "$PDIR/cordis.patch.yml" ] && grep -q "dsh-host-webserver" "$PDIR/cordis.patch.yml"; then
+  echo "✓ patch 已含 webserver 配置（跳过）"
 else
   cat > "$PDIR/cordis.patch.yml" << EOF
-# dsh-ccpg 系插件 profile：模型 provider + web 服务（插件挂载走各自的 dsh.bundle.patch）
-# 模型 provider 按需替换（示例为 GLM BigModel anthropic 兼容端点）
-- id: llm-pi-ai
-  name: '@deepseek-ai/dsh-llm-pi-ai'
-  config:
-    providers:
-      glm-bigmodel:
-        displayName: GLM (BigModel)
-        apiKeyEnv: GLM_API_KEY
-        api: anthropic-messages
-        baseURL: https://open.bigmodel.cn/api/anthropic
-        models:
-          - id: glm-5.3
-            name: GLM-5.3
-            contextWindow: 262144
-            maxTokens: 32768
-          - id: glm-5.2
-            name: GLM-5.2
-            contextWindow: 262144
-            maxTokens: 32768
-- id: agent-default-model
-  name: '@deepseek-ai/dsh-agent-default-model'
-  config:
-    provider: glm-bigmodel
-    model: glm-5.3
+# dsh-ccpg 系插件 profile：仅 web 服务端口覆盖（插件挂载走各自的 dsh.bundle.patch）。
+# 模型 provider 用 dsh 自带配置：官方 UI「模型」页选型并保存 key（写入 ~/.dsh
+# settings/credentials），或环境变量注入 dsh 默认 provider 的 key。
 # webserver：dsh-web-app bundle 已挂该行（默认 127.0.0.1:3080），这里只覆盖端口。
 # host 127.0.0.1=本机访问；局域网/Tailscale 远程改 host 为 0.0.0.0（注意 dsh agent 有 bash 能力，仅在可信网络开放）。
 - id: webserver
@@ -261,7 +241,8 @@ fi
 
 echo ""
 echo "安装完成。启动："
-echo "  GLM_API_KEY=你的key $HERE/start.sh $PROFILE"
+echo "  $HERE/start.sh $PROFILE"
+echo "模型在官方 UI「模型」页配置（或环境变量注入 dsh 默认 provider 的 key）——插件不写死任何模型。"
 if [ "$AGGREGATE" = 1 ]; then
   echo "聚合安装：可选件开关（启动前 export）——"
   echo "  CCPG_NO_LARK=1 关飞书登录 · CCPG_NO_PREVIEW=1 关文档预览"

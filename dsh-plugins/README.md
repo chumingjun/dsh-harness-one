@@ -13,24 +13,52 @@
 | `dsh-ccpg-llm-guard` | 默认 | 拦截模型返回的空 id/name/arguments 工具调用，自动重试且不污染会话 |
 | `dsh-ccpg-brand` | 独立可选 | 品牌定制（CCPG logo + 聊天 hero 标题）；默认安装与聚合包均不包含 |
 
-## 安装（3 步）
+## 安装与使用
+
+两种路径，选其一。共同前提：**Node ≥ 20**、`npm i -g @deepseek-ai/dsh`（dsh 官方，模型 key 与选型在官方 UI「模型」页配置，我们的插件不写死任何模型）。
+
+### A. 普通用户 · release 包（推荐，无需本仓库源码）
 
 ```sh
-# 前提：node>=20、npm i -g @deepseek-ai/dsh
+# 1. 下载 release 包（GitHub Releases 页拿最新 tag 的 asset）
+curl -LO https://github.com/chumingjun/harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
+tar -xzf dsh-ccpg-plugins-<tag>.tar.gz   # 解出 dsh-plugins/ 目录（自带全部构建产物 + vendor 件）
+
+# 2. 一键安装（聚合模式：一个包装齐 7 插件 + better-sidebar，并建好独立 profile）
 cd dsh-plugins
+sh setup.sh --one wf1 4021              # profile 名/端口可自定义
 
-sh build-web.sh                                    # 1. 构建画布——产物不入库，源码安装必跑（分发包已带成品，可跳过）
-sh setup.sh [profile名] [端口]                     # 2. 一条龙安装（默认 dsh-ccpg / 4021）
-sh start.sh [profile名]                            # 3. 启动
+# 3. 启动
+sh start.sh wf1
 ```
 
-### 聚合安装（一个包 + 可选件开关）
+浏览器打开 `http://127.0.0.1:4021/` 即用：
+- 右下/设置进入**「模型」页**选模型、保存 key（dsh 官方配置面，存于 dsh 用户级 credentials）
+- 点聊天输入框左侧**工作流图标** → 右侧栏展开画布；拖节点或直接在聊天里说"帮我建一个××工作流"
+- 建图/运行过程在**消息流以卡片呈现**（操作摘要、完成度 x/y、点击卡片跳画布）
+- 独立全屏画布：新标签页开 `http://127.0.0.1:4021/wf1/`
+
+release 包特性：**拿到即装**（画布/依赖/聚合壳全带）；better-sidebar 的钉版本 tgz 在 `vendor/`（断网/上游下架也能装）；装完的 `dsh-plugins/` 目录保留着，升级 = 下载新包重复上述步骤。
+
+### B. 开发者 · 源码（本仓库）
 
 ```sh
-sh setup.sh --one [profile名] [端口]               # dsh plugin add 只装 dsh-ccpg-one 一个包
+git clone https://github.com/chumingjun/harness-one.git
+cd harness-one/dsh-plugins
+
+npm test                                # （可选）先跑全量单测
+sh build-web.sh                         # 构建画布——产物不入库，源码安装必跑
+sh setup.sh --one dev 4021              # 安装（或逐插件：sh setup.sh dev 4021）
+sh start.sh dev
 ```
 
-聚合壳 `dsh-ccpg-one` 的 bundle patch 一次性挂载 7 个默认插件 + better-sidebar；可选件按环境变量门控（启动前 export，可写进工作区 `.env`）：
+开发循环：
+- 改画布前端（`web/`）→ `sh build-web.sh` → 刷新页面
+- 改 canvasui 官方 UI 侧（`dsh-ccpg-canvasui/src/client.js`）→ `sh build-canvasui.sh` → **彻底重启 dsh**（HMR 缓存模块，`pkill dsh` 再起）
+- 改引擎（`dsh-ccpg-orchestrator/lib/`）→ 对应面测试（`cd dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done`）→ 重启
+- 发版：`git tag v1.2.3 && git push origin v1.2.3`（release.yml 自动 pack + boot-smoke 端到端冒烟 + 上传 asset）
+
+### 可选件开关（`--one` 模式，启动前 export，可写进工作区 `.env`）
 
 | 开关 | 效果 |
 |---|---|
@@ -40,9 +68,11 @@ sh setup.sh --one [profile名] [端口]               # dsh plugin add 只装 ds
 | `CCPG_NO_GUARD=1` | 不加载 llm-guard（不建议关） |
 | `CCPG_ONLY_CORE=1` | 一键只留核心：tools/orchestrator/web/canvasui |
 
-> `dsh-ccpg-brand` 不属于聚合包，需要时必须单独安装。聚合模式不要再单独 add 其余 7 个子插件或手写 insert 行——双层挂载 = duplicate prefix route。`dsh plugin --profile <name> remove dsh-ccpg-one` 一次卸掉聚合包包含的默认插件。
+> `dsh-ccpg-brand` 不属于聚合包，需要时必须单独安装（`dsh plugin --profile <name> add <repo>/dsh-plugins/dsh-ccpg-brand`）。聚合模式不要再单独 add 其余 7 个子插件或手写 insert 行——双层挂载 = duplicate prefix route。`dsh plugin --profile <name> remove dsh-ccpg-one` 一次卸掉聚合包包含的默认插件。
 
-> 模型不归插件配置：agent 全部走 dsh 自己的模型配置（profile 的 `cordis.patch.yml`）。setup.sh 写的 GLM provider 示例声明了 `apiKeyEnv: GLM_API_KEY`，此时启动前 `export GLM_API_KEY=你的key` 即可；换 provider 后变量名以对应 `apiKeyEnv` 为准。
+> 模型完全交给 dsh 自带配置：agent 走 dsh 默认模型栈（`deepseek-official`），key 与选型在官方 UI「模型」页配置；setup.sh 的 patch 只写端口覆盖，不写任何 provider。要加自定义 provider，按 dsh 原生方式改 profile `cordis.patch.yml` 或 `~/.dsh/settings.yaml`。
+
+> 远程访问（局域网/Tailscale）：把 profile `cordis.patch.yml` 里 webserver 的 `host` 改为 `0.0.0.0`。dsh agent 有 bash 能力，仅在可信网络开放。
 
 画布：`http://127.0.0.1:4021/wf1/`
 
@@ -55,7 +85,7 @@ sh setup.sh --one [profile名] [端口]               # dsh plugin add 只装 ds
 5. 建 `~/.dsh/profiles/<name>`（dsh-base bundle）
 6. `dsh plugin add` 7 个默认插件——**各插件自带 `dsh.bundle.patch`（包内 `cordis.patch.yml`），add 一步完成安装+进 bundles 层+挂载**（与 dsh-better-sidebar 的 npm 分发同一机制；失败即中止，不留半成品 profile）
 7. 依赖引导：dsh SDK 是 dsh 包内层 bundled deps，registry 版本滞后且插件解析路径够不到——`bootstrap-deps.sh` 软链进插件源码目录（npm 安装渠道则无需此步：插件实体落在 profile 内，dsh 启动时的 `~/.dsh/profiles/node_modules` 扁平兜底自动接通运行实例的 SDK）
-8. 写 `cordis.patch.yml`——**只写用户配置**（GLM provider 示例 + webserver 端口），不再手写插件挂载行
+8. 写 `cordis.patch.yml`——**只写 webserver 端口覆盖**（模型 provider 走 dsh 自带体系，不在此写）
 9. 装 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（npm 包，自带 bundle patch 一步挂载）：官方 UI 右侧工作台侧边栏——canvasui 往它注册「工作流」tab（+ 菜单第一位），点击对话输入框旁按钮展开。软依赖：装不上时官方 UI 内无法打开工作流侧栏，独立 `/wf1/` 入口仍可用。**版本随 pack 当次 npm latest**：release 包内 `vendor/dsh-better-sidebar-<ver>.tgz` 优先（断网/下架也能装），源码安装无 vendor 件则从 npm 拉 latest
 
 > 双挂载警告：插件挂载行已由各包 `dsh.bundle.patch` 提供，profile 的 `cordis.patch.yml` 里**不要再手写**同名 `- insert` 行——两层都生效会重复注册路由，boot 时 duplicate prefix route 报错。
@@ -75,7 +105,7 @@ dsh plugin --profile myprofile add dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg
 dsh plugin --profile myprofile add dsh-ccpg-brand
 ```
 
-换模型：改 patch 里 `llm-pi-ai.providers`（openai-completions / anthropic-messages 均可），key 环境变量名由 provider 的 `apiKeyEnv` 声明——示例为 `GLM_API_KEY`，换 provider 后以新的 `apiKeyEnv` 为准。插件自身不存任何 key。
+模型：dsh 默认模型栈（`deepseek-official`）开箱即用，key 在官方 UI「模型」页保存；自定义 provider 走 dsh 原生配置（profile `cordis.patch.yml` 的 `llm-pi-ai.providers`，key 由 `apiKeyEnv` 声明走环境变量）。插件自身不存任何 key。
 
 ## 数据位置
 
