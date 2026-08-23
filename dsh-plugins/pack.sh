@@ -61,6 +61,23 @@ if [ -f package-lock.json ]; then
 else
   npm install --no-audit --no-fund
 fi
+# npm ci/install 重建 node_modules，会抹掉 setup.sh 第 3 步建的 SDK 软链
+# （bootstrap 的 @deepseek-ai/* 指向 dsh 主安装）——此处按同款逻辑补链，
+# 否则 pack 过后本机 npm test 全挂（plugin-storage.integration 等解析不到 SDK）。
+SDK_DIR=""
+DSH_PROBE=$(node -e "console.log(require.resolve('@deepseek-ai/dsh/lib/bin.js'))" 2>/dev/null || true)
+[ -z "$DSH_PROBE" ] && for c in "$HOME/.local/npm-global/lib/node_modules/@deepseek-ai/dsh/lib/bin.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"; do
+  [ -f "$c" ] && DSH_PROBE="$c" && break
+done
+[ -n "$DSH_PROBE" ] && SDK_DIR=$(node -e "console.log(require('path').dirname(require('path').dirname(process.argv[1])))" "$DSH_PROBE")/node_modules/@deepseek-ai
+if [ -n "$SDK_DIR" ] && [ -d "$SDK_DIR/dsh-tools" ]; then
+  mkdir -p node_modules/@deepseek-ai
+  for dep in schemastery cordis dsh-tools dsh-llm dsh-session; do
+    T="node_modules/@deepseek-ai/$dep"
+    [ -d "$SDK_DIR/$dep" ] || continue
+    [ -L "$T" ] || ln -s "$SDK_DIR/$dep" "$T"
+  done
+fi
 echo "✓ orchestrator 依赖已装"
 
 # ---- 2.5 canvasui bundle 重建（必须在 rsync 组装之前）----
