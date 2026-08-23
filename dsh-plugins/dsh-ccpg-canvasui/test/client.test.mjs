@@ -97,7 +97,12 @@ client.apply({
     },
   },
 });
-assert.deepEqual(injectedSlots, ["conversation.input.left"]);
+assert.deepEqual(injectedSlots, [
+  "conversation.input.left",
+  "tool.call.toolview",
+  "tool.call.toolview",
+  "tool.call.toolview",
+]);
 assert.deepEqual(
   registeredTabs.map((tab) => tab.id),
   ["ccpg:workflow"],
@@ -181,5 +186,146 @@ assert.equal(
   client.__test.currentDshSessionId("blank-session"),
   "blank-session",
 );
+
+// ---- 消息流卡片：纯函数面 ----
+// 工具 block 文本抽取（settled content 数组 → 文本；settled 必带 kind）
+assert.equal(client.__test.toolText(null), null);
+assert.equal(
+  client.__test.toolText({ kind: "tool-result", content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] }),
+  "ab",
+);
+assert.equal(client.__test.toolText({ kind: "tool-result", content: [{ type: "image", text: "x" }] }), "");
+assert.equal(client.__test.toolText({ name: "x" }), null); // running block 无 kind/content
+
+// runId 解析：canvas_run_workflow 结果 JSON
+assert.equal(client.__test.runIdFromText('{"started":true,"runId":"run_123"}'), "run_123");
+assert.equal(client.__test.runIdFromText("画布尚未打开或未上报图。"), null);
+assert.equal(client.__test.runIdFromText(null), null);
+assert.equal(client.__test.runIdFromText('{"ok":true}'), null);
+
+// 运行状态 → 卡片状态点
+assert.equal(client.__test.runDotState({ status: "success" }), "success");
+assert.equal(client.__test.runDotState({ status: "running" }), "running");
+assert.equal(client.__test.runDotState({ status: "error" }), "error");
+assert.equal(client.__test.runDotState({ status: "waiting" }), "waiting");
+assert.equal(client.__test.runDotState({ status: "canceled" }), "error");
+assert.equal(client.__test.runDotState(null, "running"), "running");
+assert.equal(client.__test.runDotState(null), "running"); // 无数据按运行中
+
+// GraphPatchCard：running（无 content）→ 应用中；settled 成功带 lint 通过 → 已应用；
+// settled isError → 被拒绝。args 解析从 call.argsRaw（JSON 字符串）。
+function patchCardOf(block) {
+  const calls = [];
+  const reactShim = {
+    createElement(tag, props, ...children) {
+      calls.push({ tag, props, children });
+      return { tag, props, children };
+    },
+    useRef() { return { current: null }; },
+    useState(v) { return [v, () => {}]; },
+    useEffect() {},
+    useMemo(fn) { return fn(); },
+  };
+  const saved = globalThis.__wf1ReactShim;
+  // 直接在 vm context 里再 require 一次 react shim 太重；组件只依赖参数化 react——
+  // 借 exports.__test 拿组件后以 shim 调用不可行（闭包引用模块级 react），
+  // 所以这里改为：走 vm 重跑 bundle，react require 返回 shim。
+  return { calls, reactShim, saved };
+}
+// 简化：GraphPatchCard/WorkflowRunCard 的渲染链在 vm 内闭包引用 react——
+// 用第二批 vm context 以 react shim 加载，专门渲染卡片组件断言 props。
+let cardClient;
+const cardCalls = [];
+const cardContext = {
+  window: {
+    localStorage: { getItem() { return null; } },
+    __ModuleLoader__: {
+      load({ factory }) {
+        cardClient = factory((name) => {
+          if (name === "react")
+            return {
+              createElement(tag, props, ...children) {
+                cardCalls.push({ tag, props, children });
+                return { tag, props, children };
+              },
+              useRef() { return { current: null }; },
+              useState(v) { return [v, () => {}]; },
+              useEffect() {},
+              useMemo(fn) { return fn(); },
+            };
+          throw new Error(`unexpected require: ${name}`);
+        });
+      },
+    },
+  },
+  document: {
+    head: { appendChild() {} },
+    createElement() { return {}; },
+    getElementById() { return null; },
+  },
+  console,
+};
+vm.runInNewContext(bundle, cardContext, {
+  filename: "dsh-ccpg-canvasui/src/client.js",
+});
+
+// GraphPatchCard：running（argsRaw 携带 ops）
+cardCalls.length = 0;
+cardClient.__test.GraphPatchCard({
+  block: { name: "canvas_graph_patch", argsRaw: JSON.stringify({ ops: [{ op: "addNode" }, { op: "addNode" }, { op: "connect" }] }) },
+});
+{
+  const shell = cardCalls.findLast((c) => c.props && c.props.className === "wf1-card");
+  assert.ok(shell, "建图卡应渲染卡片骨架");
+  const state = cardCalls.findLast((c) => c.props && c.props.className === "wf1-card-state");
+  const dot = cardCalls.findLast((c) => c.props && c.props.className === "wf1-card-dot");
+  assert.equal(dot.props["data-s"], "running");
+  const meta = cardCalls.findLast((c) => c.props && c.props.className === "wf1-card-meta");
+  assert.equal(meta.children && meta.children[0], "2 加节点、1 连线");
+}
+
+// GraphPatchCard：settled 成功（lint 通过）
+cardCalls.length = 0;
+cardClient.__test.GraphPatchCard({
+  block: {
+    kind: "tool-result",
+    isError: false,
+    call: { name: "canvas_graph_patch", argsRaw: JSON.stringify({ ops: [{ op: "addNode" }] }) },
+    content: [{ type: "text", text: "已应用 1 个操作到画布。\nlint: 通过" }],
+  },
+});
+{
+  const dot = cardCalls.findLast((c) => c.props && c.props.className === "wf1-card-dot");
+  assert.equal(dot.props["data-s"], "success");
+}
+
+// GraphPatchCard：settled 拒绝（isError）
+cardCalls.length = 0;
+cardClient.__test.GraphPatchCard({
+  block: {
+    kind: "tool-result",
+    isError: true,
+    call: { name: "canvas_graph_patch", argsRaw: JSON.stringify({ ops: [{ op: "bogus" }] }) },
+    content: [{ type: "text", text: "整批拒绝（未做任何修改）" }],
+  },
+});
+{
+  const dot = cardCalls.findLast((c) => c.props && c.props.className === "wf1-card-dot");
+  assert.equal(dot.props["data-s"], "error");
+}
+
+// WorkflowRunCard：结果不可解析（画布未开）→ 文本降级卡，仍可点
+cardCalls.length = 0;
+cardClient.__test.WorkflowRunCard({
+  block: {
+    kind: "tool-result",
+    isError: false,
+    content: [{ type: "text", text: "画布尚未打开或未上报图。" }],
+  },
+});
+{
+  const dot = cardCalls.findLast((c) => c.props && c.props.className === "wf1-card-dot");
+  assert.equal(dot.props["data-s"], "pending");
+}
 
 console.log("canvasui client tests: passed");
