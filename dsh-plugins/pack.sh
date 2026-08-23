@@ -28,6 +28,10 @@ PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh
 OPTIONAL_PLUGINS="dsh-ccpg-brand"
 # 聚合壳（bundle patch 挂载七插件 + better-sidebar，可选件 env 门控）；其 node_modules 是本地安装产物，不打包
 AGG="dsh-ccpg-one"
+# better-sidebar 钉死版本（与 dsh-ccpg-one/pnpm-workspace.yaml override、package.json peer 同步改）：
+# 上游 9 天 15 版，裸 @latest 的破坏性变更会打断 canvasui 集成；pack 时 vendor tgz 进归档，
+# 安装机断网/包下架也能装（依赖树仍走在线装）。
+SIDEBAR_VER="0.15.2"
 
 # ---- 0. node（>=20）----
 NODE_BIN="${WF1_NODE:-}"
@@ -146,8 +150,15 @@ try {
 NODE
 echo "✓ QuickJS WASM 归档 smoke 通过"
 
-# 说明：dsh-better-sidebar（侧边栏工作台宿主）不打进 tarball —— 它是 registry npm 包，
-# setup.sh 安装时从 npm 拉取（canvasui 软依赖它；失败时独立 /wf1/ 画布仍可用）。
+# ---- 3.5 vendor better-sidebar（钉版本 tgz，源码仓库不进二进制）----
+# 从 npm 拉精确版本 tgz 放进归档 vendor/；setup.sh 优先装它，npm 不可达时也不缺件。
+# 与 dsh-ccpg-one 的 override/peer 用同一 SIDEBAR_VER，升级三处同步。
+mkdir -p "$OUT/dsh-plugins/vendor"
+( cd "$OUT/dsh-plugins/vendor" && npm pack "dsh-better-sidebar@$SIDEBAR_VER" --silent >/dev/null ) \
+  || { echo "✗ npm pack dsh-better-sidebar@$SIDEBAR_VER 失败（网络？）"; exit 1; }
+[ -f "$OUT/dsh-plugins/vendor/dsh-better-sidebar-$SIDEBAR_VER.tgz" ] \
+  || { echo "✗ vendor tgz 缺失: dsh-better-sidebar-$SIDEBAR_VER.tgz"; exit 1; }
+echo "✓ 已 vendor dsh-better-sidebar@$SIDEBAR_VER ($(du -h "$OUT/dsh-plugins/vendor/dsh-better-sidebar-$SIDEBAR_VER.tgz" | cut -f1))"
 
 # ---- 4. 打包 ----
 cd "$OUT"
@@ -156,6 +167,8 @@ for p in $PLUGINS $OPTIONAL_PLUGINS $AGG; do
   tar -tzf "$TAR" "dsh-plugins/$p/package.json" >/dev/null 2>&1 \
     || { echo "✗ tarball 缺失: $p/package.json"; exit 1; }
 done
+tar -tzf "$TAR" "dsh-plugins/vendor/dsh-better-sidebar-$SIDEBAR_VER.tgz" >/dev/null 2>&1 \
+  || { echo "✗ tarball 缺失: vendor/dsh-better-sidebar-$SIDEBAR_VER.tgz"; exit 1; }
 if tar -tzf "$TAR" | grep -q '/node_modules/@deepseek-ai/'; then
   echo "✗ tarball 含不可分发的 @deepseek-ai SDK 软链"
   exit 1

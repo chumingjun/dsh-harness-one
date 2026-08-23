@@ -6,6 +6,9 @@ packages:
 # 运行时这些包由 dsh 启动时的扁平兜底（~/.dsh/profiles/node_modules）提供，
 # 这里 override 只为让 install 通过——钉到与 dsh 0.1.1-rc.2 同版的 next 发布。
 overrides:
+  # dsh-better-sidebar：钉精确版本（上游 9 天 15 版，@latest 破坏性变更会打断 canvasui
+  # 的 registerTab/openTab 集成）。pack.sh 按同一版本 vendor tgz，升级时两处同步改。
+  "dsh-better-sidebar": "0.15.2"
   "@deepseek-ai/dsh-agent": "0.1.1-rc.2"
   "@deepseek-ai/dsh-agent-instructions": "0.1.1-rc.2"
   "@deepseek-ai/dsh-client-locale": "0.1.1-rc.2"
