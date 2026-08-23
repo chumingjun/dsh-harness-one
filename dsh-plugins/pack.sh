@@ -28,10 +28,11 @@ PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh
 OPTIONAL_PLUGINS="dsh-ccpg-brand"
 # 聚合壳（bundle patch 挂载七插件 + better-sidebar，可选件 env 门控）；其 node_modules 是本地安装产物，不打包
 AGG="dsh-ccpg-one"
-# better-sidebar 钉死版本（与 dsh-ccpg-one/pnpm-workspace.yaml override、package.json peer 同步改）：
-# 上游 9 天 15 版，裸 @latest 的破坏性变更会打断 canvasui 集成；pack 时 vendor tgz 进归档，
-# 安装机断网/包下架也能装（依赖树仍走在线装）。
-SIDEBAR_VER="0.15.2"
+# better-sidebar 版本 = pack 当次的 npm latest（每次打包用最新版 vendor 进归档）。
+# 精确解析再 pack（而不是 npm pack dsh-better-sidebar@latest）：文件名带版本，setup.sh
+# 的 glob 探测与提示信息才有确定性；npm 不可达则中止打包——vendor 是归档必含件。
+SIDEBAR_VER=$(npm view dsh-better-sidebar version 2>/dev/null) || true
+[ -n "$SIDEBAR_VER" ] || { echo "✗ 无法解析 dsh-better-sidebar 最新版本（npm view 失败，网络？）"; exit 1; }
 
 # ---- 0. node（>=20）----
 NODE_BIN="${WF1_NODE:-}"
@@ -150,9 +151,9 @@ try {
 NODE
 echo "✓ QuickJS WASM 归档 smoke 通过"
 
-# ---- 3.5 vendor better-sidebar（钉版本 tgz，源码仓库不进二进制）----
-# 从 npm 拉精确版本 tgz 放进归档 vendor/；setup.sh 优先装它，npm 不可达时也不缺件。
-# 与 dsh-ccpg-one 的 override/peer 用同一 SIDEBAR_VER，升级三处同步。
+# ---- 3.5 vendor better-sidebar（pack 当次 npm latest，源码仓库不进二进制）----
+# 从 npm 拉解析到的最新版 tgz 放进归档 vendor/；setup.sh 优先装它，
+# 安装机断网/包下架也不缺件（依赖树仍走在线装）。
 mkdir -p "$OUT/dsh-plugins/vendor"
 ( cd "$OUT/dsh-plugins/vendor" && npm pack "dsh-better-sidebar@$SIDEBAR_VER" --silent >/dev/null ) \
   || { echo "✗ npm pack dsh-better-sidebar@$SIDEBAR_VER 失败（网络？）"; exit 1; }

@@ -56,7 +56,7 @@ sh setup.sh --one [profile名] [端口]               # dsh plugin add 只装 ds
 6. `dsh plugin add` 7 个默认插件——**各插件自带 `dsh.bundle.patch`（包内 `cordis.patch.yml`），add 一步完成安装+进 bundles 层+挂载**（与 dsh-better-sidebar 的 npm 分发同一机制；失败即中止，不留半成品 profile）
 7. 依赖引导：dsh SDK 是 dsh 包内层 bundled deps，registry 版本滞后且插件解析路径够不到——`bootstrap-deps.sh` 软链进插件源码目录（npm 安装渠道则无需此步：插件实体落在 profile 内，dsh 启动时的 `~/.dsh/profiles/node_modules` 扁平兜底自动接通运行实例的 SDK）
 8. 写 `cordis.patch.yml`——**只写用户配置**（GLM provider 示例 + webserver 端口），不再手写插件挂载行
-9. 装 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（npm 包，自带 bundle patch 一步挂载）：官方 UI 右侧工作台侧边栏——canvasui 往它注册「工作流」tab（+ 菜单第一位），点击对话输入框旁按钮展开。软依赖：装不上时官方 UI 内无法打开工作流侧栏，独立 `/wf1/` 入口仍可用。**版本钉死 0.15.2**（上游迭代极快，防破坏性变更打断 canvasui 集成）：release 包内 `vendor/dsh-better-sidebar-<ver>.tgz` 优先（断网/下架也能装），源码安装无 vendor 件则从 npm 拉同版本。升级时同步改三处：`pack.sh` 的 `SIDEBAR_VER`、`dsh-ccpg-one/package.json` peer、`dsh-ccpg-one/pnpm-workspace.yaml` override
+9. 装 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（npm 包，自带 bundle patch 一步挂载）：官方 UI 右侧工作台侧边栏——canvasui 往它注册「工作流」tab（+ 菜单第一位），点击对话输入框旁按钮展开。软依赖：装不上时官方 UI 内无法打开工作流侧栏，独立 `/wf1/` 入口仍可用。**版本随 pack 当次 npm latest**：release 包内 `vendor/dsh-better-sidebar-<ver>.tgz` 优先（断网/下架也能装），源码安装无 vendor 件则从 npm 拉 latest
 
 > 双挂载警告：插件挂载行已由各包 `dsh.bundle.patch` 提供，profile 的 `cordis.patch.yml` 里**不要再手写**同名 `- insert` 行——两层都生效会重复注册路由，boot 时 duplicate prefix route 报错。
 

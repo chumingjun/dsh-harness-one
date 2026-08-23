@@ -16,8 +16,9 @@ PORT="${2:-4021}"
 HERE=$(cd "$(dirname "$0")" && pwd)
 export DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
 PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-llm-guard"
-# better-sidebar 安装源：release 包 vendor/ 里的钉版本 tgz 优先（断网/下架也能装），
-# 没有则回退 npm registry。源码仓库 checkout 没有 vendor/（不入库），自动走 registry。
+# better-sidebar 安装源：release 包 vendor/ 里的 tgz 优先（pack 当次 npm latest，
+# 断网/下架也能装），没有则回退 npm registry 拉最新。源码仓库 checkout 没有
+# vendor/（不入库），自动走 registry。
 SIDEBAR_TGZ=""
 for f in "$HERE"/vendor/dsh-better-sidebar-*.tgz; do
   [ -f "$f" ] && SIDEBAR_TGZ="$f"
@@ -26,7 +27,7 @@ if [ -n "$SIDEBAR_TGZ" ]; then
   SIDEBAR_SRC="$SIDEBAR_TGZ"
   echo "· better-sidebar 用本地 vendor: $(basename "$SIDEBAR_TGZ")"
 else
-  SIDEBAR_SRC="dsh-better-sidebar@0.15.2"
+  SIDEBAR_SRC="dsh-better-sidebar@latest"
   echo "· better-sidebar 未发现 vendor tgz，从 npm 拉 $SIDEBAR_SRC"
 fi
 
@@ -117,17 +118,24 @@ if [ "$AGGREGATE" = 1 ]; then
   # ---- 聚合安装：只 add dsh-ccpg-one（七插件 + better-sidebar 全由它的 bundle patch 挂载）----
   # 先装聚合包自身的 file: 依赖（七插件实体进聚合包 node_modules；overrides 钉 SDK 版本，
   # 见 dsh-ccpg-one/pnpm-workspace.yaml——registry latest 停 0.0.1-rc.1，0.1.x 只在 next tag）。
-  # better-sidebar override 自愈：vendor tgz 在场则指 file:（npm 不可达也能装），
-  # 不在场则恢复静态版本号——避免上次安装的 file: 残留指向已删文件。
+  # better-sidebar：vendor tgz 在场则临时注入 file: override（npm 不可达也能装），
+  # pnpm install 完成后（无论成败）移除——workspace yaml 不留本机路径残留。
+  WS_YML="$HERE/dsh-ccpg-one/pnpm-workspace.yaml"
+  rm_vendor_ov() {
+    [ -f "$WS_YML" ] || return 0
+    sed -i.bak "/\"dsh-better-sidebar\": \"file:/d" "$WS_YML" && rm -f "$WS_YML.bak"
+  }
   if [ -n "$SIDEBAR_TGZ" ]; then
-    SIDEBAR_OV="file:$SIDEBAR_TGZ"
-  else
-    SIDEBAR_OV="0.15.2"
+    sed -i.bak "/^overrides:/a\\
+  \"dsh-better-sidebar\": \"file:$SIDEBAR_TGZ\"
+" "$WS_YML" && rm -f "$WS_YML.bak"
   fi
-  sed -i.bak "s#\"dsh-better-sidebar\": \"[^\"]*\"#\"dsh-better-sidebar\": \"$SIDEBAR_OV\"#" \
-    "$HERE/dsh-ccpg-one/pnpm-workspace.yaml" && rm -f "$HERE/dsh-ccpg-one/pnpm-workspace.yaml.bak"
-  (cd "$HERE/dsh-ccpg-one" && pnpm install --no-frozen-lockfile) >/dev/null 2>&1 \
-    || { echo "✗ dsh-ccpg-one 依赖安装失败（在该目录跑 pnpm install 看详情）"; exit 1; }
+  if ! (cd "$HERE/dsh-ccpg-one" && pnpm install --no-frozen-lockfile) >/dev/null 2>&1; then
+    rm_vendor_ov
+    echo "✗ dsh-ccpg-one 依赖安装失败（在该目录跑 pnpm install 看详情）"
+    exit 1
+  fi
+  rm_vendor_ov
   # better-sidebar 走聚合包 peer（optional）声明，不单独 add——聚合 patch 已挂它，双 add 会 duplicate id。
   if ! node "$DSH_BIN" plugin --profile "$PROFILE" add "$HERE/dsh-ccpg-one" >"$PLUGIN_LOG" 2>&1; then
     cat "$PLUGIN_LOG" >&2

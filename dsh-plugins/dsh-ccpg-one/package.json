@@ -22,7 +22,7 @@
     "dsh-ccpg-web": "file:../dsh-ccpg-web"
   },
   "peerDependencies": {
-    "dsh-better-sidebar": "0.15.2"
+    "dsh-better-sidebar": "*"
   },
   "peerDependenciesMeta": {
     "dsh-better-sidebar": {
