@@ -28,6 +28,11 @@ PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh
 OPTIONAL_PLUGINS="dsh-ccpg-brand"
 # 聚合壳（bundle patch 挂载七插件 + better-sidebar，可选件 env 门控）；其 node_modules 是本地安装产物，不打包
 AGG="dsh-ccpg-one"
+# better-sidebar 版本 = pack 当次的 npm latest（每次打包用最新版 vendor 进归档）。
+# 精确解析再 pack（而不是 npm pack dsh-better-sidebar@latest）：文件名带版本，setup.sh
+# 的 glob 探测与提示信息才有确定性；npm 不可达则中止打包——vendor 是归档必含件。
+SIDEBAR_VER=$(npm view dsh-better-sidebar version 2>/dev/null) || true
+[ -n "$SIDEBAR_VER" ] || { echo "✗ 无法解析 dsh-better-sidebar 最新版本（npm view 失败，网络？）"; exit 1; }
 
 # ---- 0. node（>=20）----
 NODE_BIN="${WF1_NODE:-}"
@@ -55,6 +60,23 @@ if [ -f package-lock.json ]; then
   npm ci --no-audit --no-fund
 else
   npm install --no-audit --no-fund
+fi
+# npm ci/install 重建 node_modules，会抹掉 setup.sh 第 3 步建的 SDK 软链
+# （bootstrap 的 @deepseek-ai/* 指向 dsh 主安装）——此处按同款逻辑补链，
+# 否则 pack 过后本机 npm test 全挂（plugin-storage.integration 等解析不到 SDK）。
+SDK_DIR=""
+DSH_PROBE=$(node -e "console.log(require.resolve('@deepseek-ai/dsh/lib/bin.js'))" 2>/dev/null || true)
+[ -z "$DSH_PROBE" ] && for c in "$HOME/.local/npm-global/lib/node_modules/@deepseek-ai/dsh/lib/bin.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"; do
+  [ -f "$c" ] && DSH_PROBE="$c" && break
+done
+[ -n "$DSH_PROBE" ] && SDK_DIR=$(node -e "console.log(require('path').dirname(require('path').dirname(process.argv[1])))" "$DSH_PROBE")/node_modules/@deepseek-ai
+if [ -n "$SDK_DIR" ] && [ -d "$SDK_DIR/dsh-tools" ]; then
+  mkdir -p node_modules/@deepseek-ai
+  for dep in schemastery cordis dsh-tools dsh-llm dsh-session; do
+    T="node_modules/@deepseek-ai/$dep"
+    [ -d "$SDK_DIR/$dep" ] || continue
+    [ -L "$T" ] || ln -s "$SDK_DIR/$dep" "$T"
+  done
 fi
 echo "✓ orchestrator 依赖已装"
 
@@ -146,8 +168,15 @@ try {
 NODE
 echo "✓ QuickJS WASM 归档 smoke 通过"
 
-# 说明：dsh-better-sidebar（侧边栏工作台宿主）不打进 tarball —— 它是 registry npm 包，
-# setup.sh 安装时从 npm 拉取（canvasui 软依赖它；失败时独立 /wf1/ 画布仍可用）。
+# ---- 3.5 vendor better-sidebar（pack 当次 npm latest，源码仓库不进二进制）----
+# 从 npm 拉解析到的最新版 tgz 放进归档 vendor/；setup.sh 优先装它，
+# 安装机断网/包下架也不缺件（依赖树仍走在线装）。
+mkdir -p "$OUT/dsh-plugins/vendor"
+( cd "$OUT/dsh-plugins/vendor" && npm pack "dsh-better-sidebar@$SIDEBAR_VER" --silent >/dev/null ) \
+  || { echo "✗ npm pack dsh-better-sidebar@$SIDEBAR_VER 失败（网络？）"; exit 1; }
+[ -f "$OUT/dsh-plugins/vendor/dsh-better-sidebar-$SIDEBAR_VER.tgz" ] \
+  || { echo "✗ vendor tgz 缺失: dsh-better-sidebar-$SIDEBAR_VER.tgz"; exit 1; }
+echo "✓ 已 vendor dsh-better-sidebar@$SIDEBAR_VER ($(du -h "$OUT/dsh-plugins/vendor/dsh-better-sidebar-$SIDEBAR_VER.tgz" | cut -f1))"
 
 # ---- 4. 打包 ----
 cd "$OUT"
@@ -156,6 +185,8 @@ for p in $PLUGINS $OPTIONAL_PLUGINS $AGG; do
   tar -tzf "$TAR" "dsh-plugins/$p/package.json" >/dev/null 2>&1 \
     || { echo "✗ tarball 缺失: $p/package.json"; exit 1; }
 done
+tar -tzf "$TAR" "dsh-plugins/vendor/dsh-better-sidebar-$SIDEBAR_VER.tgz" >/dev/null 2>&1 \
+  || { echo "✗ tarball 缺失: vendor/dsh-better-sidebar-$SIDEBAR_VER.tgz"; exit 1; }
 if tar -tzf "$TAR" | grep -q '/node_modules/@deepseek-ai/'; then
   echo "✗ tarball 含不可分发的 @deepseek-ai SDK 软链"
   exit 1

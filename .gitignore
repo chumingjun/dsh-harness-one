@@ -42,3 +42,6 @@ data/tmp-e2e/
 # dsh-ccpg-one 本地 pnpm install 产物（overrides 钉 SDK 版本的锁定文件；
 # 分发走 pack.sh 已排除，CI 不消费，仅本机聚合安装复现用）
 dsh-plugins/dsh-ccpg-one/pnpm-lock.yaml
+# better-sidebar vendor tgz（pack.sh 从 npm 拉取放进 release 归档；源码树一般没有，
+# 防本机手动 pack 时误提交二进制）
+dsh-plugins/vendor/
