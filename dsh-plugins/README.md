@@ -1,17 +1,17 @@
 # Workflow One — dsh 插件包（本地分发）
 
-八个 Cordis 插件，把物业智能体编排（拖拽画布 + 节点级真实 agent）装进任何 DeepSeek Harness (dsh)：
+7 个默认 Cordis 插件把物业智能体编排（拖拽画布 + 节点级真实 agent）装进任何 DeepSeek Harness (dsh)；brand 保留为独立可选插件：
 
-| 包 | 职责 |
-|---|---|
-| `dsh-ccpg-tools` | feishu_doc_read / feishu_doc_write 注册 `ctx.tools` |
-| `dsh-ccpg-orchestrator` | DAG 编排 + 节点级 `ctx.agents` 进程内 agent + QuickJS 脚本节点 + `/wf1/api/*` HTTP/SSE |
-| `dsh-ccpg-web` | 画布静态托管 `/wf1/` |
-| `dsh-ccpg-canvasui` | 官方 dsh Web UI 的画布视图（conversation.view tab，iframe 载 /wf1/）+ better-sidebar「对话记录」tab（软依赖，`shared/chat-pane.js` 构建期内联） |
-| `dsh-ccpg-document-preview` | PDF/DOCX/XLS(X)/PPTX 本地全屏预览（pdfjs/docx-preview/sheetjs/@file-viewer/pptx，inline workers、无第三方上传）；旧 DOC/PPT 走下载 |
-| `dsh-ccpg-larkauth` | 飞书账号扫码登录（lark-cli Device Flow）；启动自举安装 lark-cli、user token 后台续约、feishu-cli 技能种子 |
-| `dsh-ccpg-brand` | 品牌定制（CCPG logo + 聊天 hero 标题） |
-| `dsh-ccpg-llm-guard` | 拦截模型返回的空 id/name/arguments 工具调用，自动重试且不污染会话 |
+| 包 | 安装方式 | 职责 |
+|---|---|---|
+| `dsh-ccpg-tools` | 默认 | feishu_doc_read / feishu_doc_write 注册 `ctx.tools` |
+| `dsh-ccpg-orchestrator` | 默认 | DAG 编排 + 节点级 `ctx.agents` 进程内 agent + QuickJS 脚本节点 + `/wf1/api/*` HTTP/SSE |
+| `dsh-ccpg-web` | 默认 | 画布静态托管 `/wf1/` |
+| `dsh-ccpg-canvasui` | 默认 | 官方 dsh Web UI 输入框工作流按钮 + better-sidebar「工作流」画布（iframe 载 /wf1/，软依赖） |
+| `dsh-ccpg-document-preview` | 默认 | PDF/DOCX/XLS(X)/PPTX 本地全屏预览（pdfjs/docx-preview/sheetjs/@file-viewer/pptx，inline workers、无第三方上传）；旧 DOC/PPT 走下载 |
+| `dsh-ccpg-larkauth` | 默认 | 飞书账号扫码登录（lark-cli Device Flow）；启动自举安装 lark-cli、user token 后台续约、feishu-cli 技能种子 |
+| `dsh-ccpg-llm-guard` | 默认 | 拦截模型返回的空 id/name/arguments 工具调用，自动重试且不污染会话 |
+| `dsh-ccpg-brand` | 独立可选 | 品牌定制（CCPG logo + 聊天 hero 标题）；默认安装与聚合包均不包含 |
 
 ## 安装（3 步）
 
@@ -30,18 +30,17 @@ sh start.sh [profile名]                            # 3. 启动
 sh setup.sh --one [profile名] [端口]               # dsh plugin add 只装 dsh-ccpg-one 一个包
 ```
 
-聚合壳 `dsh-ccpg-one` 的 bundle patch 一次性挂载八插件 + better-sidebar；可选件按环境变量门控（启动前 export，可写进工作区 `.env`）：
+聚合壳 `dsh-ccpg-one` 的 bundle patch 一次性挂载 7 个默认插件 + better-sidebar；可选件按环境变量门控（启动前 export，可写进工作区 `.env`）：
 
 | 开关 | 效果 |
 |---|---|
 | `CCPG_NO_LARK=1` | 不加载 larkauth（飞书扫码登录） |
-| `CCPG_NO_BRAND=1` | 不加载 brand（恢复官方外观） |
 | `CCPG_NO_PREVIEW=1` | 不加载 document-preview（预览退化为下载） |
-| `CCPG_NO_SIDEBAR=1` | 不加载 better-sidebar（对话记录 tab 消失） |
+| `CCPG_NO_SIDEBAR=1` | 不加载 better-sidebar（官方 UI 内工作流侧栏不可用，独立 `/wf1/` 入口仍可用） |
 | `CCPG_NO_GUARD=1` | 不加载 llm-guard（不建议关） |
 | `CCPG_ONLY_CORE=1` | 一键只留核心：tools/orchestrator/web/canvasui |
 
-> 聚合模式不要再单独 add 子插件或手写 insert 行——双层挂载 = duplicate prefix route。`dsh plugin --profile <name> remove dsh-ccpg-one` 一次卸干净。
+> `dsh-ccpg-brand` 不属于聚合包，需要时必须单独安装。聚合模式不要再单独 add 其余 7 个子插件或手写 insert 行——双层挂载 = duplicate prefix route。`dsh plugin --profile <name> remove dsh-ccpg-one` 一次卸掉聚合包包含的默认插件。
 
 > 模型不归插件配置：agent 全部走 dsh 自己的模型配置（profile 的 `cordis.patch.yml`）。setup.sh 写的 GLM provider 示例声明了 `apiKeyEnv: GLM_API_KEY`，此时启动前 `export GLM_API_KEY=你的key` 即可；换 provider 后变量名以对应 `apiKeyEnv` 为准。
 
@@ -49,25 +48,31 @@ sh setup.sh --one [profile名] [端口]               # dsh plugin add 只装 ds
 
 ## setup.sh 做了什么
 
-1. 校验八插件分发目录完整（package name 逐一核对 + `dsh.bundle.patch` 声明在场）+ 画布产物存在性（web-dist 缺失即提示先跑 build-web.sh）
+1. 校验 7 个默认插件的分发目录完整（package name 逐一核对 + `dsh.bundle.patch` 声明在场）+ 画布产物存在性（web-dist 缺失即提示先跑 build-web.sh）
 2. 装 orchestrator 真依赖（ajv/cron-parser/QuickJS WASM）并跑 QuickJS smoke
-3. canvasui bundle 校验（`build-canvasui.sh --check`，不一致则重建——`lib/client.js` 是 `src/client.js` 内联 `shared/` 片段的构建产物，不入库）
+3. canvasui bundle 校验（`build-canvasui.sh --check`，不一致则重建——`lib/client.js` 由 `src/client.js` 生成，不入库）
 4. 装 lark-cli（飞书官方 CLI，`~/.local/npm-global`）并固定默认身份 user
 5. 建 `~/.dsh/profiles/<name>`（dsh-base bundle）
-6. `dsh plugin add` 八插件——**各插件自带 `dsh.bundle.patch`（包内 `cordis.patch.yml`），add 一步完成安装+进 bundles 层+挂载**（与 dsh-better-sidebar 的 npm 分发同一机制；失败即中止，不留半成品 profile）
+6. `dsh plugin add` 7 个默认插件——**各插件自带 `dsh.bundle.patch`（包内 `cordis.patch.yml`），add 一步完成安装+进 bundles 层+挂载**（与 dsh-better-sidebar 的 npm 分发同一机制；失败即中止，不留半成品 profile）
 7. 依赖引导：dsh SDK 是 dsh 包内层 bundled deps，registry 版本滞后且插件解析路径够不到——`bootstrap-deps.sh` 软链进插件源码目录（npm 安装渠道则无需此步：插件实体落在 profile 内，dsh 启动时的 `~/.dsh/profiles/node_modules` 扁平兜底自动接通运行实例的 SDK）
 8. 写 `cordis.patch.yml`——**只写用户配置**（GLM provider 示例 + webserver 端口），不再手写插件挂载行
-9. 装 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（npm 包，自带 bundle patch 一步挂载）：官方 UI 右侧工作台侧边栏——canvasui 往它注册「对话记录」tab（+ 菜单第一位，切工作流视图自动展开）。软依赖：装不上仅损失该 tab，画布不受影响；不打入分发包，装包机器从 npm 拉取
+9. 装 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（npm 包，自带 bundle patch 一步挂载）：官方 UI 右侧工作台侧边栏——canvasui 往它注册「工作流」tab（+ 菜单第一位），点击对话输入框旁按钮展开。软依赖：装不上时官方 UI 内无法打开工作流侧栏，独立 `/wf1/` 入口仍可用；不打入分发包，装包机器从 npm 拉取
 
 > 双挂载警告：插件挂载行已由各包 `dsh.bundle.patch` 提供，profile 的 `cordis.patch.yml` 里**不要再手写**同名 `- insert` 行——两层都生效会重复注册路由，boot 时 duplicate prefix route 报错。
 
 ### 发布到 npm 后的直装形态（预留）
 
-八插件已是「自带 bundle patch」的自描述包。发布后（`npm publish` 各包）用户可绕过 tarball/setup 直接：
+7 个默认插件已是「自带 bundle patch」的自描述包。发布后（`npm publish` 各包）用户可绕过 tarball/setup 直接：
 
 ```sh
-dsh plugin --profile myprofile add dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-brand dsh-ccpg-llm-guard
+dsh plugin --profile myprofile add dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-llm-guard
 # 再贴一段 provider+webserver 的 cordis.patch.yml（同 setup.sh 第 8 步的模板），npm 渠道连 bootstrap-deps 都不需要
+```
+
+需要 CCPG 品牌外观时，再显式安装独立插件：
+
+```sh
+dsh plugin --profile myprofile add dsh-ccpg-brand
 ```
 
 换模型：改 patch 里 `llm-pi-ai.providers`（openai-completions / anthropic-messages 均可），key 环境变量名由 provider 的 `apiKeyEnv` 声明——示例为 `GLM_API_KEY`，换 provider 后以新的 `apiKeyEnv` 为准。插件自身不存任何 key。
@@ -83,7 +88,7 @@ dsh plugin --profile myprofile add dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg
 
 ## 打包发布
 
-`pack.sh <tag>`：八插件清单校验 → 画布双构建 → orchestrator 依赖 → canvasui bundle 重建并 `--check` → rsync 组装（清运行时数据）→ `dist-release/dsh-ccpg-plugins-<tag>.tar.gz`。CI（release.yml）同源执行并作为 release asset 上传。
+`pack.sh <tag>`：7 个默认插件 + 独立可选 brand 清单校验 → 画布双构建 → orchestrator 依赖 → canvasui bundle 重建并 `--check` → rsync 组装（清运行时数据）→ `dist-release/dsh-ccpg-plugins-<tag>.tar.gz`。通用发布归档仍携带 brand 源包供显式安装，但 `setup.sh` 和 `dsh-ccpg-one` 都不会自动安装它。CI（release.yml）同源执行并作为 release asset 上传。
 
 ## 已知边界
 

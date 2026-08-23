@@ -1,17 +1,16 @@
-# dsh-ccpg-one 聚合 bundle patch：一条命令装齐 Workflow One 八插件。
+# dsh-ccpg-one 聚合 bundle patch：一条命令装齐 Workflow One 七个默认插件。
 #
 # 安装：dsh plugin --profile <name> add dsh-ccpg-one
 # （本地目录安装：dsh plugin --profile <name> add <repo>/dsh-plugins/dsh-ccpg-one）
-# 卸载：dsh plugin --profile <name> remove dsh-ccpg-one —— 八插件随依赖一并移除。
+# 卸载：dsh plugin --profile <name> remove dsh-ccpg-one —— 七个默认插件随依赖一并移除。
 #
 # ⚠ 双挂载警告：装本包后不要再单独 add dsh-ccpg-* 子包或手写 insert 行，
 #   两层都生效 = duplicate prefix route，boot 失败。
 #
 # 可选件门控（disabled: !!js 在 loader ctx eval，读进程环境变量）：
 #   export CCPG_NO_LARK=1     → 不加载 larkauth（飞书扫码登录/技能种子）
-#   export CCPG_NO_BRAND=1    → 不加载 brand（CCPG 品牌定制，恢复官方外观）
 #   export CCPG_NO_PREVIEW=1  → 不加载 document-preview（文档预览退化为下载）
-#   export CCPG_NO_SIDEBAR=1  → 不加载 better-sidebar（对话记录 tab 随之消失）
+#   export CCPG_NO_SIDEBAR=1  → 不加载 better-sidebar（官方 UI 工作流侧栏不可用）
 #   export CCPG_NO_GUARD=1    → 不加载 llm-guard（空工具调用防护，不建议关）
 #   export CCPG_ONLY_CORE=1   → 只留核心五件（tools/orchestrator/web/canvasui 之上的全关）
 # 以下变量可写进工作区 .env（DSH_ 前缀被禁止，CCPG_ 前缀合法）。
@@ -32,9 +31,6 @@
     - id: dsh-ccpg-larkauth
       name: 'dsh-ccpg-larkauth'
       disabled: !!js "Boolean(process.env.CCPG_NO_LARK || process.env.CCPG_ONLY_CORE)"
-    - id: ccpg-brand
-      name: 'dsh-ccpg-brand'
-      disabled: !!js "Boolean(process.env.CCPG_NO_BRAND || process.env.CCPG_ONLY_CORE)"
     - id: dsh-ccpg-llm-guard
       name: 'dsh-ccpg-llm-guard'
       disabled: !!js "Boolean(process.env.CCPG_NO_GUARD || process.env.CCPG_ONLY_CORE)"
