@@ -138,11 +138,21 @@ window.__ModuleLoader__.load({
         .join("");
     }
 
-    // canvas_run_workflow 结果 JSON 里的 runId（execute 返回 {started:true,runId} 字符串）
+    // canvas_run_workflow 结果 JSON 里的 runId（execute 返回 {started:true,runId} 字符串）；
+    // canvas_run_status 的结果没有 runId，从 args 里取（组件用 props.toolName 区分）。
     function runIdFromText(text) {
       if (!text) return null;
       try {
         var v = JSON.parse(text);
+        return v && typeof v === "object" && typeof v.runId === "string" ? v.runId : null;
+      } catch (e) {
+        return null;
+      }
+    }
+    function runIdFromArgs(argsRaw) {
+      if (!argsRaw) return null;
+      try {
+        var v = typeof argsRaw === "string" ? JSON.parse(argsRaw) : argsRaw;
         return v && typeof v === "object" && typeof v.runId === "string" ? v.runId : null;
       } catch (e) {
         return null;
@@ -260,9 +270,12 @@ window.__ModuleLoader__.load({
     function WorkflowRunCard(props) {
       var block = props.block || {};
       var text = toolText(block);
+      // runId 双源：canvas_run_workflow 从结果 JSON 解析；canvas_run_status 结果没有
+      // runId，从调用 args 取（running/settled 两个阶段都带）。
+      var argsRaw = (block.call && block.call.argsRaw) || block.argsRaw;
       var runId = react.useMemo(
-        function () { return runIdFromText(text); },
-        [text],
+        function () { return runIdFromText(text) || runIdFromArgs(argsRaw); },
+        [text, argsRaw],
       );
       var sessionId = currentDshSessionId(null);
       var [run, setRun] = react.useState(null);
@@ -308,6 +321,17 @@ window.__ModuleLoader__.load({
           dotState: "pending",
           stateText: "已归档",
           meta: "运行 " + runId.slice(0, 8) + "… 记录不在当前工作区",
+          thumbnail: null,
+        });
+      }
+      if (!run) {
+        // runId 已解析、首次详情未返回的窗口（真实环境 <2s）：渲染加载态，
+        // 不读 run.status（此前这里直接空指针）
+        return workflowCardShell({
+          title: "工作流运行",
+          dotState: "running",
+          stateText: "加载中",
+          meta: "运行 " + runId.slice(0, 8) + "…",
           thumbnail: null,
         });
       }
@@ -729,6 +753,7 @@ window.__ModuleLoader__.load({
       subscribeSidebarService: subscribeSidebarService,
       toolText: toolText,
       runIdFromText: runIdFromText,
+      runIdFromArgs: runIdFromArgs,
       runDotState: runDotState,
       WorkflowRunCard: WorkflowRunCard,
       GraphPatchCard: GraphPatchCard,

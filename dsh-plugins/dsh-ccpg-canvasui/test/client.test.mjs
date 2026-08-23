@@ -197,11 +197,14 @@ assert.equal(
 assert.equal(client.__test.toolText({ kind: "tool-result", content: [{ type: "image", text: "x" }] }), "");
 assert.equal(client.__test.toolText({ name: "x" }), null); // running block 无 kind/content
 
-// runId 解析：canvas_run_workflow 结果 JSON
+// runId 解析：canvas_run_workflow 结果 JSON；canvas_run_status 从 args 取
 assert.equal(client.__test.runIdFromText('{"started":true,"runId":"run_123"}'), "run_123");
 assert.equal(client.__test.runIdFromText("画布尚未打开或未上报图。"), null);
 assert.equal(client.__test.runIdFromText(null), null);
 assert.equal(client.__test.runIdFromText('{"ok":true}'), null);
+assert.equal(client.__test.runIdFromArgs('{"runId":"run_456"}'), "run_456");
+assert.equal(client.__test.runIdFromArgs({ runId: "run_789" }), "run_789");
+assert.equal(client.__test.runIdFromArgs(null), null);
 
 // 运行状态 → 卡片状态点
 assert.equal(client.__test.runDotState({ status: "success" }), "success");
@@ -307,6 +310,26 @@ cardClient.__test.WorkflowRunCard({
 {
   const dot = cardCalls.findLast((c) => c.props && c.props.className === "wf1-card-dot");
   assert.equal(dot.props["data-s"], "pending");
+}
+
+// WorkflowRunCard：canvas_run_status 形状（结果无 runId，args 携带）→ 从 args 解析，
+// 不再落入降级态（此前整段 JSON 塞进 meta 的 bug 回归）
+cardCalls.length = 0;
+cardClient.__test.WorkflowRunCard({
+  toolName: "canvas_run_status",
+  block: {
+    kind: "tool-result",
+    isError: false,
+    call: { name: "canvas_run_status", argsRaw: JSON.stringify({ runId: "run_status_case" }) },
+    content: [{ type: "text", text: '{"status":"success","nodeStates":{}}' }],
+  },
+});
+{
+  // useEffect 不跑（shim），轮询未启动——但 runId 已解析成功，卡片不应再走
+  // 「就绪 + JSON 塞 meta」的降级分支（title 会带 run 详情态而非“就绪”状态章）
+  const meta = cardCalls.findLast((c) => c.props && c.props.className === "wf1-card-meta");
+  const metaText = meta.children && meta.children[0];
+  assert.ok(!String(metaText).startsWith("{"), "run_status 卡不应把结果 JSON 塞进 meta");
 }
 
 console.log("canvasui client tests: passed");
