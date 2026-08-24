@@ -9,7 +9,9 @@ NODE_BIN="${DSH_NODE:-}"
 [ -z "$NODE_BIN" ] && { echo "✗ 需要 node>=20（或设 DSH_NODE 指向）"; exit 1; }
 
 DSH_BIN=$("$NODE_BIN" -e "console.log(require.resolve('@deepseek-ai/dsh/lib/bin.js'))" 2>/dev/null || true)
+[ -z "$DSH_BIN" ] && DSH_BIN=$(command -v dsh 2>/dev/null || true)
 [ -z "$DSH_BIN" ] && DSH_BIN="$HOME/.local/npm-global/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"
 [ -f "$DSH_BIN" ] || { echo "✗ 未找到 dsh"; exit 1; }
+DSH_BIN=$("$NODE_BIN" -e "console.log(require('fs').realpathSync(process.argv[1]))" "$DSH_BIN")
 
 exec "$NODE_BIN" --expose-internals "$DSH_BIN" --profile "$PROFILE"

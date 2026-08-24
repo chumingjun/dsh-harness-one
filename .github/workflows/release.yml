@@ -31,9 +31,11 @@ jobs:
         run: npm i -g @deepseek-ai/dsh
 
       - name: pack
-        run: sh dsh-plugins/pack.sh "$GITHUB_REF_NAME"
+        run: |
+          sh dsh-plugins/pack.sh "$GITHUB_REF_NAME"
+          node scripts/verify-plugin-packages.mjs
 
-      - name: boot smoke（安装+启动端到端；better-sidebar 随 npm latest，上游破坏性变更在此拦截）
+      - name: boot smoke（安装+启动端到端；验证聚合包钉定的 better-sidebar）
         run: |
           sh dsh-plugins/boot-smoke.sh \
             "dist-release/dsh-ccpg-plugins-$(echo "$GITHUB_REF_NAME" | sed 's/^v//').tar.gz"
