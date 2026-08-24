@@ -31,6 +31,19 @@
     "dsh-ccpg-tools": "0.1.0",
     "dsh-ccpg-web": "0.1.0"
   },
+  "bundleDependencies": [
+    "dsh-ccpg-canvasui",
+    "dsh-ccpg-document-preview",
+    "dsh-ccpg-larkauth",
+    "dsh-ccpg-llm-guard",
+    "dsh-ccpg-orchestrator",
+    "dsh-ccpg-tools",
+    "dsh-ccpg-web"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

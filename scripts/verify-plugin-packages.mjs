@@ -35,6 +35,13 @@ for (const name of packages) {
   assert.equal(pkg.engines?.node, '>=20');
   assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml');
 
+  // 聚合包的最终 bundle 由 publish-npm.sh 在干净 staging 中逐项校验；
+  // 源码目录可能有 pnpm node_modules，直接 dry-run 会错误枚举整个依赖树。
+  if (name === 'dsh-ccpg-one') {
+    console.log(`✓ ${name}: aggregate manifest`);
+    continue;
+  }
+
   const packed = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--ignore-scripts', '--json'], {
     cwd: dir,
     encoding: 'utf8',
@@ -48,9 +55,11 @@ for (const name of packages) {
 }
 
 const aggregate = JSON.parse(readFileSync(join(pluginsDir, 'dsh-ccpg-one', 'package.json'), 'utf8'));
-for (const name of packages.filter((name) => name !== 'dsh-ccpg-one' && name !== 'dsh-ccpg-brand')) {
+const aggregatePackages = packages.filter((name) => name !== 'dsh-ccpg-one' && name !== 'dsh-ccpg-brand');
+for (const name of aggregatePackages) {
   assert.equal(aggregate.dependencies[name], aggregate.version, `${name} must match aggregate version`);
 }
+assert.deepEqual([...aggregate.bundleDependencies].sort(), [...aggregatePackages].sort(), 'aggregate must bundle every internal package');
 assert.match(aggregate.dependencies['dsh-better-sidebar'], /^\d+\.\d+\.\d+$/);
 assert(!Object.values(aggregate.dependencies).some((version) => String(version).startsWith('file:')));
 console.log('plugin package contracts: ok');
