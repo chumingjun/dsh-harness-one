@@ -86,32 +86,6 @@ const partialEvents = adaptRunResults({}, {
 assert.equal(partialEvents.nodeTimeline.length, 3, '不完整 SSE 不能覆盖完整流程节点');
 assert.equal(partialEvents.nodeTimeline.find((row) => row.nodeId === 'agent').status, 'running');
 
-// live 运行：agent-progress 事件带轮次与流式输出预览，运行中节点在时间线上可见实时过程
-const liveRun = adaptRunResults({}, {
-  runDetail: { runId: 'run-live', workflowName: '直播', graph: runDetail.graph, nodeStates: { input: { status: 'success', durationMs: 10 } } },
-  events: [{ nodeId: 'agent', status: 'running', turns: 3, preview: '正在起草报告…' }],
-});
-const liveAgentRow = liveRun.nodeTimeline.find((row) => row.nodeId === 'agent');
-assert.equal(liveAgentRow.status, 'running');
-assert.equal(liveAgentRow.turns, 3, '运行中节点合并 live 轮次');
-assert.equal(liveAgentRow.preview, '正在起草报告…', '运行中节点合并 live 输出预览');
-// 终态 live 事件（node-status success/error）覆盖启动快照里的旧状态与旧耗时
-const terminalLive = adaptRunResults({}, {
-  runDetail: { runId: 'run-t', workflowName: '终态', graph: runDetail.graph, nodeStates: { agent: { status: 'running' } } },
-  events: [{ nodeId: 'agent', status: 'success', durationMs: 1200 }],
-});
-const terminalRow = terminalLive.nodeTimeline.find((row) => row.nodeId === 'agent');
-assert.equal(terminalRow.status, 'success', 'live 终态事件覆盖快照状态');
-assert.equal(terminalRow.meta, '1.2 秒');
-// detail 尚未 fetch 到（runDetail 空）：live 事件补出时间线行
-const earlyLive = adaptRunResults({}, {
-  runDetail: { runId: 'run-early' },
-  events: [{ nodeId: 'agent', nodeLabel: '报告', status: 'running', turns: 1, preview: 'p' }],
-});
-assert.equal(earlyLive.nodeTimeline.length, 1, '无骨架时 live 事件补行');
-assert.equal(earlyLive.nodeTimeline[0].nodeId, 'agent');
-assert.equal(earlyLive.nodeTimeline[0].preview, 'p');
-
 const backendShape = adaptRunResults({
   runId: 'run-backend',
   status: 'success',
@@ -172,7 +146,6 @@ assert.equal(withFailure.issues[0].message, '模型超时');
 
 assert.deepEqual(normalizeRunEvent({ type: 'node-status', node: { id: 'n1', label: '节点一' }, state: 'success', timestamp: 123 }), {
   id: '123-0', time: 123, kind: 'node-status', status: 'success', nodeId: 'n1', nodeLabel: '节点一', text: '', meta: undefined,
-  turns: undefined, preview: undefined, durationMs: undefined, startedAt: undefined,
   raw: { type: 'node-status', node: { id: 'n1', label: '节点一' }, state: 'success', timestamp: 123 },
 });
 

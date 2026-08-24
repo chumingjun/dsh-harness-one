@@ -265,6 +265,7 @@ export default function App() {
         pushEntry({
           kind: 'node', status: p.status, nodeId: p.nodeId, runId: p.runId,
           nodeLabel: labelOf(nodesRef.current, p.nodeId).replace(/\(.*\)$/, ''),
+          startedAt: p.startedAt,
           text: p.error ? p.error : undefined,
           meta: p.retrying ? `第 ${p.attempt} 次尝试` : p.toleratedError ? '失败后继续' : undefined,
           chars: p.chars, durationMs: p.durationMs,
@@ -284,14 +285,6 @@ export default function App() {
       if (!appliesToActiveRun(p)) return;
       setProgress((prev) => ({ ...prev, [p.nodeId]: p }));
       setNodes((nds) => nds.map((n) => (n.id === p.nodeId ? { ...n, data: { ...n.data, livePreview: p.preview, liveTurns: p.turns } } : n)));
-      // 过程 tab 实时过程：运行中节点的轮次 + 输出预览随 SSE 进入时间线
-      if (p.turns != null || p.preview) {
-        pushEntry({
-          kind: 'node', status: 'running', nodeId: p.nodeId, runId: p.runId,
-          nodeLabel: labelOf(nodesRef.current, p.nodeId).replace(/\(.*\)$/, ''),
-          turns: p.turns, preview: p.preview, live: true,
-        });
-      }
     });
     es.addEventListener('assistant-patch', (e) => {
       const p = JSON.parse(e.data);
