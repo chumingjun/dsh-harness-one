@@ -8,6 +8,7 @@ import {
   getArtifactIds,
   getRunId,
   isRunResultsReady,
+  loadRunResults,
   RUN_ARTIFACT_SAVE_PATH,
   saveRunArtifacts,
 } from './result-adapter.js';
@@ -135,22 +136,21 @@ export function ResultPanel({
   const [savedNames, setSavedNames] = useState([]);
   const initialReadyTokenRef = useRef(resultsReadyToken);
   const readyTokenRunRef = useRef(runId);
+  const observedStatus = status?.running
+    ? 'running'
+    : (status?.last || status?.status || runDetail?.status);
+  const runEnded = isRunResultsReady({ runId, status: observedStatus }, true);
 
-  const loadResults = async (signal) => {
+  const loadResults = async (signal, waitUntilReady = false) => {
     if (!runId) return;
     setLoading(true);
     setLoadError('');
     try {
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
-        const response = await fetch(apiUrl(`/run-results?id=${encodeURIComponent(runId)}`), { signal });
-        const data = await response.json().catch(() => ({}));
-        if (response.ok) {
-          setRemoteResults(data);
-          return;
-        }
-        if (response.status !== 404 || attempt === 7) throw new Error(data.error || `加载成果失败（HTTP ${response.status}）`);
-      }
+      const data = await loadRunResults(
+        apiUrl(`/run-results?id=${encodeURIComponent(runId)}`),
+        { signal, waitUntilReady },
+      );
+      setRemoteResults(data);
     } catch (error) {
       if (error?.name !== 'AbortError') setLoadError(error?.message || String(error));
     } finally {
@@ -164,11 +164,14 @@ export function ResultPanel({
     setActiveTab('result');
     setSaveError('');
     setSavedNames([]);
+  }, [runId, results]);
+
+  useEffect(() => {
     if (!runId || results !== undefined) return undefined;
     const controller = new AbortController();
-    loadResults(controller.signal);
+    loadResults(controller.signal, runEnded);
     return () => controller.abort();
-  }, [runId, results]);
+  }, [runId, results, runEnded]);
 
   useEffect(() => {
     if (readyTokenRunRef.current !== runId) {
@@ -179,7 +182,7 @@ export function ResultPanel({
     if (resultsReadyToken === initialReadyTokenRef.current) return undefined;
     if (!runId || results !== undefined || resultsReadyToken === undefined) return undefined;
     const controller = new AbortController();
-    loadResults(controller.signal);
+    loadResults(controller.signal, true);
     return () => controller.abort();
   }, [resultsReadyToken, runId, results]);
 
@@ -223,7 +226,7 @@ export function ResultPanel({
   const refresh = () => {
     if (!runId) return;
     const controller = new AbortController();
-    loadResults(controller.signal);
+    loadResults(controller.signal, runEnded);
   };
 
   return (
@@ -257,7 +260,7 @@ export function ResultPanel({
 
       <div className="result-panel-body">
         {loadError && <div className="result-load-error"><span>{loadError}</span><button onClick={refresh}>重试</button></div>}
-        {activeTab === 'result' && model.runId && !resultsReady && (
+        {activeTab === 'result' && model.runId && !resultsReady && !loadError && (
           <div className="result-loading"><LoaderCircle className="result-spin" size={17} />正在整理成果</div>
         )}
         {!loading && !model.runId && <p className="result-empty result-empty-run">运行工作流后，成果、过程和问题会显示在这里。</p>}

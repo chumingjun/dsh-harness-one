@@ -142,6 +142,22 @@ export function isRunResultsReady(model, hasLoadedResults = true) {
   return !['idle', 'queued', 'pending', 'running', 'waiting'].includes(model.status);
 }
 
+export async function loadRunResults(url, { signal, waitUntilReady = false } = {}, fetchImpl = globalThis.fetch) {
+  const attempts = waitUntilReady ? 32 : 8;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(250 * attempt, 1000)));
+    const response = await fetchImpl(url, { signal });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && (!waitUntilReady || isRunResultsReady(data, true))) return data;
+    if (response.ok || response.status === 404) {
+      if (attempt < attempts - 1) continue;
+      throw new Error(waitUntilReady ? '成果整理超时，请重试' : (data.error || '运行记录不存在'));
+    }
+    throw new Error(data.error || `加载成果失败（HTTP ${response.status}）`);
+  }
+  throw new Error('加载成果失败');
+}
+
 function normalizeLink(link) {
   if (typeof link === 'string') return { url: link, label: link };
   const value = asObject(link);
