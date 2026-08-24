@@ -63,6 +63,6 @@ jobs:
             echo "dsh-ccpg-one@$VERSION already published"
             exit 0
           fi
-          npm publish "dist-release/dsh-ccpg-one-$VERSION.tgz" --registry https://registry.npmjs.org --access public
+          npm publish "./dist-release/dsh-ccpg-one-$VERSION.tgz" --registry https://registry.npmjs.org --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
