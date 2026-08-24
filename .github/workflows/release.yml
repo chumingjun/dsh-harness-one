@@ -30,7 +30,7 @@ jobs:
 
       - name: install dsh (for boot-smoke)
         run: |
-          npm i -g @deepseek-ai/dsh pnpm@11.11.0
+          npm i -g @deepseek-ai/dsh pnpm@10.34.5
           npm --prefix web install --no-audit --no-fund
 
       - name: pack
