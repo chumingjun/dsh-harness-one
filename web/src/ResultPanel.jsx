@@ -37,56 +37,80 @@ function stepStatusMeta(status) {
   return STEP_STATUS_META[status] || { label: status || '未知', tone: 'pending' };
 }
 
-function ProcessView({ events, runId, onFocusNode, onOpenNodeDetail }) {
+function useElapsedClock(startedAt, active) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  if (!startedAt) return '';
+  if (!active) return '';
+  const sec = Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000));
+  const mm = Math.floor(sec / 60);
+  const ss = String(sec % 60).padStart(2, '0');
+  return mm ? `${mm}:${ss}` : `0:${ss}`;
+}
+
+function ProcessStep({ event, index, runId, onFocusNode, onOpenNodeDetail }) {
+  const meta = stepStatusMeta(event.status);
+  const canOpenDetail = Boolean(event.nodeId && runId && !['running', 'queued', 'pending'].includes(event.status));
+  const openDetail = canOpenDetail ? () => onOpenNodeDetail?.(runId, event.nodeId) : undefined;
+  const startClock = formatClock(event.startedAt);
+  const liveElapsed = useElapsedClock(event.startedAt, event.status === 'running');
+  const duration = event.status === 'running' ? liveElapsed : formatDuration(event.durationMs);
+  return (
+    <li
+      className={`result-step result-step-${meta.tone}${canOpenDetail ? ' result-step-clickable' : ''}`}
+      key={event.id}
+      onClick={openDetail}
+      onKeyDown={openDetail ? (e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(); }
+      } : undefined}
+      tabIndex={openDetail ? 0 : undefined}
+      role={openDetail ? 'button' : undefined}
+    >
+      <span className="result-step-num" aria-hidden="true">
+        {event.status === 'running' ? <LoaderCircle size={13} className="result-spin" /> : index + 1}
+      </span>
+      <div className="result-step-card">
+        <div className="result-step-head">
+          <button className="result-node-link" onClick={(e) => { e.stopPropagation(); onFocusNode?.(event.nodeId); }}>
+            {event.nodeLabel || event.nodeId}
+          </button>
+          <span className={`result-step-pill result-step-pill-${meta.tone}`}>{meta.label}</span>
+        </div>
+        {(startClock || duration) && (
+          <div className="result-step-meta">
+            {startClock && <span><Clock3 size={11} />开始 {startClock}</span>}
+            {duration && <span className={event.status === 'running' ? 'result-step-elapsed' : ''}><Timer size={11} />{event.status === 'running' ? `已运行 ${duration}` : `耗时 ${duration}`}</span>}
+          </div>
+        )}
+        {event.error && <p className="result-step-text">{event.error}</p>}
+        {canOpenDetail && <span className="result-detail-link">查看节点详情 <ChevronRight size={12} /></span>}
+      </div>
+    </li>
+  );
+}
+
+function ProcessView({ events, runId, onFocusNode, onOpenNodeDetail, runStartedAt, runDurationMs, running }) {
+  const elapsed = useElapsedClock(runStartedAt, Boolean(running));
   if (!events.length) return <p className="result-empty">暂无过程记录。</p>;
   return (
     <ol className="result-steps">
-      {events.map((event, index) => {
-        const meta = stepStatusMeta(event.status);
-        const canOpenDetail = Boolean(event.nodeId && runId && !['running', 'queued', 'pending'].includes(event.status));
-        const openDetail = canOpenDetail ? () => onOpenNodeDetail?.(runId, event.nodeId) : undefined;
-        const startClock = formatClock(event.startedAt);
-        const duration = event.status === 'running' ? '' : formatDuration(event.durationMs);
-        return (
-          <li
-            className={`result-step result-step-${meta.tone}${canOpenDetail ? ' result-step-clickable' : ''}`}
-            key={event.id}
-            onClick={openDetail}
-            onKeyDown={openDetail ? (e) => {
-              if (e.target !== e.currentTarget) return;
-              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(); }
-            } : undefined}
-            tabIndex={openDetail ? 0 : undefined}
-            role={openDetail ? 'button' : undefined}
-          >
-            <span className="result-step-num" aria-hidden="true">
-              {event.status === 'running' ? <LoaderCircle size={13} className="result-spin" /> : index + 1}
-            </span>
-            <div className="result-step-card">
-              <div className="result-step-head">
-                <button className="result-node-link" onClick={(e) => { e.stopPropagation(); onFocusNode?.(event.nodeId); }}>
-                  {event.nodeLabel || event.nodeId}
-                </button>
-                <span className={`result-step-pill result-step-pill-${meta.tone}`}>{meta.label}</span>
-              </div>
-              {(startClock || duration) && (
-                <div className="result-step-meta">
-                  {startClock && <span><Clock3 size={11} />开始 {startClock}</span>}
-                  {duration && <span><Timer size={11} />耗时 {duration}</span>}
-                </div>
-              )}
-              {event.error && <p className="result-step-text">{event.error}</p>}
-              {event.status === 'running' && (event.turns != null || event.preview) && (
-                <div className="result-step-live">
-                  {event.turns != null && <span className="result-step-live-turns">第 {event.turns} 轮</span>}
-                  {event.preview && <pre className="result-step-live-preview">{event.preview}</pre>}
-                </div>
-              )}
-              {canOpenDetail && <span className="result-detail-link">查看节点详情 <ChevronRight size={12} /></span>}
-            </div>
-          </li>
-        );
-      })}
+      {(elapsed || runDurationMs != null) && (
+        <li className="result-step result-step-total" aria-label="总运行时长">
+          <span className="result-step-num result-total-num"><Timer size={12} /></span>
+          <div className="result-step-card result-total-card">
+            <span className="result-total-label">总运行时长</span>
+            <span className="result-total-time">{elapsed || formatDuration(runDurationMs)}</span>
+          </div>
+        </li>
+      )}
+      {events.map((event, index) => (
+        <ProcessStep key={event.id} event={event} index={index} runId={runId} onFocusNode={onFocusNode} onOpenNodeDetail={onOpenNodeDetail} />
+      ))}
     </ol>
   );
 }
@@ -312,7 +336,17 @@ export function ResultPanel({
             <ProcessArtifacts results={model.processResults} files={model.processFiles} artifacts={model.files} />
           </>
         )}
-        {model.runId && activeTab === 'process' && <ProcessView events={model.nodeTimeline} runId={model.runId} onFocusNode={onFocusNode} onOpenNodeDetail={onOpenNodeDetail} />}
+        {model.runId && activeTab === 'process' && (
+          <ProcessView
+            events={model.nodeTimeline}
+            runId={model.runId}
+            onFocusNode={onFocusNode}
+            onOpenNodeDetail={onOpenNodeDetail}
+            runStartedAt={viewState.isRunning ? model.startedAt : undefined}
+            runDurationMs={viewState.isRunning ? undefined : model.durationMs}
+            running={viewState.isRunning}
+          />
+        )}
         {model.runId && activeTab === 'issues' && <IssuesView issues={model.issues} runId={model.runId} onFocusNode={onFocusNode} onOpenNodeDetail={onOpenNodeDetail} />}
       </div>
     </aside>

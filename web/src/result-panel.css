@@ -159,10 +159,14 @@
 .result-step-meta span { display: inline-flex; align-items: center; gap: 3px; }
 .result-step-text { margin: 5px 0 0; color: var(--fg-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .result-step-danger .result-step-text { color: var(--danger); }
-/* 运行中节点的实时过程：轮次徽标 + 流式输出预览（风格对齐画布节点 live 气泡） */
-.result-step-live { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
-.result-step-live-turns { align-self: flex-start; font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 999px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border-strong)); background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.result-step-live-preview { margin: 0; max-height: 96px; overflow: hidden; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.5; color: var(--fg-muted); background: var(--bg-raised); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; white-space: pre-wrap; overflow-wrap: anywhere; mask-image: linear-gradient(to bottom, #000 72%, transparent); }
+/* 运行中节点已运行时长：等宽跳秒，与画布节点徽标同感 */
+.result-step-meta .result-step-elapsed { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 600; }
+/* 总运行时长行：顶部汇总，非节点步骤 */
+.result-step-total { margin-bottom: 2px; }
+.result-total-num { color: var(--fg-faint) !important; background: var(--bg-raised) !important; border-color: var(--border) !important; }
+.result-total-card { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--bg-raised); }
+.result-total-label { font-size: 11px; color: var(--fg-muted); font-weight: 600; }
+.result-total-time { font-family: var(--font-mono); font-size: 12px; color: var(--fg); font-variant-numeric: tabular-nums; }
 .result-node-link { border: 0; padding: 0; background: none; color: var(--fg); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
 .result-node-link:hover { color: var(--accent); text-decoration: underline; }
 .result-issue-title button { border: 0; padding: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
