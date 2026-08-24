@@ -81,7 +81,7 @@ window.__ModuleLoader__.load({
         ".wf1-card-dot[data-s=waiting]{background:var(--dsw-alias-state-warn-primary);}",
         ".wf1-card-dot[data-s=pending]{background:var(--dsw-alias-border-l2);}",
         "@keyframes wf1-card-pulse{0%,100%{opacity:1}50%{opacity:.35}}",
-        ".wf1-card-map{height:88px;border-radius:8px;display:block;width:100%;}",
+        ".wf1-card-map{height:108px;border-radius:8px;display:block;width:100%;background:color-mix(in srgb,var(--dsw-alias-border-l1) 18%,transparent);}",
         ".wf1-card-foot{display:flex;align-items:center;gap:8px;min-width:0;}",
         ".wf1-card-meta{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:18px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}",
         ".wf1-card-meta[data-error]{color:var(--dsw-alias-state-error-primary);}",
@@ -172,31 +172,81 @@ window.__ModuleLoader__.load({
       return "pending";
     }
 
-    // 图 → SVG 缩略图：节点用 graph 自带 position，按 bounds 等比缩放；点色只表达状态。
-    // run 为 null 时全部节点灰（建图态/无运行）。
-    function graphThumbnail(graph, run) {
+    var NODE_TYPE_CN = {
+      input: "输入", agent: "智能体", condition: "条件", http: "HTTP",
+      script: "脚本", output: "输出",
+    };
+
+    // 取 DAG 最长路径作为卡片主流程；运行态排除明确跳过的节点。
+    function flowPreviewModel(graph, nodeStates) {
       var nodes = (graph && Array.isArray(graph.nodes) ? graph.nodes : []).filter(function (n) {
         return (n.type || (n.data && n.data.nodeType)) !== "note";
       });
       if (!nodes.length) return null;
-      var states = (run && run.nodeStates) || {};
-      var byId = {};
-      nodes.forEach(function (n) { byId[n.id] = n; });
-      var pts = nodes.map(function (n) {
-        var p = n.position || (n.data && n.data.position) || { x: 0, y: 0 };
-        return { x: Number(p.x) || 0, y: Number(p.y) || 0 };
+      var previewNodes = nodes.filter(function (n) {
+        return !nodeStates || !nodeStates[n.id] || nodeStates[n.id].status !== "skipped";
       });
-      var minX = Math.min.apply(null, pts.map(function (p) { return p.x; }));
-      var minY = Math.min.apply(null, pts.map(function (p) { return p.y; }));
-      var maxX = Math.max.apply(null, pts.map(function (p) { return p.x; }));
-      var maxY = Math.max.apply(null, pts.map(function (p) { return p.y; }));
-      var W = 300, H = 88, PAD = 12;
-      var spanX = Math.max(maxX - minX, 1), spanY = Math.max(maxY - minY, 1);
-      var scale = Math.min((W - PAD * 2) / spanX, (H - PAD * 2) / spanY);
-      var offX = (W - spanX * scale) / 2 - minX * scale;
-      var offY = (H - spanY * scale) / 2 - minY * scale;
-      var big = nodes.length > 24;
-      var R = big ? 3 : 4.5;
+      if (!previewNodes.length) previewNodes = nodes;
+      var byId = {}, incoming = {}, outgoing = {};
+      previewNodes.forEach(function (n) { byId[n.id] = n; incoming[n.id] = 0; outgoing[n.id] = []; });
+      (graph.edges || []).forEach(function (edge) {
+        if (!byId[edge.source] || !byId[edge.target]) return;
+        outgoing[edge.source].push(edge.target);
+        incoming[edge.target] += 1;
+      });
+      var position = function (id) {
+        var p = byId[id].position || byId[id].data && byId[id].data.position || {};
+        return [Number(p.x) || 0, Number(p.y) || 0];
+      };
+      var sortIds = function (ids) {
+        return ids.sort(function (a, b) {
+          var ap = position(a), bp = position(b);
+          return ap[0] - bp[0] || ap[1] - bp[1] || a.localeCompare(b);
+        });
+      };
+      var queue = sortIds(previewNodes.filter(function (n) { return incoming[n.id] === 0; }).map(function (n) { return n.id; }));
+      var order = [], paths = {};
+      queue.forEach(function (id) { paths[id] = [id]; });
+      while (queue.length) {
+        var id = queue.shift();
+        order.push(id);
+        outgoing[id].forEach(function (next) {
+          var candidate = (paths[id] || [id]).concat(next);
+          if (!paths[next] || candidate.length > paths[next].length) paths[next] = candidate;
+          incoming[next] -= 1;
+          if (incoming[next] === 0) { queue.push(next); sortIds(queue); }
+        });
+      }
+      if (order.length !== previewNodes.length) order = sortIds(previewNodes.map(function (n) { return n.id; }));
+      var numberById = {};
+      var path = order.reduce(function (best, id) {
+        var candidate = paths[id] || [id];
+        return candidate.length > best.length ? candidate : best;
+      }, []);
+      if (!path.length) path = order;
+      path.forEach(function (id, index) { numberById[id] = index + 1; });
+      var visible = path.length > 5 ? path.slice(0, 2).concat(null, path.slice(-2)) : path;
+      return {
+        items: visible.map(function (id) {
+          if (id === null) return null;
+          var node = byId[id];
+          return {
+            id: id,
+            number: numberById[id],
+            label: String(node.data && node.data.label || id),
+            type: node.type || node.data && node.data.nodeType || "",
+          };
+        }),
+        pathLength: path.length,
+        otherNodeCount: Math.max(0, nodes.length - path.length),
+      };
+    }
+
+    // 语义化流程摘要：真实主路径 + 连续序号，比缩小整张画布更适合消息卡片。
+    function graphThumbnail(graph, run) {
+      var model = flowPreviewModel(graph, run && run.nodeStates);
+      if (!model) return null;
+      var states = (run && run.nodeStates) || {};
       var colorOf = function (st) {
         if (st === "running") return "var(--dsw-alias-state-business-primary)";
         if (st === "success") return "var(--dsw-alias-state-success-primary)";
@@ -204,28 +254,70 @@ window.__ModuleLoader__.load({
         if (st === "waiting") return "var(--dsw-alias-state-warn-primary)";
         return "var(--dsw-alias-border-l2)";
       };
-      var edges = (graph && Array.isArray(graph.edges) ? graph.edges : [])
-        .filter(function (e) { return byId[e.source] && byId[e.target]; })
-        .map(function (e) {
-          var a = byId[e.source].position || { x: 0, y: 0 };
-          var b = byId[e.target].position || { x: 0, y: 0 };
-          return react.createElement("line", {
-            key: "e" + e.id, x1: a.x * scale + offX, y1: a.y * scale + offY,
-            x2: b.x * scale + offX, y2: b.y * scale + offY,
-            stroke: "var(--dsw-alias-border-l2)", "stroke-width": 1,
-          });
-        });
-      var dots = nodes.map(function (n) {
-        var p = n.position || { x: 0, y: 0 };
-        var st = states[n.id] ? states[n.id].status : null;
-        return react.createElement("circle", {
-          key: n.id, cx: p.x * scale + offX, cy: p.y * scale + offY, r: R,
-          fill: colorOf(st),
-        });
+      var W = 360, H = 108, BOX_H = 44;
+      var BOX_W = model.items.length <= 3 ? 96 : model.items.length === 4 ? 74 : 60;
+      var GAP = model.items.length > 1 ? (W - 24 - model.items.length * BOX_W) / (model.items.length - 1) : 0;
+      var contentW = model.items.length * BOX_W + (model.items.length - 1) * GAP;
+      var startX = (W - contentW) / 2, y = 17;
+      var elements = [];
+      model.items.forEach(function (item, index) {
+        var x = startX + index * (BOX_W + GAP);
+        if (index > 0) {
+          var prevX = x - GAP;
+          elements.push(react.createElement("line", {
+            key: "line-" + index, x1: prevX, y1: y + BOX_H / 2, x2: x - 4, y2: y + BOX_H / 2,
+            stroke: "var(--dsw-alias-border-l2)", "stroke-width": 1.4,
+            "stroke-dasharray": item === null || model.items[index - 1] === null ? "3 3" : undefined,
+          }));
+          elements.push(react.createElement("path", {
+            key: "arrow-" + index,
+            d: "M" + (x - 8) + " " + (y + BOX_H / 2 - 3) + " L" + (x - 4) + " " + (y + BOX_H / 2) + " L" + (x - 8) + " " + (y + BOX_H / 2 + 3),
+            fill: "none", stroke: "var(--dsw-alias-border-l2)", "stroke-width": 1.4,
+          }));
+        }
+        if (item === null) {
+          elements.push(react.createElement("text", {
+            key: "ellipsis", x: x + BOX_W / 2, y: y + BOX_H / 2 + 3,
+            "text-anchor": "middle", fill: "var(--dsw-alias-label-caption)", "font-size": 13,
+          }, "•••"));
+          return;
+        }
+        var status = states[item.id] && states[item.id].status;
+        var color = colorOf(status);
+        var maxLabel = BOX_W >= 90 ? 7 : BOX_W >= 70 ? 4 : 3;
+        var label = item.label.length > maxLabel ? item.label.slice(0, maxLabel) + "…" : item.label;
+        elements.push(react.createElement("rect", {
+          key: "box-" + item.id, x: x, y: y, width: BOX_W, height: BOX_H, rx: 6,
+          fill: "var(--dsw-alias-bg-base)", stroke: color, "stroke-width": status ? 1.6 : 1,
+        }));
+        elements.push(react.createElement("circle", {
+          key: "number-bg-" + item.id, cx: x + 13, cy: y + 14, r: 8, fill: color,
+        }));
+        elements.push(react.createElement("text", {
+          key: "number-" + item.id, x: x + 13, y: y + 17,
+          "text-anchor": "middle", fill: "var(--dsw-alias-bg-base)", "font-size": 8.5, "font-weight": 600,
+        }, String(item.number).padStart(2, "0")));
+        elements.push(react.createElement("text", {
+          key: "label-" + item.id, x: x + 25, y: y + 17,
+          fill: "var(--dsw-alias-label-primary)", "font-size": 10.5, "font-weight": 600,
+        }, label));
+        elements.push(react.createElement("text", {
+          key: "type-" + item.id, x: x + 13, y: y + 34,
+          fill: "var(--dsw-alias-label-caption)", "font-size": 9,
+        }, NODE_TYPE_CN[item.type] || item.type || "节点"));
       });
+      var summary = "主流程 " + model.pathLength + " 步" + (model.otherNodeCount ? " · 另有 " + model.otherNodeCount + " 个节点" : "");
+      elements.push(react.createElement("text", {
+        key: "summary", x: 12, y: 94, fill: "var(--dsw-alias-label-tertiary)", "font-size": 10,
+      }, summary));
       return react.createElement(
-        "svg", { className: "wf1-card-map", viewBox: "0 0 " + W + " " + H, "aria-hidden": true },
-        edges.concat(dots),
+        "svg", {
+          className: "wf1-card-map", viewBox: "0 0 " + W + " " + H, role: "img",
+          "aria-label": summary + "：" + model.items.map(function (item) {
+            return item ? item.number + " " + item.label : "省略 " + (model.pathLength - 4) + " 步";
+          }).join("，"),
+        },
+        elements,
       );
     }
 
@@ -755,6 +847,8 @@ window.__ModuleLoader__.load({
       runIdFromText: runIdFromText,
       runIdFromArgs: runIdFromArgs,
       runDotState: runDotState,
+      flowPreviewModel: flowPreviewModel,
+      graphThumbnail: graphThumbnail,
       WorkflowRunCard: WorkflowRunCard,
       GraphPatchCard: GraphPatchCard,
     };

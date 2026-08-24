@@ -11,6 +11,7 @@ const RUNTIME_NODE_DATA_FIELDS = new Set([
   'runtimeStructuredOutput',
   'outputPreview',
   'livePreview',
+  'liveTurns',
   'progress',
   'trace',
   'hasTrace',
@@ -18,6 +19,9 @@ const RUNTIME_NODE_DATA_FIELDS = new Set([
   'sessionId',
   'durationMs',
   'runtimeModel',
+  'runStartedAt',
+  'runTurns',
+  'artifactsRunId',
   'test',
 ]);
 

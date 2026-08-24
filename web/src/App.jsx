@@ -683,7 +683,7 @@ export default function App() {
     const startResume = async () => {
       const res = await fetch(apiUrl('/runs/resume'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ runId: resumeCandidate.runId, graph: saved.graph, graphFingerprint: saved.graphFingerprint, canvasId: canvasIdRef.current }),
+        body: JSON.stringify({ runId: resumeCandidate.runId, graph: saved.graph, canvasId: canvasIdRef.current }),
       });
       const data = await res.json();
       if (!res.ok) { toast(`续跑失败：${data.error}`, 'error'); return null; }

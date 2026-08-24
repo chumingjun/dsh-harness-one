@@ -1540,9 +1540,6 @@ export function apply(ctx, config) {
     if (!succeeded.length) return json(res, 400, { error: '该运行没有已完成的节点，无需续跑', code: 'nothing-to-resume' });
     // 图来源：优先当前画布图（可能是保存后的同名图），须与上次 fingerprint 一致
     let graph = body.graph || prev.graph;
-    if (body.graphFingerprint && body.graphFingerprint !== graphFingerprint(body.graph)) {
-      return json(res, 400, { error: '画布图与请求指纹不一致', code: 'graph-fingerprint-mismatch' });
-    }
     if (graphFingerprint(graph) !== prev.graphFingerprint) {
       return json(res, 409, {
         error: '画布图已修改，与上次运行不一致；请重新运行或还原画布',

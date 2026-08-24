@@ -28,6 +28,7 @@ const nodes = [{
     runtimeStructuredOutput: { type: 'json', value: { runtime: true } },
     outputPreview: 'preview',
     livePreview: 'working',
+    liveTurns: 2,
     progress: { turns: 2 },
     trace: { steps: [] },
     hasTrace: true,
@@ -35,6 +36,9 @@ const nodes = [{
     sessionId: 'session-1',
     durationMs: 123,
     runtimeModel: 'model-1',
+    runStartedAt: '2026-08-24T00:00:00.000Z',
+    runTurns: 3,
+    artifactsRunId: 'run-1',
     test: true,
   },
 }];
