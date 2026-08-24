@@ -56,10 +56,11 @@ for (const name of packages) {
 
 const aggregate = JSON.parse(readFileSync(join(pluginsDir, 'dsh-ccpg-one', 'package.json'), 'utf8'));
 const aggregatePackages = packages.filter((name) => name !== 'dsh-ccpg-one' && name !== 'dsh-ccpg-brand');
+// 8 包发布模式：子插件独立上 registry，聚合壳以普通依赖引用（裸包名挂载要求 profile 根可解析）。
+assert.equal(aggregate.bundleDependencies, undefined, 'aggregate must not bundleDependencies (sub-plugins are standalone registry packages)');
 for (const name of aggregatePackages) {
   assert.equal(aggregate.dependencies[name], aggregate.version, `${name} must match aggregate version`);
 }
-assert.deepEqual([...aggregate.bundleDependencies].sort(), [...aggregatePackages].sort(), 'aggregate must bundle every internal package');
 assert.match(aggregate.dependencies['dsh-better-sidebar'], /^\d+\.\d+\.\d+$/);
 assert(!Object.values(aggregate.dependencies).some((version) => String(version).startsWith('file:')));
 console.log('plugin package contracts: ok');
