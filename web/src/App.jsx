@@ -78,6 +78,8 @@ export default function App() {
   const [focusLark, setFocusLark] = useState(false); // 从 ⋯ 打开设置时聚焦授权区
   const [testNode, setTestNode] = useState(null); // 试运行弹窗目标节点
   const [nodeDetail, setNodeDetail] = useState(null); // 日志行点击 → { runId, nodeId }
+  // 断点续跑选择弹窗：待启动的图 + 可续跑的上次运行
+  const [resumeChoice, setResumeChoice] = useState(null); // { lastRun, startFresh, startResume }
   const [feishuCreds, setFeishuCreds] = useState([]);
   const { screenToFlowPosition, fitView } = useReactFlow();
   const nodesRef = useRef(nodes);
@@ -654,33 +656,81 @@ export default function App() {
       toast(`无法运行：${error?.message || '保存失败'}`, 'error');
       return;
     }
-    setProgress({});
-    setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, runStatus: 'idle', runError: null, runOutput: undefined, runtimeStructuredOutput: undefined, livePreview: undefined, liveTurns: undefined, runTurns: undefined, runStartedAt: undefined } })));
-    const res = await fetch(apiUrl('/run'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        graph: saved.graph,
-        graphFingerprint: saved.graphFingerprint,
-        triggerInput,
-        runInputs,
-        workflowId: runWorkflowId,
-        workflowName: currentWf?.name,
-        canvasId: canvasIdRef.current,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) toast(`启动失败：${data.error}`, 'error');
-    else {
-      const stillCurrentScope = workflowScopeEpochRef.current === runScopeEpoch
-        && currentWfIdRef.current === runWorkflowId;
-      if (data.runId && stillCurrentScope) {
-        activeRunIdRef.current = data.runId;
-        runningRef.current = true;
-        setInspectedRunId(data.runId);
-        setRunStatus((current) => ({ ...current, running: true, runId: data.runId, done: 0, total: graph.nodes.length }));
+    // 断点续跑：上次运行失败/取消且图未变时，让用户选重新跑还是接着跑
+    const startFresh = () => {
+      setProgress({});
+      setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, runStatus: 'idle', runError: null, runOutput: undefined, runtimeStructuredOutput: undefined, livePreview: undefined, liveTurns: undefined, runTurns: undefined, runStartedAt: undefined } })));
+      return fetch(apiUrl('/run'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          graph: saved.graph,
+          graphFingerprint: saved.graphFingerprint,
+          triggerInput,
+          runInputs,
+          workflowId: runWorkflowId,
+          workflowName: currentWf?.name,
+          canvasId: canvasIdRef.current,
+        }),
+      })
+        .then((res) => res.json().then((data) => ({ res, data })))
+        .then(({ res, data }) => {
+          if (!res.ok) { toast(`启动失败：${data.error}`, 'error'); return null; }
+          return data.runId;
+        })
+        .catch(() => { toast('启动失败：网络错误', 'error'); return null; });
+    };
+    const startResume = async () => {
+      const res = await fetch(apiUrl('/runs/resume'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runId: resumeCandidate.runId, graph: saved.graph, graphFingerprint: saved.graphFingerprint, canvasId: canvasIdRef.current }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast(`续跑失败：${data.error}`, 'error'); return null; }
+      return data.runId;
+    };
+    // 找上次可续跑运行：同工作流（或同草稿）、非 live、resumable
+    let resumeCandidate = null;
+    try {
+      const listRes = await fetch(apiUrl('/runs'));
+      if (listRes.ok) {
+        const { runs = [] } = await listRes.json();
+        resumeCandidate = runs.find((r) => r.resumable
+          && !r.live
+          && (r.workflowId || null) === (runWorkflowId || null)) || null;
       }
-      if (data.lint?.issues?.length) toast(`提示：${data.lint.issues.length} 条警告（见图检查）`, 'warn');
+    } catch { /* 历史不可读不阻塞正常运行 */ }
+    let runId;
+    if (resumeCandidate) {
+      const choice = await new Promise((resolve) => {
+        setResumeChoice({
+          lastRun: resumeCandidate,
+          startFresh: () => resolve('fresh'),
+          startResume: () => resolve('resume'),
+        });
+      });
+      setResumeChoice(null);
+      if (choice === 'resume') {
+        // 保留画布上已完成节点的状态展示；只清未完成节点的错误残留
+        setNodes((nds) => nds.map((n) => (['error', 'canceled', 'running'].includes(n.data?.runStatus)
+          ? { ...n, data: { ...n.data, runStatus: 'idle', runError: null } }
+          : n)));
+        runId = await startResume();
+        if (runId) toast(`已续跑：复用上次 ${resumeCandidate.progress?.succeeded ?? '?'} 个已完成节点`, 'success');
+      } else {
+        runId = await startFresh();
+      }
+    } else {
+      runId = await startFresh();
+    }
+    if (!runId) return;
+    const stillCurrentScope = workflowScopeEpochRef.current === runScopeEpoch
+      && currentWfIdRef.current === runWorkflowId;
+    if (runId && stillCurrentScope) {
+      activeRunIdRef.current = runId;
+      runningRef.current = true;
+      setInspectedRunId(runId);
+      setRunStatus((current) => ({ ...current, running: true, runId, done: 0, total: graph.nodes.length }));
     }
   }, [save, setNodes, toGraph, triggerInput, runInputs, currentWf, toast, doLint]);
 
@@ -1401,11 +1451,74 @@ export default function App() {
           onClose={() => setCanvasMenu(null)}
         />
       )}
-      {historyOpen && <RunHistory onClose={() => setHistoryOpen(false)} onSelect={(runId) => {
+      {resumeChoice && (
+        <Modal
+          title="检测到未完成的运行"
+          onClose={() => { resumeChoice.startFresh(); }}
+          footer={(
+            <>
+              <button className="btn" onClick={resumeChoice.startFresh}>重新运行</button>
+              <button className="btn btn-primary" onClick={resumeChoice.startResume}>从上次继续</button>
+            </>
+          )}
+        >
+          <p className="panel-note" style={{ marginBottom: 8 }}>
+            上次运行（{new Date(resumeChoice.lastRun.startedAt).toLocaleString('zh-CN', { hour12: false })}）
+            {resumeChoice.lastRun.status === 'error' ? '失败' : '被取消'}，
+            已完成 <strong>{resumeChoice.lastRun.progress?.succeeded ?? '?'}/{resumeChoice.lastRun.progress?.total ?? '?'}</strong> 个节点。
+          </p>
+          <p className="sec-hint">「从上次继续」复用已完成节点的输出，只补跑未完成部分（图未修改）。「重新运行」全部节点从头执行。</p>
+        </Modal>
+      )}
+      {historyOpen && <RunHistory onClose={() => setHistoryOpen(false)}
+        onResume={(runId, resumedNodes) => {
+          activeRunIdRef.current = runId;
+          runningRef.current = true;
+          setInspectedRunId(runId);
+          setRunStatus((current) => ({ ...current, running: true, runId }));
+          toast(`已从上次运行续跑（复用 ${resumedNodes} 个已完成节点）`, 'success');
+        }}
+        onSelect={(runId) => {
         setInspectedRunId(runId);
-        if (!runDetails[runId]) fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(runId)}`))
+        const applyDetail = (detail) => {
+          // 历史恢复：把该次运行的节点状态/输出投影回画布（与 SSE snapshot 同形）
+          for (const [nodeId, st] of Object.entries(detail.nodeStates || {})) {
+            setNodes((nds) => nds.map((n) => {
+              if (n.id !== nodeId) return n;
+              const data = { ...n.data, runStatus: st.status };
+              if (st.startedAt) data.runStartedAt = st.startedAt;
+              if (st.chars != null) data.runChars = st.chars;
+              if (st.turns != null) data.runTurns = st.turns;
+              if (st.error) data.runError = st.error;
+              if (st.durationMs != null) data.durationMs = st.durationMs;
+              if (st.model) data.runtimeModel = st.model;
+              if (st.artifacts) { data.artifacts = st.artifacts; data.artifactsRunId = runId; }
+              const out = (detail.outputs || {})[nodeId];
+              if (out != null) data.runOutput = String(out).slice(0, 4000);
+              return { ...n, data };
+            }));
+          }
+          const restored = Object.entries(detail.nodeStates || {})
+            .filter(([, st]) => st.status !== 'queued')
+            .map(([nodeId, st]) => ({
+              t: Date.now(), kind: 'node', runId, nodeId,
+              nodeLabel: labelOf(nodesRef.current, nodeId).replace(/\(.*\)$/, ''),
+              status: st.status, text: st.error, chars: st.chars, durationMs: st.durationMs,
+            }));
+          setEventsByRunId((current) => ({ ...current, [runId]: [...restored, {
+            t: Date.now(), kind: 'run', runId, status: detail.status,
+            text: `历史运行：${STATUS_CN[detail.status] || detail.status}`,
+          }] }));
+          setRunStatus((current) => ({ ...current, running: false, runId, last: detail.status }));
+        };
+        const cached = runDetails[runId];
+        if (cached) applyDetail(cached);
+        fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(runId)}`))
           .then((response) => response.ok ? response.json() : Promise.reject(new Error('运行记录不存在')))
-          .then((detail) => setRunDetails((current) => ({ ...current, [runId]: detail })))
+          .then((detail) => {
+            setRunDetails((current) => ({ ...current, [runId]: detail }));
+            applyDetail(detail);
+          })
           .catch(() => toast('加载历史运行失败', 'error'));
       }} />}
       {nodeDetail && (

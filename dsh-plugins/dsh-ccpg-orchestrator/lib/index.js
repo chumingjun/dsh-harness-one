@@ -28,6 +28,7 @@ import { describeNodeOutput, normalizeExecutionResult, RUN_SCHEMA_VERSION } from
 import { resolveInside, safeFileId, safeFilename } from './safe-path.js';
 import { runScript } from './script-runner.js';
 import {
+  artifactId as runArtifactId,
   createRunExport,
   createRunResults,
   isPreviewableMediaType,
@@ -609,7 +610,7 @@ export function apply(ctx, config) {
 
   const startRun = (graph, {
     triggerInput, workflowName, workflowId, canvasId, source,
-    globalVariables = {}, workflowVariables = {}, runInputs = {}, runId: providedRunId, replayOf,
+    globalVariables = {}, workflowVariables = {}, runInputs = {}, runId: providedRunId, replayOf, resume,
   } = {}) => {
     const store = currentStore();
     const runId = providedRunId || `run_${Date.now().toString(36)}_${++runIdSeq}`;
@@ -620,6 +621,7 @@ export function apply(ctx, config) {
         runId, status: 'running', startedAt: new Date().toISOString(),
         triggerInput: triggerInput ?? '', workflowName: workflowName || null, workflowId: workflowId || null,
         canvasId: canvasId || null, source: source || null, replayOf: replayOf || null,
+        ...(resume ? { resumedFrom: resume.runId || null } : {}),
         nodeStates: {}, outputs: {}, structuredOutputs: {}, issues: [],
         graph: graph ? { nodes: graph.nodes.map((n) => ({ id: n.id, type: n.type, position: n.position, data: n.data })), edges: graph.edges } : undefined,
         graphFingerprint: graph ? graphFingerprint(graph) : null,
@@ -629,6 +631,7 @@ export function apply(ctx, config) {
       triggerInput, workflowName, workflowId, canvasId, source, runId,
       workspaceRoot: store.workspaceRoot,
       globalVariables, workflowVariables, runInputs,
+      resume,
     })).then((run) => {
       if (replayOf) run.replayOf = replayOf;
       persistRun(run, graph, workflowName, workflowId);
@@ -1333,10 +1336,31 @@ export function apply(ctx, config) {
   // ---- 运行历史 ----
   register({ kind: 'exact', path: '/wf1/api/runs', handler(_req, res) {
     const live = [...orch.runs.values()].filter((entry) => entry.run.workspaceRoot === currentStore().workspaceRoot).map((entry) => entry.run.runId);
+    const runProgress = (r) => {
+      // 进度 = 终态节点数 / 图节点数。passThrough 注释节点通常不进 nodeStates，用图快照兜底总数。
+      const total = (r.graph?.nodes?.length ?? Object.keys(r.nodeStates || {}).length) || Object.keys(r.nodeStates || {}).length;
+      const done = Object.values(r.nodeStates || {}).filter((st) => ['success', 'error', 'canceled', 'skipped'].includes(st?.status)).length;
+      const succeeded = Object.values(r.nodeStates || {}).filter((st) => st?.status === 'success').length;
+      return { done, total, succeeded };
+    };
+    const resumable = (r, isLive) => !isLive
+      && ['error', 'canceled'].includes(r.status)
+      && Boolean(r.graph?.nodes?.length)
+      && Object.values(r.nodeStates || {}).some((st) => st?.status === 'success')
+      && Object.values(r.nodeStates || {}).some((st) => !['success', 'skipped'].includes(st?.status));
     json(res, 200, {
       runs: runHistory.slice(0, 20).map((r) => {
         const { structuredOutputs, graph, ...summary } = r;
-        return { ...summary, outputs: summarizeOutputs(summary.outputs, structuredOutputs), nodeStates: summarizeNodeStates(summary.nodeStates), structuredOutputSummary: summarizeStructuredOutputs(structuredOutputs), live: live.includes(r.runId) };
+        const isLive = live.includes(r.runId);
+        return {
+          ...summary,
+          outputs: summarizeOutputs(summary.outputs, structuredOutputs),
+          nodeStates: summarizeNodeStates(summary.nodeStates),
+          structuredOutputSummary: summarizeStructuredOutputs(structuredOutputs),
+          live: isLive,
+          progress: runProgress(r),
+          resumable: resumable(r, isLive),
+        };
       }),
     });
   } });
@@ -1501,6 +1525,45 @@ export function apply(ctx, config) {
       source: 'replay', replayOf: prev.runId,
     });
     json(res, 200, { started: true, runId, replayOf: prev.runId });
+  } });
+
+  // 断点续跑：从上次运行的 success 节点之后继续。图必须与上次一致（fingerprint），
+  // 否则产物/模板引用对不上——提示用户重新运行。
+  register({ kind: 'exact', path: '/wf1/api/runs/resume', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    const body = await readBody(req);
+    const prev = readRun(body?.runId);
+    if (!prev) return json(res, 404, { error: '运行记录不存在' });
+    if (orch.runs.has(prev.runId)) return json(res, 409, { error: '该运行仍在进行中', code: 'run-live' });
+    if (!prev.graph || !Array.isArray(prev.graph.nodes)) return json(res, 400, { error: '该运行没有图快照，无法续跑' });
+    const succeeded = Object.values(prev.nodeStates || {}).filter((st) => st?.status === 'success');
+    if (!succeeded.length) return json(res, 400, { error: '该运行没有已完成的节点，无需续跑', code: 'nothing-to-resume' });
+    // 图来源：优先当前画布图（可能是保存后的同名图），须与上次 fingerprint 一致
+    let graph = body.graph || prev.graph;
+    if (body.graphFingerprint && body.graphFingerprint !== graphFingerprint(body.graph)) {
+      return json(res, 400, { error: '画布图与请求指纹不一致', code: 'graph-fingerprint-mismatch' });
+    }
+    if (graphFingerprint(graph) !== prev.graphFingerprint) {
+      return json(res, 409, {
+        error: '画布图已修改，与上次运行不一致；请重新运行或还原画布',
+        code: 'workflow-graph-mismatch',
+      });
+    }
+    // 沿用上次的触发输入与运行输入：续跑语义是“同样的输入，只补跑没跑完的节点”
+    const triggerInput = String(prev.triggerInput || '');
+    let runInputs; try { runInputs = assertSafeContextObject(prev.runInputs, 'runInputs'); } catch (error) { return routeError(res, error); }
+    let globals; try { globals = globalContext(); } catch (error) { return routeError(res, error); }
+    const persistedWorkflow = prev.workflowId ? readWf(prev.workflowId) : null;
+    const workflowVariables = variableDefinitionsToValues(persistedWorkflow?.variables || []);
+    const lint = lintGraph(graph);
+    if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });
+    const { runId } = startRun(graph, {
+      triggerInput, workflowName: prev.workflowName || null, workflowId: prev.workflowId || null,
+      canvasId: body.canvasId || prev.canvasId || null,
+      globalVariables: globals.globalVariables, workflowVariables, runInputs,
+      source: 'resume', resume: prev,
+    });
+    json(res, 200, { started: true, runId, resumedFrom: prev.runId, resumedNodes: succeeded.length });
   } });
 
   // 工作流导出 / 导入（画布间分享：{ name, graph } 单文件）
