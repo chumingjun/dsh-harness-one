@@ -215,6 +215,30 @@ assert.equal(client.__test.runDotState({ status: "canceled" }), "error");
 assert.equal(client.__test.runDotState(null, "running"), "running");
 assert.equal(client.__test.runDotState(null), "running"); // 无数据按运行中
 
+const progressGraph = {
+  nodes: Array.from({ length: 10 }, (_, index) => ({
+    id: `node_${index + 1}`,
+    type: "agent",
+    position: { x: index * 20, y: 0 },
+    data: { label: `节点 ${index + 1}` },
+  })),
+  edges: Array.from({ length: 9 }, (_, index) => ({ source: `node_${index + 1}`, target: `node_${index + 2}` })),
+};
+const progressRun = {
+  graph: progressGraph,
+  nodeStates: {
+    node_1: { status: "success" },
+    node_2: { status: "success" },
+    node_3: { status: "success" },
+    node_4: { status: "success" },
+    node_9: { status: "running" },
+  },
+};
+assert.deepEqual(
+  { ...client.__test.runCardProgress(progressRun) },
+  { total: 10, done: 4, currentLabel: "节点 9", error: "" },
+);
+
 // 分支图摘要取最长路径，主路径连续编号，未展示节点使用中性计数。
 const branchGraph = {
   nodes: [
@@ -293,6 +317,14 @@ const cardContext = {
 vm.runInNewContext(bundle, cardContext, {
   filename: "dsh-ccpg-canvasui/src/client.js",
 });
+
+cardCalls.length = 0;
+cardClient.__test.graphThumbnail(progressGraph, progressRun);
+const nodeBoxes = cardCalls.filter((call) => call.tag === "rect" && call.props?.className === "wf1-card-node");
+assert.equal(nodeBoxes.some((call) => call.props["data-s"] === "success"), true);
+assert.equal(nodeBoxes.some((call) => call.props["data-s"] === "running"), true);
+assert.equal(nodeBoxes.some((call) => call.props["data-s"] === "pending"), true);
+assert.match(cardCalls.find((call) => call.tag === "svg" && call.props?.className === "wf1-card-map").props["aria-label"], /已完成.*运行中.*未开始/);
 
 // SVG 的可访问名称包含视觉摘要，读屏信息与卡片底部文案一致。
 cardCalls.length = 0;

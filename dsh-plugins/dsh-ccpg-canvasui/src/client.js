@@ -82,6 +82,7 @@ window.__ModuleLoader__.load({
         ".wf1-card-dot[data-s=pending]{background:var(--dsw-alias-border-l2);}",
         "@keyframes wf1-card-pulse{0%,100%{opacity:1}50%{opacity:.35}}",
         ".wf1-card-map{height:108px;border-radius:8px;display:block;width:100%;background:color-mix(in srgb,var(--dsw-alias-border-l1) 18%,transparent);}",
+        ".wf1-card-node[data-s=running]{animation:wf1-card-pulse 1.6s ease-in-out infinite;}",
         ".wf1-card-foot{display:flex;align-items:center;gap:8px;min-width:0;}",
         ".wf1-card-meta{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:18px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}",
         ".wf1-card-meta[data-error]{color:var(--dsw-alias-state-error-primary);}",
@@ -160,8 +161,9 @@ window.__ModuleLoader__.load({
     }
 
     var RUN_STATUS_CN = {
-      running: "运行中", success: "成功", error: "失败",
+      running: "运行中", success: "已完成", error: "失败",
       canceled: "已取消", skipped: "已跳过", waiting: "等待审批",
+      queued: "等待中", pending: "未开始",
     };
     function runDotState(run, fallback) {
       var s = run ? run.status : fallback;
@@ -282,13 +284,14 @@ window.__ModuleLoader__.load({
           }, "•••"));
           return;
         }
-        var status = states[item.id] && states[item.id].status;
+        var status = states[item.id] && states[item.id].status || "pending";
         var color = colorOf(status);
         var maxLabel = BOX_W >= 90 ? 7 : BOX_W >= 70 ? 4 : 3;
         var label = item.label.length > maxLabel ? item.label.slice(0, maxLabel) + "…" : item.label;
         elements.push(react.createElement("rect", {
           key: "box-" + item.id, x: x, y: y, width: BOX_W, height: BOX_H, rx: 6,
-          fill: "var(--dsw-alias-bg-base)", stroke: color, "stroke-width": status ? 1.6 : 1,
+          className: "wf1-card-node", "data-s": status,
+          fill: "var(--dsw-alias-bg-base)", stroke: color, "stroke-width": status === "pending" ? 1 : 1.6,
         }));
         elements.push(react.createElement("circle", {
           key: "number-bg-" + item.id, cx: x + 13, cy: y + 14, r: 8, fill: color,
@@ -314,11 +317,30 @@ window.__ModuleLoader__.load({
         "svg", {
           className: "wf1-card-map", viewBox: "0 0 " + W + " " + H, role: "img",
           "aria-label": summary + "：" + model.items.map(function (item) {
-            return item ? item.number + " " + item.label : "省略 " + (model.pathLength - 4) + " 步";
+            var status = item && states[item.id] && states[item.id].status || "pending";
+            return item ? item.number + " " + item.label + " " + RUN_STATUS_CN[status] : "省略 " + (model.pathLength - 4) + " 步";
           }).join("，"),
         },
         elements,
       );
+    }
+
+    function runCardProgress(run) {
+      var graphNodes = (run && run.graph && Array.isArray(run.graph.nodes) ? run.graph.nodes : []).filter(function (n) {
+        return (n.type || (n.data && n.data.nodeType)) !== "note";
+      });
+      var states = run && run.nodeStates || {};
+      var nodeIds = graphNodes.length ? graphNodes.map(function (n) { return n.id; }) : Object.keys(states);
+      var labels = {};
+      graphNodes.forEach(function (n) { labels[n.id] = n.data && n.data.label || n.id; });
+      var result = { total: nodeIds.length, done: 0, currentLabel: "", error: "" };
+      nodeIds.forEach(function (id) {
+        var state = states[id] || {};
+        if (["success", "error", "canceled", "skipped"].indexOf(state.status) >= 0) result.done += 1;
+        if (state.status === "running") result.currentLabel = labels[id] || id;
+        if (!result.error && (state.error || state.toleratedError)) result.error = String(state.error || state.toleratedError);
+      });
+      return result;
     }
 
     function openCanvasFallback() {
@@ -429,22 +451,9 @@ window.__ModuleLoader__.load({
       }
 
       var dot = runDotState(run);
-      var nodeTotal = 0, nodeDone = 0, currentLabel = "", errText = "";
-      if (run && run.nodeStates) {
-        var labels = {};
-        (run.graph && run.graph.nodes ? run.graph.nodes : []).forEach(function (n) {
-          labels[n.id] = (n.data && n.data.label) || n.id;
-        });
-        Object.keys(run.nodeStates).forEach(function (id) {
-          var st = run.nodeStates[id].status;
-          nodeTotal += 1;
-          if (["success", "error", "canceled", "skipped"].indexOf(st) >= 0) nodeDone += 1;
-          if (st === "running") currentLabel = labels[id] || id;
-          if (!errText && (run.nodeStates[id].error || run.nodeStates[id].toleratedError)) {
-            errText = String(run.nodeStates[id].error || run.nodeStates[id].toleratedError);
-          }
-        });
-      }
+      var progress = runCardProgress(run);
+      var nodeTotal = progress.total, nodeDone = progress.done;
+      var currentLabel = progress.currentLabel, errText = progress.error;
       var secs = run && run.durationMs ? Math.round(run.durationMs / 1000) + "s" : "";
       var meta;
       if (dot === "running") {
@@ -847,6 +856,7 @@ window.__ModuleLoader__.load({
       runIdFromText: runIdFromText,
       runIdFromArgs: runIdFromArgs,
       runDotState: runDotState,
+      runCardProgress: runCardProgress,
       flowPreviewModel: flowPreviewModel,
       graphThumbnail: graphThumbnail,
       WorkflowRunCard: WorkflowRunCard,
