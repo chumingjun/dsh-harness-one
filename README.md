@@ -12,6 +12,14 @@
 
 ## 快速开始
 
+**Harness Desktop（npm 包发布后）**：从 Desktop 托盘打开 **Open DSH Terminal**，对当前 profile 安装并重启 Desktop：
+
+```sh
+dsh plugin add dsh-ccpg-one@0.1.0
+```
+
+Desktop 使用官方 DSH/Cordis 插件组合，不需要另一套插件。不要在 Desktop 里运行 `setup.sh`：Desktop 自己管理 profile、Node/pnpm 和随机 loopback 端口；飞书账号页首次点击「自动安装」时，lark-cli 会通过 Desktop 的受管 pnpm 安装到当前 profile。安装使用细节、环境差异与常见问题排查见 [`dsh-plugins/DESKTOP.md`](dsh-plugins/DESKTOP.md)；Desktop 开发兼容契约（`desktopProfiles`/`desktopPnpm` 动态探测、跨环境插件写法）也在该文档第 2 节。
+
 **普通用户（release 包，无需本仓库源码）**：
 
 ```sh
@@ -36,7 +44,7 @@ sh start.sh dev
 
 **模型完全交给 dsh 自带配置**：插件里的 agent 走 dsh 默认模型栈（`deepseek-official`，默认模型在官方 UI「模型」页选择、key 保存进 dsh 用户级 credentials），也可以像 dsh 原生那样在 profile 的 `cordis.patch.yml` / `~/.dsh/settings.yaml` 里自行追加 provider。`setup.sh` 只写端口覆盖，不写任何模型 provider——本仓库与插件不写死、不存任何 key。
 
-> lark-cli（飞书官方 CLI）由 setup.sh 自动安装；忘了装也没关系，larkauth 插件启动时会自举补装。
+> 普通 dsh 的 lark-cli 由 setup.sh/插件自举安装；Desktop 只在用户明确点击后通过受管 pnpm 安装。
 
 ## 画布能力
 

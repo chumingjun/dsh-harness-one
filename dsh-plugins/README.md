@@ -15,7 +15,21 @@
 
 ## 安装与使用
 
-两种路径，选其一。共同前提：**Node ≥ 20**、`npm i -g @deepseek-ai/dsh`（dsh 官方，模型 key 与选型在官方 UI「模型」页配置，我们的插件不写死任何模型）。
+普通 dsh 有 release/源码两种路径，前提是 **Node ≥ 20**、`npm i -g @deepseek-ai/dsh`。Harness Desktop 自带运行时，走下面的原生插件命令。
+
+### Harness Desktop
+
+从 Desktop 托盘打开 **Open DSH Terminal**；该终端已绑定当前 profile：
+
+```sh
+dsh plugin add dsh-ccpg-one@0.1.0
+```
+
+安装后重启 Desktop，让新 bundle 进入 Loader 组合。compatibility 与 advanced 模式都继续使用普通 DSH Web Client；画布、同源 `/wf1/api/*`、侧栏和预览无需 Desktop 专用注册。飞书账号页首次点击「自动安装」时，插件通过公开 `desktopPnpm` service 把固定版本 lark-cli 安装到当前 profile，并在 profile 切换或退出时取消仍在运行的操作。
+
+Desktop 不要运行 `setup.sh`：它用于普通 dsh，会创建/修改 profile、依赖系统全局 dsh/npm 并写固定 Web 端口；Desktop 自己管理这些内容，默认随机 loopback 端口应保留。
+
+安装细节、环境差异表、常见问题（扫码无反应 / 找不到 better-sidebar / 页面空白）与开发兼容契约，见 **[DESKTOP.md](DESKTOP.md)**。
 
 ### A. 普通用户 · release 包（推荐，无需本仓库源码）
 
@@ -56,7 +70,7 @@ sh start.sh dev
 - 改画布前端（`web/`）→ `sh build-web.sh` → 刷新页面
 - 改 canvasui 官方 UI 侧（`dsh-ccpg-canvasui/src/client.js`）→ `sh build-canvasui.sh` → **彻底重启 dsh**（HMR 缓存模块，`pkill dsh` 再起）
 - 改引擎（`dsh-ccpg-orchestrator/lib/`）→ 对应面测试（`cd dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done`）→ 重启
-- 发版：`git tag v1.2.3 && git push origin v1.2.3`（release.yml 自动 pack + boot-smoke 端到端冒烟 + 上传 asset）
+- 发版：`npm run publish:dry-run` 验证 npm 包；`sh dsh-plugins/publish-npm.sh` 按子包→聚合包顺序发布；Git tag 仍由 release.yml 生成 tarball + boot-smoke asset
 
 ### 可选件开关（`--one` 模式，启动前 export，可写进工作区 `.env`）
 
@@ -86,17 +100,16 @@ sh start.sh dev
 6. `dsh plugin add` 7 个默认插件——**各插件自带 `dsh.bundle.patch`（包内 `cordis.patch.yml`），add 一步完成安装+进 bundles 层+挂载**（与 dsh-better-sidebar 的 npm 分发同一机制；失败即中止，不留半成品 profile）
 7. 依赖引导：dsh SDK 是 dsh 包内层 bundled deps，registry 版本滞后且插件解析路径够不到——`bootstrap-deps.sh` 软链进插件源码目录（npm 安装渠道则无需此步：插件实体落在 profile 内，dsh 启动时的 `~/.dsh/profiles/node_modules` 扁平兜底自动接通运行实例的 SDK）
 8. 写 `cordis.patch.yml`——**只写 webserver 端口覆盖**（模型 provider 走 dsh 自带体系，不在此写）
-9. 装 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（npm 包，自带 bundle patch 一步挂载）：官方 UI 右侧工作台侧边栏——canvasui 往它注册「工作流」tab（+ 菜单第一位），点击对话输入框旁按钮展开。软依赖：装不上时官方 UI 内无法打开工作流侧栏，独立 `/wf1/` 入口仍可用。**版本随 pack 当次 npm latest**：release 包内 `vendor/dsh-better-sidebar-<ver>.tgz` 优先（断网/下架也能装），源码安装无 vendor 件则从 npm 拉 latest
+9. 装 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（npm 包，自带 bundle patch 一步挂载）：官方 UI 右侧工作台侧边栏——canvasui 往它注册「工作流」tab。版本由 `dsh-ccpg-one` 精确依赖统一；release 包携带同版本 vendor tgz
 
 > 双挂载警告：插件挂载行已由各包 `dsh.bundle.patch` 提供，profile 的 `cordis.patch.yml` 里**不要再手写**同名 `- insert` 行——两层都生效会重复注册路由，boot 时 duplicate prefix route 报错。
 
-### 发布到 npm 后的直装形态（预留）
+### npm 直装
 
-7 个默认插件已是「自带 bundle patch」的自描述包。发布后（`npm publish` 各包）用户可绕过 tarball/setup 直接：
+聚合包和 7 个默认插件均为带 `dsh.bundle.patch` 的自描述包。推荐一条命令：
 
 ```sh
-dsh plugin --profile myprofile add dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-llm-guard
-# 再贴一段 provider+webserver 的 cordis.patch.yml（同 setup.sh 第 8 步的模板），npm 渠道连 bootstrap-deps 都不需要
+dsh plugin --profile myprofile add dsh-ccpg-one@0.1.0
 ```
 
 需要 CCPG 品牌外观时，再显式安装独立插件：
@@ -120,7 +133,9 @@ dsh plugin --profile myprofile add dsh-ccpg-brand
 
 `pack.sh <tag>`：7 个默认插件 + 独立可选 brand 清单校验 → 画布双构建 → orchestrator 依赖 → canvasui bundle 重建并 `--check` → rsync 组装（清运行时数据）→ `dist-release/dsh-ccpg-plugins-<tag>.tar.gz`。通用发布归档仍携带 brand 源包供显式安装，但 `setup.sh` 和 `dsh-ccpg-one` 都不会自动安装它。CI（release.yml）同源执行并作为 release asset 上传。
 
+`sh publish-npm.sh --dry-run` 会构建并逐包执行 npm 发布预检；去掉 `--dry-run` 后按实现包、brand、聚合包的顺序发布。默认发布到官方 npm registry，需要私有 registry 时用 `NPM_REGISTRY` 覆盖。每个 tarball 都必须包含 MIT LICENSE、bundle patch 和自身运行时资源，`scripts/verify-plugin-packages.mjs` 是 CI 门禁。
+
 ## 已知边界
 
 - SDK 软链指向本机 dsh 安装——换机器重跑 `setup.sh` 自动重链
-- npm 发包待 registry 的 `@deepseek-ai/*` 版本同步
+- npm 发布需要仓库所有者配置 npm 身份；代码与包内容不保存 token
