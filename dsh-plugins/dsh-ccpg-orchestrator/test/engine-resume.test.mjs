@@ -143,4 +143,31 @@ await test('续跑种子为空对象时行为等同全新运行', async () => {
   assert.equal(run.resumedFrom, undefined);
 });
 
-console.log(passed === 3 ? 'engine resume tests: ALL PASS' : 'engine resume tests: FAILED');
+await test('续跑种子被裁剪时：不在种子里的 success 节点照常重跑', async () => {
+  // 入口层按“子图指纹”裁剪失效节点后传入部分种子：mid 因自身被改被剔除，
+  // 引擎应重跑 mid 并以其新输出渲染 out，同时 in 的旧输出照常复用。
+  const { orch: orch1 } = makeOrch(async (node) => `old:${node.id}`);
+  const first = await orch1.run(chainGraph(), { runId: 'run_prune' });
+  assert.equal(first.status, 'success');
+
+  const calls = [];
+  const { orch: orch2 } = makeOrch(async (node) => {
+    calls.push(node.id);
+    return `new:${node.id}`;
+  });
+  const resumed = await orch2.run(chainGraph(), {
+    runId: 'run_prune_resume',
+    resume: {
+      runId: 'run_prune',
+      nodeStates: { in: first.nodeStates.in },
+      outputs: { in: first.outputs.in },
+      structuredOutputs: { in: first.structuredOutputs.in },
+    },
+  });
+  assert.equal(resumed.status, 'success');
+  assert.deepEqual(calls, ['mid']);
+  assert.equal(resumed.nodeStates.in.resumed, true);
+  assert.match(resumed.outputs.out, /new:mid/);
+});
+
+console.log(passed === 4 ? 'engine resume tests: ALL PASS' : 'engine resume tests: FAILED');

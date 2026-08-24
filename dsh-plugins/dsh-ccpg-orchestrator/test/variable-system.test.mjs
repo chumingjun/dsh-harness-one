@@ -5,7 +5,7 @@ import {
 } from '../lib/output-contract.js';
 import { renderTemplate, validateTemplate } from '../lib/template.js';
 import { buildVariableSchema } from '../lib/variable-schema.js';
-import { graphFingerprint, runMatchesGraphScope, selectScopedRun, summarizeNodeStates, summarizeOutputs, summarizeStructuredOutputs, upstreamGraphFingerprint } from '../lib/run-scope.js';
+import { graphFingerprint, resumeDiff, runMatchesGraphScope, selectScopedRun, subgraphFingerprint, summarizeNodeStates, summarizeOutputs, summarizeStructuredOutputs, upstreamGraphFingerprint } from '../lib/run-scope.js';
 import { resolveInside, safeFilename } from '../lib/safe-path.js';
 
 let passed = 0;
@@ -301,6 +301,82 @@ await test('目标模板可编辑但上游执行图变化会隔离最近运行',
   assert.equal(upstreamGraphFingerprint(runGraph, 'target'), upstreamGraphFingerprint(editedTarget, 'target'));
   assert.equal(runMatchesGraphScope(run, editedTarget, 'target'), true);
   assert.equal(runMatchesGraphScope(run, editedSource, 'target'), false);
+});
+
+await test('subgraphFingerprint 含目标节点自身：改目标或改上游均变，改无关下游不变', () => {
+  const runGraph = {
+    nodes: [
+      { id: 'source', type: 'http', data: { url: 'https://example.com/a' } },
+      { id: 'target', type: 'output', data: { inputTemplate: 'old' } },
+      { id: 'sink', type: 'output', data: { inputTemplate: 's' } },
+    ],
+    edges: [
+      { source: 'source', target: 'target' },
+      { source: 'target', target: 'sink' },
+    ],
+  };
+  const editedTarget = { ...runGraph, nodes: runGraph.nodes.map((node) => node.id === 'target'
+    ? { ...node, data: { ...node.data, inputTemplate: 'new' } } : node) };
+  const editedSource = { ...runGraph, nodes: runGraph.nodes.map((node) => node.id === 'source'
+    ? { ...node, data: { ...node.data, url: 'https://example.com/b' } } : node) };
+  const editedSink = { ...runGraph, nodes: runGraph.nodes.map((node) => node.id === 'sink'
+    ? { ...node, data: { ...node.data, inputTemplate: 's2' } } : node) };
+  assert.equal(subgraphFingerprint(runGraph, 'target'), subgraphFingerprint(editedSink, 'target'));
+  assert.notEqual(subgraphFingerprint(runGraph, 'target'), subgraphFingerprint(editedTarget, 'target'));
+  assert.notEqual(subgraphFingerprint(runGraph, 'target'), subgraphFingerprint(editedSource, 'target'));
+  // 快照图与当前图 position 差异不影响语义指纹
+  const movedTarget = { ...runGraph, nodes: runGraph.nodes.map((node) => ({ ...node, position: { x: 9, y: 9 } })) };
+  assert.equal(subgraphFingerprint(runGraph, 'target'), subgraphFingerprint(movedTarget, 'target'));
+});
+
+await test('resumeDiff：改失败节点/未跑下游可全量复用，改成功节点自身或其上游才失效', () => {
+  const prevGraph = {
+    nodes: [
+      { id: 'in', type: 'input', data: { label: '输入', text: 'hello' } },
+      { id: 'mid', type: 'agent', data: { label: '中转', prompt: 'p' } },
+      { id: 'out', type: 'output', data: { label: '汇总', inputTemplate: '{{$upstream}}' } },
+      { id: 'tail', type: 'output', data: { label: '尾部', inputTemplate: '{{$upstream}}' } },
+    ],
+    edges: [
+      { source: 'in', target: 'mid' },
+      { source: 'mid', target: 'out' },
+      { source: 'out', target: 'tail' },
+    ],
+  };
+  const states = {
+    in: { status: 'success' },
+    mid: { status: 'error' },
+    out: { status: 'skipped' },
+  }; // tail 从未执行
+  const edit = (id, data) => ({ ...prevGraph, nodes: prevGraph.nodes.map((node) => node.id === id
+    ? { ...node, data: { ...node.data, ...data } } : node) });
+
+  // 改卡住的 mid（error 节点）：全部 success 照常复用
+  assert.deepEqual(resumeDiff(prevGraph, edit('mid', { prompt: 'fixed' }), states),
+    { reusable: ['in'], rerun: [] });
+  // 改从未执行的 tail：同上
+  assert.deepEqual(resumeDiff(prevGraph, edit('tail', { inputTemplate: 'x' }), states),
+    { reusable: ['in'], rerun: [] });
+  // 删掉未执行的 tail（加新节点同理）：同上
+  const removedTail = {
+    nodes: prevGraph.nodes.filter((node) => node.id !== 'tail'),
+    edges: prevGraph.edges.filter((edge) => edge.source !== 'out' && edge.target !== 'tail'),
+  };
+  assert.deepEqual(resumeDiff(prevGraph, removedTail, states), { reusable: ['in'], rerun: [] });
+
+  // in 自身被改 → in 失效；success 下游（此处无）依赖其输出也失效
+  const states2 = { in: { status: 'success' }, mid: { status: 'success' }, out: { status: 'skipped' } };
+  assert.deepEqual(resumeDiff(prevGraph, edit('in', { text: 'changed' }), states2),
+    { reusable: [], rerun: ['in', 'mid'] });
+  // 改上游（in）导致 mid 失效；只改 mid 时仅 mid 失效、in 复用
+  assert.deepEqual(resumeDiff(prevGraph, edit('mid', { prompt: 'changed' }), states2),
+    { reusable: ['in'], rerun: ['mid'] });
+  // 图里消失的成功节点判失效
+  const removedMid = {
+    nodes: prevGraph.nodes.filter((node) => node.id !== 'mid'),
+    edges: prevGraph.edges.filter((edge) => edge.source !== 'mid' && edge.target !== 'mid'),
+  };
+  assert.deepEqual(resumeDiff(prevGraph, removedMid, states2), { reusable: ['in'], rerun: ['mid'] });
 });
 
 await test('完成运行不通过 SSE 全局快照恢复', () => {

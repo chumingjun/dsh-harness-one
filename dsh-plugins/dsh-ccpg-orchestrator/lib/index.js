@@ -38,7 +38,7 @@ import {
   snapshotRunArtifacts,
   streamArtifactResponse,
 } from './run-results.js';
-import { graphFingerprint, runMatchesGraphScope, selectScopedRun, summarizeNodeStates, summarizeOutputs, summarizeStructuredOutputs } from './run-scope.js';
+import { graphFingerprint, resumeDiff, runMatchesGraphScope, selectScopedRun, summarizeNodeStates, summarizeOutputs, summarizeStructuredOutputs } from './run-scope.js';
 import { buildVariableSchema } from './variable-schema.js';
 import {
   createStructuredEnvelope,
@@ -67,7 +67,11 @@ const parseCronExpression = cronParser.parseExpression?.bind(cronParser)
   ?? cronParser.default?.parseExpression?.bind(cronParser.default);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const LEGACY_DATA_DIR = join(__dirname, '..', 'data');
+// 测试可用 WF1_LEGACY_DATA_DIR 指向隔离目录，避免把开发机真实 data/ 当 legacy 导入。
+// 惰性读取：测试在 import 之后才设 env，模块级常量会过早固化成真实路径。
+const legacyDataDir = () => (process.env.WF1_LEGACY_DATA_DIR
+  ? resolve(process.env.WF1_LEGACY_DATA_DIR)
+  : join(__dirname, '..', 'data'));
 const RUNS_KEEP = 100; // 运行历史保留条数（按开始时间新→旧）
 const REQUEST_BODY_LIMIT = 8_000_000;
 const TERMINAL_NODE_STATUSES = new Set(['success', 'error', 'canceled', 'skipped']);
@@ -129,7 +133,7 @@ export function apply(ctx, config) {
     cpSync(source, target, { recursive: true, force: true, errorOnExist: false });
   };
   const initializeStore = (workspaceRoot) => {
-    const paths = createStoragePaths({ workspaceRoot, legacyRoot: LEGACY_DATA_DIR });
+    const paths = createStoragePaths({ workspaceRoot, legacyRoot: legacyDataDir() });
     const rootExisted = existsSync(paths.root);
     const marker = join(paths.state, 'legacy-import.json');
     for (const dir of [paths.root, paths.state, paths.workflows, paths.attachments, paths.runs, paths.runtime, join(paths.state, 'tombstones', 'workflows')]) {
@@ -1636,8 +1640,8 @@ export function apply(ctx, config) {
     json(res, 200, { started: true, runId, replayOf: prev.runId });
   } });
 
-  // 断点续跑：从上次运行的 success 节点之后继续。图必须与上次一致（fingerprint），
-  // 否则产物/模板引用对不上——提示用户重新运行。
+  // 断点续跑：逐节点判定上次 success 输出能否复用（“自身 + 全部上游”子图未变即可复用）。
+  // 改卡住的节点、改没跑过的下游、加删无关节点都不再拦截续跑；只有改到成功节点自身或其上游才让该节点重跑。
   register({ kind: 'exact', path: '/wf1/api/runs/resume', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
@@ -1658,30 +1662,42 @@ export function apply(ctx, config) {
     }
     // 命名工作流以服务端已保存版本为准；草稿优先使用刚保存的服务端图。
     const graph = persistedWorkflow?.graph || draftGraph || body.graph || prev.graph;
-    const currentFingerprint = graphFingerprint(graph);
-    const previousFingerprint = graphFingerprint(prev.graph);
-    if (currentFingerprint !== previousFingerprint) {
-      return json(res, 409, {
-        error: '画布图已修改，与上次运行不一致；请重新运行或还原画布',
-        code: 'workflow-graph-mismatch',
-        currentFingerprint,
-        previousFingerprint,
+    const nodeLabel = (nodeId) => (graph.nodes.find((n) => n.id === nodeId)?.data?.label) || nodeId;
+    const { reusable, rerun } = resumeDiff(prev.graph, graph, prev.nodeStates || {});
+    const plan = {
+      reusableNodes: reusable.map(nodeLabel),
+      rerunNodes: rerun.map(nodeLabel),
+    };    if (body?.preview) return json(res, 200, plan);
+    if (!reusable.length) {
+      return json(res, 400, {
+        error: '画布改动已覆盖全部已完成节点的上游，无可复用结果，请直接重新运行',
+        code: 'nothing-reusable',
+        ...plan,
       });
     }
-    // 沿用上次的触发输入与运行输入：续跑语义是“同样的输入，只补跑没跑完的节点”
+    // 沿用上次的触发输入与运行输入：续跑语义是“同样的输入，只补跑没跑完的节点”。
+    // resume 种子裁剪到可复用节点：失效的 success 节点与其余未完成节点一并重新执行。
     const triggerInput = String(prev.triggerInput || '');
     let runInputs; try { runInputs = assertSafeContextObject(prev.runInputs, 'runInputs'); } catch (error) { return routeError(res, error); }
     let globals; try { globals = globalContext(); } catch (error) { return routeError(res, error); }
     const workflowVariables = variableDefinitionsToValues(persistedWorkflow?.variables || []);
     const lint = lintGraph(graph);
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });
+    const reusableSet = new Set(reusable);
+    const resumeSeed = {
+      runId: prev.runId,
+      nodeStates: Object.fromEntries(Object.entries(prev.nodeStates || {}).filter(([id]) => reusableSet.has(id))),
+      outputs: Object.fromEntries(Object.entries(prev.outputs || {}).filter(([id]) => reusableSet.has(id))),
+      structuredOutputs: Object.fromEntries(Object.entries(prev.structuredOutputs || {}).filter(([id]) => reusableSet.has(id))),
+    };
     const { runId } = startRun(graph, {
       triggerInput, workflowName: prev.workflowName || null, workflowId: prev.workflowId || null,
       canvasId: body.canvasId || prev.canvasId || null,
       globalVariables: globals.globalVariables, workflowVariables, runInputs,
-      source: 'resume', resume: prev,
+      source: 'resume', resume: resumeSeed,
     });
-    json(res, 200, { started: true, runId, resumedFrom: prev.runId, resumedNodes: succeeded.length });
+    // rerunNodes 为节点 label 数组（明细），数字计数由前端取 length
+    json(res, 200, { started: true, runId, resumedFrom: prev.runId, resumedNodes: reusable.length, rerunCount: rerun.length, ...plan });
   } });
 
   // 工作流导出 / 导入（画布间分享：{ name, graph } 单文件）

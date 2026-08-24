@@ -30,7 +30,7 @@ export function RunHistory({ onClose, onSelect, onResume }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || '续跑失败');
-      onResume?.(data.runId, data.resumedNodes);
+      onResume?.(data.runId, data.resumedNodes, data.rerunNodes);
       onClose();
     } catch (e) {
       alert(`无法续跑：${e.message}`);
@@ -61,7 +61,7 @@ export function RunHistory({ onClose, onSelect, onResume }) {
             </button>
             {r.resumable && (
               <button className="btn btn-sm rh-resume" disabled={resuming === r.runId}
-                title="从上次完成的节点之后继续运行（图未修改时可用）"
+                title="从上次完成的节点之后继续运行（改过卡住的节点也不影响，可复用的输出自动保留）"
                 onClick={() => resumeRun(r.runId)}>
                 {resuming === r.runId ? '启动中…' : `续跑 ${progressText(r)}`}
               </button>
