@@ -1431,6 +1431,7 @@ export default function App() {
             triggerInput={triggerInput}
             onTriggerChange={setTriggerInput}
             onOpenHistory={() => setHistoryOpen(true)}
+            onClose={() => setLogOpen(false)}
             onFocusNode={focusNode}
             onOpenNodeDetail={(runId, nodeId) => setNodeDetail({ runId, nodeId })}
           />}
