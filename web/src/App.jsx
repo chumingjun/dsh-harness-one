@@ -78,8 +78,8 @@ export default function App() {
   const [focusLark, setFocusLark] = useState(false); // 从 ⋯ 打开设置时聚焦授权区
   const [testNode, setTestNode] = useState(null); // 试运行弹窗目标节点
   const [nodeDetail, setNodeDetail] = useState(null); // 日志行点击 → { runId, nodeId }
-  // 断点续跑选择弹窗：待启动的图 + 可续跑的上次运行
-  const [resumeChoice, setResumeChoice] = useState(null); // { lastRun, startFresh, startResume }
+  // 断点续跑选择弹窗：待启动的图 + 可续跑的上次运行 + preview 返回的复用/重跑明细
+  const [resumeChoice, setResumeChoice] = useState(null); // { lastRun, plan, startFresh, startResume }
   const [feishuCreds, setFeishuCreds] = useState([]);
   const { screenToFlowPosition, fitView } = useReactFlow();
   const nodesRef = useRef(nodes);
@@ -701,23 +701,46 @@ export default function App() {
     } catch { /* 历史不可读不阻塞正常运行 */ }
     let runId;
     if (resumeCandidate) {
-      const choice = await new Promise((resolve) => {
-        setResumeChoice({
-          lastRun: resumeCandidate,
-          startFresh: () => resolve('fresh'),
-          startResume: () => resolve('resume'),
+      // 先问服务端这次能复用多少：明细随画布改动逐节点判定（不再要求全图一致）
+      let plan = null;
+      try {
+        const previewRes = await fetch(apiUrl('/runs/resume'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runId: resumeCandidate.runId, canvasId: canvasIdRef.current, preview: true }),
         });
-      });
-      setResumeChoice(null);
-      if (choice === 'resume') {
-        // 保留画布上已完成节点的状态展示；只清未完成节点的错误残留
-        setNodes((nds) => nds.map((n) => (['error', 'canceled', 'running'].includes(n.data?.runStatus)
-          ? { ...n, data: { ...n.data, runStatus: 'idle', runError: null } }
-          : n)));
-        runId = await startResume();
-        if (runId) toast(`已续跑：复用上次 ${resumeCandidate.progress?.succeeded ?? '?'} 个已完成节点`, 'success');
-      } else {
+        if (previewRes.ok) plan = await previewRes.json();
+      } catch { /* preview 失败按无明细处理，不阻塞选择 */
+        plan = null;
+      }
+      if (plan && !plan.reusableNodes?.length) {
+        // 画布改动覆盖了全部已完成节点的上游：无从复用，直接全新运行
         runId = await startFresh();
+      } else {
+        const choice = await new Promise((resolve) => {
+          setResumeChoice({
+            lastRun: resumeCandidate,
+            plan,
+            startFresh: () => resolve('fresh'),
+            startResume: () => resolve('resume'),
+          });
+        });
+        setResumeChoice(null);
+        if (choice === 'resume') {
+          // 保留画布上已完成节点的状态展示；只清未完成节点的错误残留
+          setNodes((nds) => nds.map((n) => (['error', 'canceled', 'running'].includes(n.data?.runStatus)
+            ? { ...n, data: { ...n.data, runStatus: 'idle', runError: null } }
+            : n)));
+          runId = await startResume();
+          if (runId) {
+            const reused = plan?.reusableNodes?.length ?? resumeCandidate.progress?.succeeded ?? '?';
+            const rerunCount = plan?.rerunNodes?.length ?? 0;
+            toast(rerunCount
+              ? `已续跑：复用 ${reused} 个已完成节点，${rerunCount} 个因画布修改将重跑`
+              : `已续跑：复用上次 ${reused} 个已完成节点`, 'success');
+          }
+        } else {
+          runId = await startFresh();
+        }
       }
     } else {
       runId = await startFresh();
@@ -1470,16 +1493,32 @@ export default function App() {
             {resumeChoice.lastRun.status === 'interrupted' ? '异常中断' : resumeChoice.lastRun.status === 'error' ? '失败' : '被取消'}，
             已完成 <strong>{resumeChoice.lastRun.progress?.succeeded ?? '?'}/{resumeChoice.lastRun.progress?.total ?? '?'}</strong> 个节点。
           </p>
-          <p className="sec-hint">「从上次继续」复用已完成节点的输出，只补跑未完成部分（图未修改）。「重新运行」全部节点从头执行。</p>
+          {resumeChoice.plan ? (
+            <>
+              <p className="sec-hint">
+                「从上次继续」将复用 {resumeChoice.plan.reusableNodes.length} 个已完成节点的输出
+                {resumeChoice.plan.rerunNodes.length > 0 && (
+                  <>；<strong>{resumeChoice.plan.rerunNodes.length} 个因画布修改将重跑</strong>（{resumeChoice.plan.rerunNodes.join('、')}）</>
+                )}，其余未完成节点照常补跑。「重新运行」全部节点从头执行。
+              </p>
+              {resumeChoice.plan.reusableNodes.length > 0 && (
+                <p className="sec-hint">复用节点：{resumeChoice.plan.reusableNodes.join('、')}</p>
+              )}
+            </>
+          ) : (
+            <p className="sec-hint">「从上次继续」复用已完成节点的输出，只补跑未完成部分。「重新运行」全部节点从头执行。</p>
+          )}
         </Modal>
       )}
       {historyOpen && <RunHistory onClose={() => setHistoryOpen(false)}
-        onResume={(runId, resumedNodes) => {
+        onResume={(runId, resumedNodes, rerunNodes) => {
           activeRunIdRef.current = runId;
           runningRef.current = true;
           setInspectedRunId(runId);
           setRunStatus((current) => ({ ...current, running: true, runId }));
-          toast(`已从上次运行续跑（复用 ${resumedNodes} 个已完成节点）`, 'success');
+          toast(rerunNodes
+            ? `已从上次运行续跑（复用 ${resumedNodes} 个节点，${rerunNodes} 个因画布修改重跑）`
+            : `已从上次运行续跑（复用 ${resumedNodes} 个已完成节点）`, 'success');
         }}
         onSelect={(runId) => {
         setInspectedRunId(runId);
