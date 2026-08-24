@@ -22,7 +22,7 @@
 从 Desktop 托盘打开 **Open DSH Terminal**；该终端已绑定当前 profile：
 
 ```sh
-dsh plugin add dsh-ccpg-one@0.2.0
+dsh plugin add dsh-ccpg-one@0.2.1
 ```
 
 安装后重启 Desktop，让新 bundle 进入 Loader 组合。compatibility 与 advanced 模式都继续使用普通 DSH Web Client；画布、同源 `/wf1/api/*`、侧栏和预览无需 Desktop 专用注册。飞书账号页首次点击「自动安装」时，插件通过公开 `desktopPnpm` service 把固定版本 lark-cli 安装到当前 profile，并在 profile 切换或退出时取消仍在运行的操作。
@@ -109,7 +109,7 @@ sh start.sh dev
 聚合包和 7 个默认插件均为带 `dsh.bundle.patch` 的自描述包。推荐一条命令：
 
 ```sh
-dsh plugin --profile myprofile add dsh-ccpg-one@0.2.0
+dsh plugin --profile myprofile add dsh-ccpg-one@0.2.1
 ```
 
 需要 CCPG 品牌外观时，再显式安装独立插件：
@@ -133,7 +133,7 @@ dsh plugin --profile myprofile add dsh-ccpg-brand
 
 `pack.sh <tag>`：7 个默认插件 + 独立可选 brand 清单校验 → 画布双构建 → orchestrator 依赖 → canvasui bundle 重建并 `--check` → rsync 组装（清运行时数据）→ `dist-release/dsh-ccpg-plugins-<tag>.tar.gz`。通用发布归档仍携带 brand 源包供显式安装，但 `setup.sh` 和 `dsh-ccpg-one` 都不会自动安装它。CI（release.yml）同源执行并作为 release asset 上传。
 
-`sh publish-npm.sh --dry-run` 会构建并验证单一聚合包 `dsh-ccpg-one`：7 个默认插件作为 `bundleDependencies` 放进同一个 tarball，子插件和 brand 不单独发布。去掉 `--dry-run` 才上传官方 npm registry；tag 必须与聚合包版本一致。GitHub `release.yml` 先上传 release 资产，再使用仓库 Actions Secret `NPM_TOKEN` 发布聚合包，失败后可安全重跑（已存在版本会自动跳过）。
+`sh publish-npm.sh --dry-run` 会构建并验证 8 个 npm 包：7 个默认插件**独立发布为公共包**（loader 与 client-modules 都从 profile 根按包名解析 entry，嵌套 bundle 布局两处都解析不到），`dsh-ccpg-one` 作为聚合壳以普通依赖引用它们——用户一条 `dsh plugin add dsh-ccpg-one` 装齐全部。brand 不单独发布。安装冒烟会校验「无 @deepseek-ai SDK 泄漏」（peer 自动安装会遮蔽 dsh 全局版本导致官方 UI 400）。去掉 `--dry-run` 才上传官方 npm registry；tag 必须与聚合包版本一致。GitHub `release.yml` 先上传 release 资产，再使用仓库 Actions Secret `NPM_TOKEN` 按子包→聚合包顺序发布，失败后可安全重跑（已存在版本会自动跳过）。
 
 ## 已知边界
 

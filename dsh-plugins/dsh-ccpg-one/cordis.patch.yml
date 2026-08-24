@@ -14,6 +14,8 @@
 #   export CCPG_NO_GUARD=1    → 不加载 llm-guard（空工具调用防护，不建议关）
 #   export CCPG_ONLY_CORE=1   → 只留核心五件（tools/orchestrator/web/canvasui 之上的全关）
 # 以下变量可写进工作区 .env（DSH_ 前缀被禁止，CCPG_ 前缀合法）。
+# 挂载名说明：loader 与 client-modules 都从 profile 根按包名解析 entry——
+# 子插件必须作为 registry 依赖装在 profile node_modules（publish-npm.sh 已发布为公共包）。
 - insert:
     # ---- 核心（不可关）：引擎 + 画布 + 官方 UI 集成 ----
     - id: dsh-ccpg-tools
@@ -34,6 +36,8 @@
     - id: dsh-ccpg-llm-guard
       name: 'dsh-ccpg-llm-guard'
       disabled: !!js "Boolean(process.env.CCPG_NO_GUARD || process.env.CCPG_ONLY_CORE)"
-    - id: better-sidebar
+    # id 不能用 better-sidebar：用户单独 add 过 dsh-better-sidebar 时其 bundle 层已 insert 同 id 行，
+    # 两层同 id insert 会 duplicate 报错。用独立 id + 防双挂载 disable（检测到别层已挂 sidebar 就关自己）。
+    - id: one-better-sidebar
       name: 'dsh-better-sidebar'
-      disabled: !!js "Boolean(process.env.CCPG_NO_SIDEBAR || process.env.CCPG_ONLY_CORE) || [...ctx.loader.entries()].some((e) => e.options.name === 'dsh-better-sidebar' && e.options.id !== 'better-sidebar' && !e.disabled)"
+      disabled: !!js "Boolean(process.env.CCPG_NO_SIDEBAR || process.env.CCPG_ONLY_CORE) || [...ctx.loader.entries()].some((e) => e.options.name === 'dsh-better-sidebar' && e.options.id !== 'one-better-sidebar' && !e.disabled)"
