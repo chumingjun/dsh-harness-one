@@ -28,6 +28,17 @@ function legacyArtifact(nodeLabel, file) {
   });
 }
 
+/** 新架构产物 URL：run + nodeId 定位节点工作区/运行快照（后端 /wf1/api/artifact） */
+function runArtifact(runId, nodeId, file) {
+  const query = `run=${encodeURIComponent(runId)}&node=${encodeURIComponent(nodeId)}&file=${encodeURIComponent(file)}`;
+  const base = apiUrl(`/artifact?${query}`);
+  return normalizeArtifact({
+    name: file,
+    previewUrl: `${base}&preview=1`,
+    downloadUrl: base,
+  });
+}
+
 export function ArtifactPreviewModal({ artifact, onClose }) {
   return <DocumentPreviewDialog document={normalizeArtifact(artifact)} onClose={onClose} title="文件预览" />;
 }
@@ -71,14 +82,17 @@ export function findArtifactByName(files = [], name) {
   return null;
 }
 
-export function ArtifactLinks({ nodeLabel, artifacts = [] }) {
+export function ArtifactLinks({ nodeLabel, runId, nodeId, artifacts = [] }) {
   const files = artifacts.filter((file) => file && !file.endsWith('/'));
   const dirs = artifacts.filter((file) => file?.endsWith('/'));
+  const artifactFor = (file) => (
+    runId && nodeId ? runArtifact(runId, nodeId, file) : legacyArtifact(nodeLabel, file)
+  );
 
   return (
     <div className="artifact-list">
       {files.map((file) => {
-        const artifact = legacyArtifact(nodeLabel, file);
+        const artifact = artifactFor(file);
         return (
           <div key={file} className="artifact-row">
             <ArtifactNameLink artifact={artifact} className="artifact-name" />

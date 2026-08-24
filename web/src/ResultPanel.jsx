@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Archive, Check, ChevronRight, Clock3, FolderDown, History, LoaderCircle, RefreshCw, Timer } from 'lucide-react';
+import { Archive, Check, ChevronRight, Clock3, FolderDown, History, LoaderCircle, RefreshCw, Timer, X } from 'lucide-react';
 import { apiUrl } from './api.js';
 import {
   adaptRunResults,
@@ -116,6 +116,7 @@ export function ResultPanel({
   triggerInput = '',
   onTriggerChange,
   onOpenHistory,
+  onClose,
   onFocusNode,
   onOpenNodeDetail,
   sessionId = '',
@@ -236,6 +237,7 @@ export function ResultPanel({
         <div className="result-head-actions">
           <button className="btn-icon" title="刷新成果" aria-label="刷新成果" onClick={refresh} disabled={!runId || loading}><RefreshCw size={15} className={loading ? 'result-spin' : ''} /></button>
           <button className="btn-icon" title="运行历史" aria-label="打开运行历史" onClick={onOpenHistory}><History size={15} /></button>
+          {onClose && <button className="btn-icon" title="关闭面板" aria-label="关闭面板" onClick={onClose}><X size={16} /></button>}
         </div>
       </header>
 

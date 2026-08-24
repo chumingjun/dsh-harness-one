@@ -76,6 +76,7 @@ export class Orchestrator {
   async run(graph, {
     triggerInput = '', runId, workflowName, workflowId, canvasId, source, workspaceRoot,
     globalVariables = {}, workflowVariables = {}, runInputs = {},
+    resume = null,
   } = {}) {
     const id = runId || `run_${Date.now().toString(36)}_${++runSeq}`;
     const safeRunInputs = structuredClone(runInputs || {});
@@ -86,6 +87,7 @@ export class Orchestrator {
       schemaVersion: RUN_SCHEMA_VERSION,
       nodeStates: {}, outputs: {}, structuredOutputs: {}, nodeOrder: [],
       canceled: false,
+      ...(resume ? { resumedFrom: resume.runId || null } : {}),
     };
     const s = {
       run, graph,
@@ -137,6 +139,38 @@ export class Orchestrator {
       });
       this.runs.delete(id);
       return run;
+    }
+
+    // ---- 断点续跑：把上次运行中 success 节点的输出/结构化输出搬进本次运行 ----
+    // 图一致才可续跑（入口 startRun 已做 fingerprint 校验；这里只搬运）。
+    // 对每个 success 节点：写 outputs/nodeStates、释放直接下游依赖计数，
+    // 并按原判定回放分支跳过（与 _onNodeDone 同语义）。
+    if (resume?.nodeStates) {
+      const prior = resume;
+      for (const n of graph.nodes) {
+        const st = prior.nodeStates[n.id];
+        if (!st || st.status !== 'success') continue;
+        const restored = { ...st, resumed: true };
+        // startedAt/durationMs 保留原值：续跑报告的耗时语义是“这些节点没再花时间”
+        run.outputs[n.id] = prior.outputs?.[n.id] ?? '';
+        if (prior.structuredOutputs?.[n.id] !== undefined) {
+          run.structuredOutputs[n.id] = prior.structuredOutputs[n.id];
+        }
+        run.nodeStates[n.id] = restored;
+        run.nodeOrder.push(n.id);
+        this.emit('node-status', { runId: id, nodeId: n.id, status: 'success', resumed: true, ...(st.chars != null ? { chars: st.chars } : {}) });
+        for (const next of s.outgoing.get(n.id) || []) {
+          if (this._edgeTaken(s, n.id, next)) {
+            s.pendingDeps.set(next, s.pendingDeps.get(next) - 1);
+          } else if (s.run.nodeStates[next] === undefined) {
+            s.remaining -= 1;
+            s.run.nodeStates[next] = { status: 'skipped', error: '条件分支未命中' };
+            this.emit('node-status', { runId: id, nodeId: next, status: 'skipped', error: '条件分支未命中' });
+            this._propagateSkip(s, next);
+          }
+        }
+        s.remaining -= 1;
+      }
     }
 
     this.emit('run-start', {

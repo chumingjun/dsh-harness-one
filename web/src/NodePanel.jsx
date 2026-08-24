@@ -737,7 +737,7 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
         {d.artifacts?.length > 0 && (
           <>
             <div className="result-head"><span className="result-title">工作区产物</span></div>
-            <ArtifactLinks nodeLabel={d.label || node.id} artifacts={d.artifacts} />
+            <ArtifactLinks nodeLabel={d.label || node.id} runId={d.artifactsRunId} nodeId={node.id} artifacts={d.artifacts} />
           </>
         )}
         {d.runError && <p className="panel-error">错误：{d.runError}</p>}
