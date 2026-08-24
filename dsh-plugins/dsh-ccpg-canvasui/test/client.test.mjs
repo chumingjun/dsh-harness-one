@@ -240,6 +240,25 @@ assert.deepEqual(
   { total: 10, done: 4, currentLabel: "节点 9", error: "" },
 );
 
+const liveEventRun = client.__test.mergeRunEvent(progressRun, "node-status", {
+  runId: "run_progress", nodeId: "node_9", status: "success", durationMs: 1200,
+});
+assert.equal(liveEventRun.nodeStates.node_9.status, "success");
+assert.equal(client.__test.runCardProgress(liveEventRun).done, 5);
+const endedEventRun = client.__test.mergeRunEvent(liveEventRun, "run-end", {
+  runId: "run_progress", status: "success", durationMs: 5000,
+});
+assert.equal(endedEventRun.status, "success");
+assert.equal(endedEventRun.durationMs, 5000);
+assert.equal(client.__test.shouldFollowRun(
+  { runId: "old", status: "interrupted", workflowId: "wf-1" },
+  { runId: "new", status: "running", workflowId: "wf-1", live: true },
+), true);
+assert.equal(client.__test.shouldFollowRun(
+  { runId: "old", status: "success", workflowId: "wf-1" },
+  { runId: "new", status: "running", workflowId: "wf-1", live: true },
+), false);
+
 // 分支图摘要取最长路径，主路径连续编号，未展示节点使用中性计数。
 const branchGraph = {
   nodes: [

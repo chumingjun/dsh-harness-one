@@ -243,6 +243,27 @@ try {
   }
   assert.equal(finishedLiveRun.status, 'success');
 
+  writeFileSync(join(runsDirB, 'run_late_orphan.json'), JSON.stringify({
+    runId: 'run_late_orphan', schemaVersion: 3, status: 'running',
+    startedAt: '2026-08-24T00:00:00.000Z', triggerInput: '', runInputs: {},
+    graph: {
+      nodes: [
+        { id: 'orphan_done', type: 'input', position: { x: 0, y: 0 }, data: { label: '已完成' } },
+        { id: 'orphan_pending', type: 'output', position: { x: 200, y: 0 }, data: { label: '未完成' } },
+      ],
+      edges: [{ source: 'orphan_done', target: 'orphan_pending' }],
+    },
+    nodeStates: { orphan_done: { status: 'success' } }, outputs: { orphan_done: 'done' },
+    structuredOutputs: {}, nodeOrder: ['orphan_done'],
+  }));
+  const orphanDetail = responseCapture();
+  await route('/wf1/api/runs/detail')(request('GET', withSession('/wf1/api/runs/detail?id=run_late_orphan', 'session-b')), orphanDetail);
+  assert.equal(orphanDetail.status, 200);
+  assert.equal(orphanDetail.json().status, 'interrupted', '启动后产生的孤立 running 详情也应及时收敛');
+  const orphanList = responseCapture();
+  await route('/wf1/api/runs')(request('GET', withSession('/wf1/api/runs', 'session-b')), orphanList);
+  assert.equal(orphanList.json().runs.find((run) => run.runId === 'run_late_orphan')?.status, 'interrupted');
+
   const resumeGraph = {
     nodes: [
       { id: 'resume_input', type: 'input', position: { x: 0, y: 0 }, data: { label: '输入', text: 'hello' } },

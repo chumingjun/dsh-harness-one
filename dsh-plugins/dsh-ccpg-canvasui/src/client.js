@@ -33,6 +33,41 @@ window.__ModuleLoader__.load({
       }
     }
 
+    var RUN_EVENT_NAMES = ["snapshot", "run-start", "node-status", "agent-progress", "run-end", "run-error"];
+    var runEventHub = { sessionId: null, source: null, listeners: new Set(), timer: null };
+    function ensureRunEventHub() {
+      var sessionId = currentDshSessionId(null);
+      if (runEventHub.source && runEventHub.sessionId === sessionId) return;
+      if (runEventHub.source) runEventHub.source.close();
+      runEventHub.source = null;
+      runEventHub.sessionId = sessionId;
+      if (!sessionId || !runEventHub.listeners.size || !window.EventSource) return;
+      var source = new window.EventSource("/wf1/api/events?sessionId=" + encodeURIComponent(sessionId));
+      RUN_EVENT_NAMES.forEach(function (eventName) {
+        source.addEventListener(eventName, function (event) {
+          try {
+            var payload = JSON.parse(event.data);
+            runEventHub.listeners.forEach(function (listener) { listener(eventName, payload); });
+          } catch (e) { /* 单条异常事件不影响后续消息 */ }
+        });
+      });
+      runEventHub.source = source;
+    }
+    function subscribeRunEvents(listener) {
+      runEventHub.listeners.add(listener);
+      ensureRunEventHub();
+      if (!runEventHub.timer) runEventHub.timer = window.setInterval(ensureRunEventHub, 1000);
+      return function () {
+        runEventHub.listeners.delete(listener);
+        if (runEventHub.listeners.size) return;
+        if (runEventHub.source) runEventHub.source.close();
+        if (runEventHub.timer) window.clearInterval(runEventHub.timer);
+        runEventHub.source = null;
+        runEventHub.sessionId = null;
+        runEventHub.timer = null;
+      };
+    }
+
     // conversation.input.left 的 owner props 拿不到 ctx，走模块级引用。
     var betterSidebarRef = { svc: null };
     var sidebarServiceListeners = new Set();
@@ -172,6 +207,31 @@ window.__ModuleLoader__.load({
       if (s === "waiting") return "waiting";
       if (s === "running" || !run) return "running";
       return "pending";
+    }
+
+    function mergeRunEvent(run, eventName, payload) {
+      if (!payload || (run?.runId && payload.runId && payload.runId !== run.runId)) return run;
+      if (eventName === "snapshot" || eventName === "run-start") {
+        return { ...(run || {}), ...payload, status: payload.status || "running" };
+      }
+      if (!run) return run;
+      if ((eventName === "node-status" || eventName === "agent-progress") && payload.nodeId) {
+        var previous = run.nodeStates && run.nodeStates[payload.nodeId] || {};
+        var state = eventName === "agent-progress"
+          ? { ...previous, ...(payload.turns != null ? { turns: payload.turns } : {}) }
+          : { ...previous, ...payload };
+        return { ...run, nodeStates: { ...(run.nodeStates || {}), [payload.nodeId]: state } };
+      }
+      if (eventName === "run-end") return { ...run, status: payload.status || run.status, durationMs: payload.durationMs ?? run.durationMs };
+      if (eventName === "run-error") return { ...run, status: "error", error: payload.error || run.error };
+      return run;
+    }
+
+    function shouldFollowRun(run, candidate) {
+      if (!run || !candidate?.runId || candidate.runId === run.runId) return false;
+      if (["interrupted", "error", "canceled"].indexOf(run.status) < 0) return false;
+      if (run.workflowId || candidate.workflowId) return Boolean(run.workflowId && run.workflowId === candidate.workflowId);
+      return Boolean(run.canvasId && run.canvasId === candidate.canvasId);
     }
 
     var NODE_TYPE_CN = {
@@ -380,7 +440,7 @@ window.__ModuleLoader__.load({
     }
 
     // 运行卡：canvas_run_workflow / canvas_run_status 共用。
-    // runId 从工具结果解析；运行中 2s 轮询 runs/detail，终态即停（历史卡片是当时快照）。
+    // SSE 实时更新，2s 详情轮询只作断线兜底；失败续跑后自动切到同工作流的新 run。
     function WorkflowRunCard(props) {
       var block = props.block || {};
       var text = toolText(block);
@@ -391,32 +451,79 @@ window.__ModuleLoader__.load({
         function () { return runIdFromText(text) || runIdFromArgs(argsRaw); },
         [text, argsRaw],
       );
-      var sessionId = currentDshSessionId(null);
+      var [trackedRunId, setTrackedRunId] = react.useState(runId);
       var [run, setRun] = react.useState(null);
       var [missing, setMissing] = react.useState(false);
 
       react.useEffect(function () {
-        if (!runId) return undefined;
+        setTrackedRunId(runId);
+      }, [runId]);
+
+      react.useEffect(function () {
+        if (!trackedRunId) return undefined;
         var stopped = false;
-        var terminal = false;
+        var latestRun = null;
+        var timer = null;
+        var scopedUrl = function (path) {
+          var sessionId = currentDshSessionId(null);
+          if (!sessionId) return path;
+          return path + (path.indexOf("?") >= 0 ? "&" : "?") + "sessionId=" + encodeURIComponent(sessionId);
+        };
+        var followCurrentRun = function (current) {
+          if (!current || ["interrupted", "error", "canceled"].indexOf(current.status) < 0) return;
+          fetch(scopedUrl("/wf1/api/runs"))
+            .then(function (response) { return response.ok ? response.json() : null; })
+            .then(function (data) {
+              if (stopped || !data) return;
+              var replacement = (data.runs || []).find(function (candidate) {
+                return candidate.live && shouldFollowRun(current, candidate);
+              });
+              if (replacement) setTrackedRunId(replacement.runId);
+            })
+            .catch(function () { /* 后续 SSE run-start 仍可接管 */ });
+        };
         var fetchRun = function () {
-          if (stopped || terminal) return;
-          var url = "/wf1/api/runs/detail?id=" + encodeURIComponent(runId);
-          if (sessionId) url += "&sessionId=" + encodeURIComponent(sessionId);
-          fetch(url)
+          if (stopped) return;
+          fetch(scopedUrl("/wf1/api/runs/detail?id=" + encodeURIComponent(trackedRunId)))
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (d) {
               if (stopped || !d) { if (!d) setMissing(true); return; }
               setMissing(false);
+              latestRun = d;
               setRun(d);
-              if (d.status && d.status !== "running") terminal = true;
+              if (d.status && d.status !== "running") {
+                if (timer) window.clearInterval(timer);
+                timer = null;
+                followCurrentRun(d);
+              }
             })
             .catch(function () { /* 单次失败继续轮询 */ });
         };
+        var unsubscribe = subscribeRunEvents(function (eventName, payload) {
+          if (payload?.runId === trackedRunId) {
+            latestRun = mergeRunEvent(latestRun, eventName, payload);
+            if (latestRun) setRun(latestRun);
+            if (["run-end", "run-error"].indexOf(eventName) >= 0) {
+              if (timer) window.clearInterval(timer);
+              timer = null;
+              followCurrentRun(latestRun);
+            }
+            return;
+          }
+          if ((eventName === "snapshot" || eventName === "run-start") && shouldFollowRun(latestRun, payload)) {
+            setTrackedRunId(payload.runId);
+          }
+        });
+        setRun(null);
+        setMissing(false);
         fetchRun();
-        var timer = window.setInterval(fetchRun, 2000);
-        return function () { stopped = true; window.clearInterval(timer); };
-      }, [runId, sessionId]);
+        timer = window.setInterval(fetchRun, 2000);
+        return function () {
+          stopped = true;
+          if (timer) window.clearInterval(timer);
+          unsubscribe();
+        };
+      }, [trackedRunId]);
 
       if (!runId) {
         // 起跑失败（画布未开/lint 拒绝）或会话未绑定：文本降级 + 保留跳转
@@ -434,7 +541,7 @@ window.__ModuleLoader__.load({
           title: "工作流运行",
           dotState: "pending",
           stateText: "已归档",
-          meta: "运行 " + runId.slice(0, 8) + "… 记录不在当前工作区",
+          meta: "运行 " + trackedRunId.slice(0, 8) + "… 记录不在当前工作区",
           thumbnail: null,
         });
       }
@@ -445,7 +552,7 @@ window.__ModuleLoader__.load({
           title: "工作流运行",
           dotState: "running",
           stateText: "加载中",
-          meta: "运行 " + runId.slice(0, 8) + "…",
+          meta: "运行 " + trackedRunId.slice(0, 8) + "…",
           thumbnail: null,
         });
       }
@@ -856,6 +963,8 @@ window.__ModuleLoader__.load({
       runIdFromText: runIdFromText,
       runIdFromArgs: runIdFromArgs,
       runDotState: runDotState,
+      mergeRunEvent: mergeRunEvent,
+      shouldFollowRun: shouldFollowRun,
       runCardProgress: runCardProgress,
       flowPreviewModel: flowPreviewModel,
       graphThumbnail: graphThumbnail,

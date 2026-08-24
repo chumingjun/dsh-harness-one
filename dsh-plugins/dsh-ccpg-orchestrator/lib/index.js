@@ -473,6 +473,26 @@ export function apply(ctx, config) {
 
 
   // ---- 运行历史（按工作区持久化 + 内存缓存）----
+  const pendingRunIds = new Set();
+  const recoverInterruptedRun = (run, interruptedAt) => {
+    const startedAtMs = run.startedAt ? new Date(run.startedAt).getTime() : NaN;
+    const states = (run.graph?.nodes || []).map((node) => run.nodeStates?.[node.id]);
+    const fullyTerminal = states.length > 0
+      && states.every((state) => TERMINAL_NODE_STATUSES.has(state?.status));
+    const recoveredStatus = fullyTerminal
+      ? states.some((state) => state?.status === 'error') ? 'error'
+        : states.some((state) => state?.status === 'canceled') ? 'canceled'
+          : 'success'
+      : 'interrupted';
+    return normalizeRunDocument({
+      ...run,
+      status: recoveredStatus,
+      interruptedAt,
+      finishedAt: interruptedAt,
+      durationMs: Number.isFinite(startedAtMs) ? Math.max(0, new Date(interruptedAt).getTime() - startedAtMs) : run.durationMs,
+      ...(recoveredStatus === 'interrupted' ? { error: run.error || '运行进程异常终止' } : {}),
+    });
+  };
   const hydrateHistory = () => {
     const store = currentStore();
     if (store.historyHydrated) return;
@@ -486,23 +506,7 @@ export function apply(ctx, config) {
             let run = normalizeRunDocument(JSON.parse(readFileSync(runFile, 'utf8')));
             if (run.status === 'running') {
               const interruptedAt = statSync(runFile).mtime.toISOString();
-              const startedAtMs = run.startedAt ? new Date(run.startedAt).getTime() : NaN;
-              const states = (run.graph?.nodes || []).map((node) => run.nodeStates?.[node.id]);
-              const fullyTerminal = states.length > 0
-                && states.every((state) => TERMINAL_NODE_STATUSES.has(state?.status));
-              const recoveredStatus = fullyTerminal
-                ? states.some((state) => state?.status === 'error') ? 'error'
-                  : states.some((state) => state?.status === 'canceled') ? 'canceled'
-                    : 'success'
-                : 'interrupted';
-              run = normalizeRunDocument({
-                ...run,
-                status: recoveredStatus,
-                interruptedAt,
-                finishedAt: interruptedAt,
-                durationMs: Number.isFinite(startedAtMs) ? Math.max(0, new Date(interruptedAt).getTime() - startedAtMs) : run.durationMs,
-                ...(recoveredStatus === 'interrupted' ? { error: run.error || '运行进程异常终止' } : {}),
-              });
+              run = recoverInterruptedRun(run, interruptedAt);
               atomicJson(runFile, run);
             }
             if (!byId.has(run.runId)) byId.set(run.runId, run);
@@ -591,7 +595,15 @@ export function apply(ctx, config) {
     }
     const filename = `${safeFileId(runId, 'invalid')}.json`;
     for (const dir of [currentPaths().runs]) {
-      try { return normalizeRunDocument(JSON.parse(readFileSync(join(dir, filename), 'utf8'))); } catch { /* 回退下一位置 */ }
+      try {
+        const runFile = join(dir, filename);
+        let run = normalizeRunDocument(JSON.parse(readFileSync(runFile, 'utf8')));
+        if (run.status === 'running' && !pendingRunIds.has(runId)) {
+          run = recoverInterruptedRun(run, statSync(runFile).mtime.toISOString());
+          writeRun(run);
+        }
+        return run;
+      } catch { /* 回退下一位置 */ }
     }
     return null;
   };
@@ -708,6 +720,7 @@ export function apply(ctx, config) {
   } = {}) => {
     const store = currentStore();
     const runId = providedRunId || `run_${Date.now().toString(36)}_${++runIdSeq}`;
+    pendingRunIds.add(runId);
     // 启动即落盘运行中快照：成果面板在 run-start 后立刻拉 /run-results，
     // 只等最终 persistRun 的话长运行期间 readRun 一直 404（前端退避耗尽即报「运行记录不存在」）。
     try {
@@ -733,7 +746,7 @@ export function apply(ctx, config) {
     })).catch((error) => {
       ctx.logger?.error?.(`dsh-ccpg 运行失败（${runId}）：${error.message}`);
       return null;
-    });
+    }).finally(() => pendingRunIds.delete(runId));
     return { runId, promise };
   };
 
@@ -1443,7 +1456,9 @@ export function apply(ctx, config) {
       && Object.values(r.nodeStates || {}).some((st) => st?.status === 'success')
       && r.graph.nodes.some((node) => !['success', 'skipped'].includes(r.nodeStates?.[node.id]?.status));
     json(res, 200, {
-      runs: runHistory.slice(0, 20).map((r) => {
+      runs: runHistory.slice(0, 20).map((row) => (
+        row.status === 'running' && !live.includes(row.runId) ? (readRun(row.runId) || row) : row
+      )).map((r) => {
         const { structuredOutputs, graph, ...summary } = r;
         const isLive = live.includes(r.runId);
         return {
