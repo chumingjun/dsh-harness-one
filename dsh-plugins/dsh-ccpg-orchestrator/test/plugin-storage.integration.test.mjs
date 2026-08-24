@@ -53,6 +53,11 @@ mkdirSync(workspaceA, { recursive: true });
 mkdirSync(workspaceB, { recursive: true });
 const original = process.env.DSH_HOME;
 process.env.DSH_HOME = dshHome;
+// 隔离包级 legacy 目录：开发机插件 data/ 里可能有真实历史运行，混入会按时间排序挤掉测试 seed（run_it_*）
+const packageLegacyDir = join(dshHome, 'package-legacy');
+mkdirSync(join(packageLegacyDir, 'state'), { recursive: true });
+process.env.WF1_LEGACY_DATA_DIR = packageLegacyDir;
+writeFileSync(join(packageLegacyDir, "state", "graph.json"), JSON.stringify({ nodes: [], edges: [] }));
 
 const legacyDataDir = join(dshHome, 'plugin-data', 'dsh-ccpg-orchestrator');
 const seedLegacy = () => {
@@ -279,14 +284,33 @@ try {
     outputs: { resume_input: 'hello' }, structuredOutputs: {}, nodeOrder: ['resume_input', 'resume_output'],
   }));
 
+  // 改的是未完成节点（resume_output）→ 不再拦截，success 节点照常复用
   const changedGraph = structuredClone(resumeGraph);
-  changedGraph.nodes[0].data.text = 'changed';
+  changedGraph.nodes[1].data.inputTemplate = 'changed';
   const changedResume = responseCapture();
   await route('/wf1/api/runs/resume')(request('POST', withSession('/wf1/api/runs/resume', 'session-b'), {
     runId: 'run_resume_seed', graph: changedGraph,
   }), changedResume);
-  assert.equal(changedResume.status, 409);
-  assert.equal(changedResume.json().code, 'workflow-graph-mismatch');
+  assert.equal(changedResume.status, 200);
+  assert.equal(changedResume.json().resumedNodes, 1);
+
+  // 改到 success 节点自身（resume_input）→ 无可复用节点，400 nothing-reusable
+  const brokenGraph = structuredClone(resumeGraph);
+  brokenGraph.nodes[0].data.text = 'changed';
+  const brokenResume = responseCapture();
+  await route('/wf1/api/runs/resume')(request('POST', withSession('/wf1/api/runs/resume', 'session-b'), {
+    runId: 'run_resume_seed', graph: brokenGraph,
+  }), brokenResume);
+  assert.equal(brokenResume.status, 400);
+  assert.equal(brokenResume.json().code, 'nothing-reusable');
+
+  // preview 模式：只返回复用/重跑明细，不启动运行
+  const previewResume = responseCapture();
+  await route('/wf1/api/runs/resume')(request('POST', withSession('/wf1/api/runs/resume', 'session-b'), {
+    runId: 'run_resume_seed', graph: brokenGraph, preview: true,
+  }), previewResume);
+  assert.equal(previewResume.status, 200);
+  assert.deepEqual(previewResume.json(), { reusableNodes: [], rerunNodes: ['输入'] });
 
   const matchingResume = responseCapture();
   await route('/wf1/api/runs/resume')(request('POST', withSession('/wf1/api/runs/resume', 'session-b'), {
@@ -295,9 +319,10 @@ try {
   assert.equal(matchingResume.status, 200);
   assert.equal(matchingResume.json().resumedFrom, 'run_resume_seed');
 
+  // 命名工作流场景：已保存版本改了 success 节点（resume_input）→ 无可复用节点拒绝
   const namedCreate = responseCapture();
   await route('/wf1/api/workflows')(request('POST', withSession('/wf1/api/workflows', 'session-b'), {
-    id: 'wf_resume_named', name: '命名续跑', graph: changedGraph,
+    id: 'wf_resume_named', name: '命名续跑', graph: brokenGraph,
   }), namedCreate);
   assert.equal(namedCreate.status, 200);
   writeFileSync(join(runsDirB, 'run_resume_named_seed.json'), JSON.stringify({
@@ -311,7 +336,8 @@ try {
   await route('/wf1/api/runs/resume')(request('POST', withSession('/wf1/api/runs/resume', 'session-b'), {
     runId: 'run_resume_named_seed', graph: resumeGraph,
   }), namedMismatch);
-  assert.equal(namedMismatch.status, 409);
+  assert.equal(namedMismatch.status, 400);
+  assert.equal(namedMismatch.json().code, 'nothing-reusable');
 
   const namedRestore = responseCapture();
   await route('/wf1/api/workflows')(request('POST', withSession('/wf1/api/workflows', 'session-b'), {
