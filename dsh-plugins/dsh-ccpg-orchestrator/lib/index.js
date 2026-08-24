@@ -1667,8 +1667,7 @@ export function apply(ctx, config) {
     const plan = {
       reusableNodes: reusable.map(nodeLabel),
       rerunNodes: rerun.map(nodeLabel),
-    };
-    if (body?.preview) return json(res, 200, plan);
+    };    if (body?.preview) return json(res, 200, plan);
     if (!reusable.length) {
       return json(res, 400, {
         error: '画布改动已覆盖全部已完成节点的上游，无可复用结果，请直接重新运行',
@@ -1697,7 +1696,8 @@ export function apply(ctx, config) {
       globalVariables: globals.globalVariables, workflowVariables, runInputs,
       source: 'resume', resume: resumeSeed,
     });
-    json(res, 200, { started: true, runId, resumedFrom: prev.runId, resumedNodes: reusable.length, rerunNodes: rerun.length, ...plan });
+    // rerunNodes 为节点 label 数组（明细），数字计数由前端取 length
+    json(res, 200, { started: true, runId, resumedFrom: prev.runId, resumedNodes: reusable.length, rerunCount: rerun.length, ...plan });
   } });
 
   // 工作流导出 / 导入（画布间分享：{ name, graph } 单文件）

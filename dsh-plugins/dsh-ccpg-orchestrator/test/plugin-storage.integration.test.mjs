@@ -293,6 +293,10 @@ try {
   }), changedResume);
   assert.equal(changedResume.status, 200);
   assert.equal(changedResume.json().resumedNodes, 1);
+  // 响应明细：可复用/重跑节点 label 数组（RunHistory 弹窗直接展示）
+  assert.deepEqual(changedResume.json().reusableNodes, ['输入']);
+  assert.deepEqual(changedResume.json().rerunNodes, []);
+  assert.equal(changedResume.json().rerunCount, 0);
 
   // 改到 success 节点自身（resume_input）→ 无可复用节点，400 nothing-reusable
   const brokenGraph = structuredClone(resumeGraph);

@@ -34,11 +34,12 @@ export function upstreamGraphFingerprint(graph, targetNodeId) {
   const { ancestors } = upstreamScope(graph, targetNodeId);
   return graphFingerprint({
     nodes: (graph?.nodes || []).filter((node) => ancestors.has(node.id)),
-    edges: (graph?.edges || []).filter((edge) => ancestors.has(edge.source) && ancestors.has(edge.target)),
+    edges: (graph?.edges || []).filter((edge) => ancestors.has(edge.source)
+      && (ancestors.has(edge.target) || edge.target === targetNodeId)),
   });
 }
 
-// targetNodeId 及其全部祖先（不含自身）。图快照可能带 position 等非语义字段，统一走 graphFingerprint 的语义归一。
+// 目标节点自身 + 全部祖先的子图指纹。图快照可能带 position 等非语义字段，统一走 graphFingerprint 的语义归一。
 export function subgraphFingerprint(graph, targetNodeId) {
   if (!targetNodeId) return graphFingerprint(graph);
   const { node, ancestors } = upstreamScope(graph, targetNodeId);

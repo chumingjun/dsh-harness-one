@@ -734,7 +734,7 @@ export default function App() {
           if (runId) {
             const reused = plan?.reusableNodes?.length ?? resumeCandidate.progress?.succeeded ?? '?';
             const rerunCount = plan?.rerunNodes?.length ?? 0;
-            toast(rerunCount
+            toast(rerunCount > 0
               ? `已续跑：复用 ${reused} 个已完成节点，${rerunCount} 个因画布修改将重跑`
               : `已续跑：复用上次 ${reused} 个已完成节点`, 'success');
           }
@@ -1516,8 +1516,9 @@ export default function App() {
           runningRef.current = true;
           setInspectedRunId(runId);
           setRunStatus((current) => ({ ...current, running: true, runId }));
-          toast(rerunNodes
-            ? `已从上次运行续跑（复用 ${resumedNodes} 个节点，${rerunNodes} 个因画布修改重跑）`
+          const rerunCount = rerunNodes?.length ?? 0;
+          toast(rerunCount > 0
+            ? `已从上次运行续跑（复用 ${resumedNodes} 个节点，${rerunCount} 个因画布修改重跑）`
             : `已从上次运行续跑（复用 ${resumedNodes} 个已完成节点）`, 'success');
         }}
         onSelect={(runId) => {
