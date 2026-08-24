@@ -31,7 +31,45 @@ export function graphFingerprint(graph) {
 
 export function upstreamGraphFingerprint(graph, targetNodeId) {
   if (!targetNodeId) return graphFingerprint(graph);
+  const { ancestors } = upstreamScope(graph, targetNodeId);
+  return graphFingerprint({
+    nodes: (graph?.nodes || []).filter((node) => ancestors.has(node.id)),
+    edges: (graph?.edges || []).filter((edge) => ancestors.has(edge.source) && ancestors.has(edge.target)),
+  });
+}
+
+// targetNodeId 及其全部祖先（不含自身）。图快照可能带 position 等非语义字段，统一走 graphFingerprint 的语义归一。
+export function subgraphFingerprint(graph, targetNodeId) {
+  if (!targetNodeId) return graphFingerprint(graph);
+  const { node, ancestors } = upstreamScope(graph, targetNodeId);
+  if (!node) return null; // 目标节点在图中不存在
+  return graphFingerprint({
+    nodes: [node, ...(graph?.nodes || []).filter((n) => ancestors.has(n.id))],
+    edges: (graph?.edges || []).filter((edge) => (ancestors.has(edge.source) || edge.source === targetNodeId)
+      && (ancestors.has(edge.target) || edge.target === targetNodeId)),
+  });
+}
+
+// 断点续跑可用性：逐节点比对“产出该输出的子图”（自身 + 全部上游）是否变化。
+// success 节点：子图未变 → 可复用输出；自身或任一上游变化/消失 → 需重跑。
+// 其余状态节点本来就要执行，不参与判定。
+export function resumeDiff(prevGraph, currentGraph, prevNodeStates = {}) {
+  const reusable = [];
+  const rerun = [];
+  const successIds = Object.entries(prevNodeStates || {})
+    .filter(([, state]) => state?.status === 'success')
+    .map(([nodeId]) => nodeId);
+  for (const nodeId of successIds) {
+    const fp = subgraphFingerprint(prevGraph, nodeId);
+    const reusableNow = fp !== null && fp === subgraphFingerprint(currentGraph, nodeId);
+    (reusableNow ? reusable : rerun).push(nodeId);
+  }
+  return { reusable, rerun };
+}
+
+function upstreamScope(graph, targetNodeId) {
   const edges = graph?.edges || [];
+  const node = (graph?.nodes || []).find((n) => n.id === targetNodeId) || null;
   const ancestors = new Set();
   const pending = edges.filter((edge) => edge.target === targetNodeId).map((edge) => edge.source);
   while (pending.length) {
@@ -42,11 +80,7 @@ export function upstreamGraphFingerprint(graph, targetNodeId) {
       if (edge.target === id && !ancestors.has(edge.source)) pending.push(edge.source);
     }
   }
-  return graphFingerprint({
-    nodes: (graph?.nodes || []).filter((node) => ancestors.has(node.id)),
-    edges: edges.filter((edge) => ancestors.has(edge.source)
-      && (ancestors.has(edge.target) || edge.target === targetNodeId)),
-  });
+  return { node, ancestors };
 }
 
 export function runMatchesGraphScope(run, graph, targetNodeId) {
