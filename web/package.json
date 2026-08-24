@@ -10,7 +10,7 @@
     "test:variables": "node src/variables.test.mjs && node src/global-variables.test.mjs && node src/json-response.test.mjs && node src/api-base.test.mjs && node src/trial-request.test.mjs && node src/variable-scope.test.mjs && node src/run-event-routing.test.mjs && node src/workflow-serialization.test.mjs",
     "test:results": "node src/result-adapter.test.mjs",
     "test:scripts": "node src/script-parameters.test.mjs",
-    "test:ui": "node src/toolbar-responsive.test.mjs"
+    "test:ui": "node src/toolbar-responsive.test.mjs && node src/resume-workflow.test.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

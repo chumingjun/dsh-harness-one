@@ -212,6 +212,7 @@ assert.equal(client.__test.runDotState({ status: "running" }), "running");
 assert.equal(client.__test.runDotState({ status: "error" }), "error");
 assert.equal(client.__test.runDotState({ status: "waiting" }), "waiting");
 assert.equal(client.__test.runDotState({ status: "canceled" }), "error");
+assert.equal(client.__test.runDotState({ status: "interrupted" }), "error");
 assert.equal(client.__test.runDotState(null, "running"), "running");
 assert.equal(client.__test.runDotState(null), "running"); // 无数据按运行中
 

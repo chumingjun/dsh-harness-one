@@ -929,6 +929,7 @@ body {
 .rh-status.st-error { background: var(--danger); }
 .rh-status.st-running { background: var(--warn); }
 .rh-status.st-canceled { background: var(--fg-faint); }
+.rh-status.st-interrupted { background: var(--danger); }
 .rh-name { font-weight: 600; }
 .rh-meta { color: var(--fg-faint); margin-left: auto; white-space: nowrap; font-size: 12px; }
 .rh-node { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; margin-top: 6px; font-size: 13px; }

@@ -162,13 +162,13 @@ window.__ModuleLoader__.load({
 
     var RUN_STATUS_CN = {
       running: "运行中", success: "已完成", error: "失败",
-      canceled: "已取消", skipped: "已跳过", waiting: "等待审批",
+      canceled: "已取消", interrupted: "异常中断", skipped: "已跳过", waiting: "等待审批",
       queued: "等待中", pending: "未开始",
     };
     function runDotState(run, fallback) {
       var s = run ? run.status : fallback;
       if (s === "success") return "success";
-      if (s === "error" || s === "canceled") return "error";
+      if (s === "error" || s === "canceled" || s === "interrupted") return "error";
       if (s === "waiting") return "waiting";
       if (s === "running" || !run) return "running";
       return "pending";

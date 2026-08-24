@@ -24,13 +24,21 @@ function responseCapture() {
   };
 }
 
-function request(method, url, body) {
+function request(method, url, body, splitAt) {
   const req = new EventEmitter();
   req.method = method;
   req.url = url;
   req.headers = {};
   queueMicrotask(() => {
-    if (body !== undefined) req.emit('data', Buffer.from(JSON.stringify(body)));
+    if (body !== undefined) {
+      const raw = Buffer.from(JSON.stringify(body));
+      if (Number.isInteger(splitAt)) {
+        req.emit('data', raw.subarray(0, splitAt));
+        req.emit('data', raw.subarray(splitAt));
+      } else {
+        req.emit('data', raw);
+      }
+    }
     req.emit('end');
   });
   return req;
@@ -58,6 +66,25 @@ const seedLegacy = () => {
   writeFileSync(join(legacyDataDir, 'runs', 'run_it_legacy.json'), JSON.stringify({
     runId: 'run_it_legacy', startedAt: '2026-08-01T00:00:00.000Z', finishedAt: '2026-08-01T00:00:01.000Z',
     status: 'success', triggerInput: '', outputs: {}, structuredOutputs: {}, nodeStates: {}, nodeOrder: [], schemaVersion: 3,
+  }));
+  writeFileSync(join(legacyDataDir, 'runs', 'run_it_interrupted.json'), JSON.stringify({
+    runId: 'run_it_interrupted', startedAt: '2026-08-02T00:00:00.000Z', status: 'running',
+    triggerInput: '', outputs: { input: 'done' }, structuredOutputs: {}, schemaVersion: 3,
+    graph: {
+      nodes: [
+        { id: 'input', type: 'input', position: { x: 0, y: 0 }, data: { label: '输入', text: 'done' } },
+        { id: 'output', type: 'output', position: { x: 200, y: 0 }, data: { label: '输出' } },
+      ],
+      edges: [{ source: 'input', target: 'output' }],
+    },
+    nodeStates: { input: { status: 'success' } },
+    nodeOrder: ['input'],
+  }));
+  writeFileSync(join(legacyDataDir, 'runs', 'run_it_finished_checkpoint.json'), JSON.stringify({
+    runId: 'run_it_finished_checkpoint', startedAt: '2026-08-03T00:00:00.000Z', status: 'running',
+    triggerInput: '', outputs: { input: 'done' }, structuredOutputs: {}, schemaVersion: 3,
+    graph: { nodes: [{ id: 'input', type: 'input', position: { x: 0, y: 0 }, data: { label: '输入', text: 'done' } }], edges: [] },
+    nodeStates: { input: { status: 'success' } }, nodeOrder: ['input'],
   }));
   writeFileSync(join(legacyDataDir, 'state', 'graph.json'), JSON.stringify({ nodes: [], edges: [] }));
 };
@@ -98,6 +125,13 @@ try {
   assert.equal(workflowsA.status, 200);
   assert.ok(workflowsA.json().workflows.some((row) => row.id === 'wf_it_legacy'));
 
+  const runsA = responseCapture();
+  await route('/wf1/api/runs')(request('GET', withSession('/wf1/api/runs', 'session-a')), runsA);
+  const interruptedRun = runsA.json().runs.find((run) => run.runId === 'run_it_interrupted');
+  assert.equal(interruptedRun.status, 'interrupted');
+  assert.equal(interruptedRun.resumable, true);
+  assert.equal(runsA.json().runs.find((run) => run.runId === 'run_it_finished_checkpoint').status, 'success');
+
   const workflowsB = responseCapture();
   await route('/wf1/api/workflows')(request('GET', withSession('/wf1/api/workflows', 'session-b')), workflowsB);
   assert.equal(workflowsB.status, 200);
@@ -110,6 +144,18 @@ try {
   assert.equal(createA.status, 200);
   assert.equal(existsSync(join(workspaceA, '.workflow-one', 'workflows', 'wf_only_a.json')), true);
   assert.equal(existsSync(join(workspaceB, '.workflow-one', 'workflows', 'wf_only_a.json')), false);
+
+  const utf8Workflow = {
+    id: 'wf_utf8', name: '中文分块',
+    graph: { nodes: [{ id: 'utf8_input', type: 'input', position: { x: 0, y: 0 }, data: { label: '输入', text: '审核对象' } }], edges: [] },
+  };
+  const utf8Raw = Buffer.from(JSON.stringify(utf8Workflow));
+  const utf8Split = utf8Raw.indexOf(Buffer.from('审核对象')) + 1;
+  const utf8Create = responseCapture();
+  await route('/wf1/api/workflows')(request('POST', withSession('/wf1/api/workflows', 'session-b'), utf8Workflow, utf8Split), utf8Create);
+  assert.equal(utf8Create.status, 200);
+  const utf8Saved = JSON.parse(readFileSync(join(workspaceB, '.workflow-one', 'workflows', 'wf_utf8.json'), 'utf8'));
+  assert.equal(utf8Saved.graph.nodes[0].data.text, '审核对象');
 
   const runRes = responseCapture();
   await route('/wf1/api/run')(request('POST', withSession('/wf1/api/run', 'session-b'), {
@@ -175,6 +221,12 @@ try {
     assert.equal(liveDetail.nodeStates.live_output, undefined);
     assert.equal(liveDetail.workspaceRoot, undefined);
 
+    const liveCheckpoint = JSON.parse(readFileSync(join(runsDirB, `${liveRunId}.json`), 'utf8'));
+    assert.equal(liveCheckpoint.status, 'running');
+    assert.equal(liveCheckpoint.nodeStates.live_input.status, 'success');
+    assert.equal(liveCheckpoint.outputs.live_input, 'hello');
+    assert.equal(liveCheckpoint.workspaceRoot, undefined);
+
     const crossWorkspaceDetail = responseCapture();
     await route('/wf1/api/runs/detail')(request('GET', withSession(`/wf1/api/runs/detail?id=${liveRunId}`, 'session-a')), crossWorkspaceDetail);
     assert.equal(crossWorkspaceDetail.status, 404);
@@ -201,7 +253,7 @@ try {
   writeFileSync(join(runsDirB, 'run_resume_seed.json'), JSON.stringify({
     runId: 'run_resume_seed', schemaVersion: 3, status: 'error',
     startedAt: '2026-08-24T00:00:00.000Z', finishedAt: '2026-08-24T00:00:01.000Z', durationMs: 1000,
-    triggerInput: '', runInputs: {}, graph: resumeGraph, graphFingerprint: graphFingerprint(resumeGraph),
+    triggerInput: '', runInputs: {}, graph: resumeGraph, graphFingerprint: 'legacy-fingerprint',
     nodeStates: { resume_input: { status: 'success' }, resume_output: { status: 'error', error: '模拟失败' } },
     outputs: { resume_input: 'hello' }, structuredOutputs: {}, nodeOrder: ['resume_input', 'resume_output'],
   }));
@@ -221,6 +273,36 @@ try {
   }), matchingResume);
   assert.equal(matchingResume.status, 200);
   assert.equal(matchingResume.json().resumedFrom, 'run_resume_seed');
+
+  const namedCreate = responseCapture();
+  await route('/wf1/api/workflows')(request('POST', withSession('/wf1/api/workflows', 'session-b'), {
+    id: 'wf_resume_named', name: '命名续跑', graph: changedGraph,
+  }), namedCreate);
+  assert.equal(namedCreate.status, 200);
+  writeFileSync(join(runsDirB, 'run_resume_named_seed.json'), JSON.stringify({
+    runId: 'run_resume_named_seed', schemaVersion: 3, status: 'interrupted', workflowId: 'wf_resume_named',
+    startedAt: '2026-08-24T00:00:00.000Z', finishedAt: '2026-08-24T00:00:01.000Z', durationMs: 1000,
+    triggerInput: '', runInputs: {}, graph: resumeGraph, graphFingerprint: graphFingerprint(resumeGraph),
+    nodeStates: { resume_input: { status: 'success' }, resume_output: { status: 'running' } },
+    outputs: { resume_input: 'hello' }, structuredOutputs: {}, nodeOrder: ['resume_input', 'resume_output'],
+  }));
+  const namedMismatch = responseCapture();
+  await route('/wf1/api/runs/resume')(request('POST', withSession('/wf1/api/runs/resume', 'session-b'), {
+    runId: 'run_resume_named_seed', graph: resumeGraph,
+  }), namedMismatch);
+  assert.equal(namedMismatch.status, 409);
+
+  const namedRestore = responseCapture();
+  await route('/wf1/api/workflows')(request('POST', withSession('/wf1/api/workflows', 'session-b'), {
+    id: 'wf_resume_named', name: '命名续跑', graph: resumeGraph,
+  }), namedRestore);
+  assert.equal(namedRestore.status, 200);
+  const namedResume = responseCapture();
+  await route('/wf1/api/runs/resume')(request('POST', withSession('/wf1/api/runs/resume', 'session-b'), {
+    runId: 'run_resume_named_seed',
+  }), namedResume);
+  assert.equal(namedResume.status, 200);
+  assert.equal(namedResume.json().resumedFrom, 'run_resume_named_seed');
 
   const missingSession = responseCapture();
   await route('/wf1/api/graph')(request('GET', '/wf1/api/graph'), missingSession);

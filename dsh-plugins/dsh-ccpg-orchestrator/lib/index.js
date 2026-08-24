@@ -69,8 +69,18 @@ const parseCronExpression = cronParser.parseExpression?.bind(cronParser)
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LEGACY_DATA_DIR = join(__dirname, '..', 'data');
 const RUNS_KEEP = 100; // 运行历史保留条数（按开始时间新→旧）
+const REQUEST_BODY_LIMIT = 8_000_000;
+const TERMINAL_NODE_STATUSES = new Set(['success', 'error', 'canceled', 'skipped']);
 let runIdSeq = 0;
 let ctxRef = null;
+
+class RequestBodyError extends Error {
+  constructor(message, status, code) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
 
 // 原子写入：临时文件 + rename，进程中途挂掉不会留截断 JSON
 const atomicWrite = (file, data) => {
@@ -201,10 +211,35 @@ export function apply(ctx, config) {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(body));
   };
-  const readBody = (req) => new Promise((resolve) => {
-    let buf = '';
-    req.on('data', (d) => { buf += d; if (buf.length > 8e6) req.destroy(); });
-    req.on('end', () => { try { resolve(JSON.parse(buf || '{}')); } catch { resolve({}); } });
+  const readBody = (req) => new Promise((resolve, reject) => {
+    const chunks = [];
+    let bytes = 0;
+    let failed = false;
+    req.on('data', (value) => {
+      if (failed) return;
+      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+      bytes += chunk.length;
+      if (bytes > REQUEST_BODY_LIMIT) {
+        failed = true;
+        reject(new RequestBodyError('请求体过大', 413, 'request-body-too-large'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('error', (error) => {
+      if (failed) return;
+      failed = true;
+      reject(error);
+    });
+    req.on('end', () => {
+      if (failed) return;
+      try {
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks, bytes));
+        resolve(JSON.parse(text || '{}'));
+      } catch {
+        reject(new RequestBodyError('请求体不是有效的 UTF-8 JSON', 400, 'invalid-request-body'));
+      }
+    });
   });
   const sessionStore = (sessionId) => {
     if (!sessionId) throw new Error('缺少当前会话');
@@ -224,11 +259,21 @@ export function apply(ctx, config) {
       handler(req, res) {
         if (!scoped) return handler(req, res);
         try {
-          return workspaceContext.run(requestStore(req), () => {
+          const result = workspaceContext.run(requestStore(req), () => {
             hydrateHistory();
             ensureTriggers();
             return handler(req, res);
           });
+          return result && typeof result.catch === 'function'
+            ? result.catch((error) => {
+                if (!(error instanceof RequestBodyError)) throw error;
+                if (res.writableEnded) return undefined;
+                return json(res, Number(error?.status) || 500, {
+                  error: String(error?.message || error),
+                  code: error?.code || 'request-failed',
+                });
+              })
+            : result;
         } catch (error) {
           return json(res, 409, { error: String(error.message || error), code: 'workspace-session-required' });
         }
@@ -437,7 +482,29 @@ export function apply(ctx, config) {
       try {
         for (const file of readdirSync(dir).filter((name) => name.endsWith('.json'))) {
           try {
-            const run = normalizeRunDocument(JSON.parse(readFileSync(join(dir, file), 'utf8')));
+            const runFile = join(dir, file);
+            let run = normalizeRunDocument(JSON.parse(readFileSync(runFile, 'utf8')));
+            if (run.status === 'running') {
+              const interruptedAt = statSync(runFile).mtime.toISOString();
+              const startedAtMs = run.startedAt ? new Date(run.startedAt).getTime() : NaN;
+              const states = (run.graph?.nodes || []).map((node) => run.nodeStates?.[node.id]);
+              const fullyTerminal = states.length > 0
+                && states.every((state) => TERMINAL_NODE_STATUSES.has(state?.status));
+              const recoveredStatus = fullyTerminal
+                ? states.some((state) => state?.status === 'error') ? 'error'
+                  : states.some((state) => state?.status === 'canceled') ? 'canceled'
+                    : 'success'
+                : 'interrupted';
+              run = normalizeRunDocument({
+                ...run,
+                status: recoveredStatus,
+                interruptedAt,
+                finishedAt: interruptedAt,
+                durationMs: Number.isFinite(startedAtMs) ? Math.max(0, new Date(interruptedAt).getTime() - startedAtMs) : run.durationMs,
+                ...(recoveredStatus === 'interrupted' ? { error: run.error || '运行进程异常终止' } : {}),
+              });
+              atomicJson(runFile, run);
+            }
             if (!byId.has(run.runId)) byId.set(run.runId, run);
           } catch { /* 单条损坏不阻塞其他历史 */ }
         }
@@ -537,6 +604,23 @@ export function apply(ctx, config) {
     else history.unshift(document);
     return document;
   };
+  const checkpointRun = (runId) => {
+    const live = orch?.runs.get(runId);
+    if (!live || live.run.workspaceRoot !== currentStore().workspaceRoot) return;
+    const { workspaceRoot: _workspaceRoot, ...run } = live.run;
+    const graph = {
+      nodes: live.s.graph.nodes.map((node) => ({ id: node.id, type: node.type, position: node.position, data: node.data })),
+      edges: live.s.graph.edges,
+    };
+    writeRun({ ...run, graph, graphFingerprint: graphFingerprint(graph), checkpointedAt: new Date().toISOString() });
+  };
+  const onOrchestratorEvent = (event, payload) => {
+    if (event === 'node-status' && TERMINAL_NODE_STATUSES.has(payload?.status)) {
+      try { checkpointRun(payload.runId); }
+      catch (error) { ctx.logger?.error?.(`dsh-ccpg 运行检查点写入失败（${payload?.runId || 'unknown'}）：${error.message}`); }
+    }
+    broadcast(event, payload);
+  };
 
   // ---- 工作流库 ----
   const wfFile = (id, dir = currentPaths().workflows) => join(dir, `${safeFileId(id, 'invalid')}.json`);
@@ -598,12 +682,12 @@ export function apply(ctx, config) {
     }
   };
   const routeError = (res, error) => {
-    const status = error instanceof VariableStoreError ? error.status : 400;
+    const status = error instanceof VariableStoreError ? error.status : Number(error?.status) || 400;
     json(res, status, { ok: false, error: String(error.message || error), code: error.code || 'invalid-request' });
   };
 
   // ---- 引擎 ----
-  orch = new Orchestrator(ctx, { onEvent: broadcast, renderTemplate });
+  orch = new Orchestrator(ctx, { onEvent: onOrchestratorEvent, renderTemplate });
   orch.nodeRunner = async (node, run, s, ctl) => runAgentNode(ctx, node, run, s, ctl);
   orch.scriptRunner = async ({ node, input, signal, timeoutMs, workflowId, runId }) => {
     const ws = workspaceFor(node, { workflowId: workflowId || 'draft', runId });
@@ -1354,10 +1438,10 @@ export function apply(ctx, config) {
       return { done, total, succeeded };
     };
     const resumable = (r, isLive) => !isLive
-      && ['error', 'canceled'].includes(r.status)
+      && ['error', 'canceled', 'interrupted'].includes(r.status)
       && Boolean(r.graph?.nodes?.length)
       && Object.values(r.nodeStates || {}).some((st) => st?.status === 'success')
-      && Object.values(r.nodeStates || {}).some((st) => !['success', 'skipped'].includes(st?.status));
+      && r.graph.nodes.some((node) => !['success', 'skipped'].includes(r.nodeStates?.[node.id]?.status));
     json(res, 200, {
       runs: runHistory.slice(0, 20).map((r) => {
         const { structuredOutputs, graph, ...summary } = r;
@@ -1548,19 +1632,31 @@ export function apply(ctx, config) {
     if (!prev.graph || !Array.isArray(prev.graph.nodes)) return json(res, 400, { error: '该运行没有图快照，无法续跑' });
     const succeeded = Object.values(prev.nodeStates || {}).filter((st) => st?.status === 'success');
     if (!succeeded.length) return json(res, 400, { error: '该运行没有已完成的节点，无需续跑', code: 'nothing-to-resume' });
-    // 图来源：优先当前画布图（可能是保存后的同名图），须与上次 fingerprint 一致
-    let graph = body.graph || prev.graph;
-    if (graphFingerprint(graph) !== prev.graphFingerprint) {
+    const persistedWorkflow = prev.workflowId ? readWf(prev.workflowId) : null;
+    if (prev.workflowId && !persistedWorkflow) return json(res, 404, { error: '工作流不存在，无法续跑' });
+    let draftGraph = null;
+    if (!prev.workflowId && existsSync(currentStore().graphFile)) {
+      try {
+        const stored = JSON.parse(readFileSync(currentStore().graphFile, 'utf8'));
+        if (!stored.workflowId && Array.isArray(stored.nodes)) draftGraph = stored;
+      } catch { /* 草稿损坏时回退请求图或运行快照 */ }
+    }
+    // 命名工作流以服务端已保存版本为准；草稿优先使用刚保存的服务端图。
+    const graph = persistedWorkflow?.graph || draftGraph || body.graph || prev.graph;
+    const currentFingerprint = graphFingerprint(graph);
+    const previousFingerprint = graphFingerprint(prev.graph);
+    if (currentFingerprint !== previousFingerprint) {
       return json(res, 409, {
         error: '画布图已修改，与上次运行不一致；请重新运行或还原画布',
         code: 'workflow-graph-mismatch',
+        currentFingerprint,
+        previousFingerprint,
       });
     }
     // 沿用上次的触发输入与运行输入：续跑语义是“同样的输入，只补跑没跑完的节点”
     const triggerInput = String(prev.triggerInput || '');
     let runInputs; try { runInputs = assertSafeContextObject(prev.runInputs, 'runInputs'); } catch (error) { return routeError(res, error); }
     let globals; try { globals = globalContext(); } catch (error) { return routeError(res, error); }
-    const persistedWorkflow = prev.workflowId ? readWf(prev.workflowId) : null;
     const workflowVariables = variableDefinitionsToValues(persistedWorkflow?.variables || []);
     const lint = lintGraph(graph);
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });

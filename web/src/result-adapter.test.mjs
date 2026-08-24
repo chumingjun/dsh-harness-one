@@ -9,6 +9,7 @@ import {
   getRunId,
   isRunResultsReady,
   isTechnicalArtifact,
+  loadRunResults,
   normalizeRunEvent,
   RUN_ARTIFACT_SAVE_PATH,
   saveRunArtifacts,
@@ -45,6 +46,7 @@ const runDetail = {
 
 assert.equal(getRunId(runDetail, {}, {}), 'run-42');
 assert.equal(getRunId(null, { runId: 'run-live' }, null), 'run-live');
+assert.deepEqual(getRunStatusMeta('interrupted'), { label: '异常中断', tone: 'danger' });
 
 const fallback = adaptRunResults({}, { runDetail });
 assert.equal(fallback.runId, 'run-42');
@@ -200,6 +202,18 @@ assert.deepEqual(savedArtifactNames(['/Users/demo/report.pdf', 'folder\\slides.p
 assert.equal(isRunResultsReady({ runId: 'r1', status: 'running' }, true), false);
 assert.equal(isRunResultsReady({ runId: 'r1', status: 'success' }, false), false);
 assert.equal(isRunResultsReady({ runId: 'r1', status: 'success' }, true), true);
+
+let resultRequests = 0;
+const completedResults = await loadRunResults('/run-results?id=r1', { waitUntilReady: true }, async () => {
+  resultRequests += 1;
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ runId: 'r1', status: resultRequests === 1 ? 'running' : 'success' }),
+  };
+});
+assert.equal(resultRequests, 2, '运行结束后应跳过旧的 running 快照并继续拉取最终成果');
+assert.equal(completedResults.status, 'success');
 
 let saveRequest;
 const saveResponse = await saveRunArtifacts('/wf1/api/run-artifacts/save', {
