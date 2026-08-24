@@ -22,6 +22,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: |
             web/package-lock.json
@@ -40,8 +41,26 @@ jobs:
           sh dsh-plugins/boot-smoke.sh \
             "dist-release/dsh-ccpg-plugins-$(echo "$GITHUB_REF_NAME" | sed 's/^v//').tar.gz"
 
+      - name: build aggregate npm package
+        run: sh dsh-plugins/publish-npm.sh --dry-run
+        env:
+          SKIP_BUILD: '1'
+
       - name: upload asset
         uses: softprops/action-gh-release@v2
         with:
-          files: dist-release/dsh-ccpg-plugins-*.tar.gz
+          files: |
+            dist-release/dsh-ccpg-plugins-*.tar.gz
+            dist-release/dsh-ccpg-one-*.tgz
           generate_release_notes: true
+
+      - name: publish aggregate package to npm
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if npm view "dsh-ccpg-one@$VERSION" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "dsh-ccpg-one@$VERSION already published"
+            exit 0
+          fi
+          npm publish "dist-release/dsh-ccpg-one-$VERSION.tgz" --registry https://registry.npmjs.org --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

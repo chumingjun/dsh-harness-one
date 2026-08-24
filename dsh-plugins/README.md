@@ -133,9 +133,9 @@ dsh plugin --profile myprofile add dsh-ccpg-brand
 
 `pack.sh <tag>`：7 个默认插件 + 独立可选 brand 清单校验 → 画布双构建 → orchestrator 依赖 → canvasui bundle 重建并 `--check` → rsync 组装（清运行时数据）→ `dist-release/dsh-ccpg-plugins-<tag>.tar.gz`。通用发布归档仍携带 brand 源包供显式安装，但 `setup.sh` 和 `dsh-ccpg-one` 都不会自动安装它。CI（release.yml）同源执行并作为 release asset 上传。
 
-`sh publish-npm.sh --dry-run` 会构建并逐包执行 npm 发布预检；去掉 `--dry-run` 后按实现包、brand、聚合包的顺序发布。默认发布到官方 npm registry，需要私有 registry 时用 `NPM_REGISTRY` 覆盖。每个 tarball 都必须包含 MIT LICENSE、bundle patch 和自身运行时资源，`scripts/verify-plugin-packages.mjs` 是 CI 门禁。
+`sh publish-npm.sh --dry-run` 会构建并验证单一聚合包 `dsh-ccpg-one`：7 个默认插件作为 `bundleDependencies` 放进同一个 tarball，子插件和 brand 不单独发布。去掉 `--dry-run` 才上传官方 npm registry；tag 必须与聚合包版本一致。GitHub `release.yml` 先上传 release 资产，再使用仓库 Actions Secret `NPM_TOKEN` 发布聚合包，失败后可安全重跑（已存在版本会自动跳过）。
 
 ## 已知边界
 
 - SDK 软链指向本机 dsh 安装——换机器重跑 `setup.sh` 自动重链
-- npm 发布需要仓库所有者配置 npm 身份；代码与包内容不保存 token
+- npm 首次发布需要仓库所有者配置具备 `dsh-ccpg-one` 发布权限的 granular token 为 Actions Secret `NPM_TOKEN`；代码与包内容不保存 token
