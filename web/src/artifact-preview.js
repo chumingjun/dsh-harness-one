@@ -1,4 +1,4 @@
 export {
   documentMimeType as artifactMimeType,
   documentPreviewKind as artifactPreviewKind,
-} from 'dsh-ccpg-document-preview';
+} from 'dsh-ccpg-document-preview/lib';

@@ -1,6 +1,3 @@
-export const name = 'dsh-ccpg-document-preview';
-export const inject = [];
-
 export const MIME_BY_EXTENSION = Object.freeze({
   avif: 'image/avif', csv: 'text/csv', doc: 'application/msword',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -97,9 +94,9 @@ export async function loadPreviewArrayBuffer(url, options = {}) {
   return data;
 }
 
-export default function Host() {
+export function createDocumentPreviewHost() {
   return {
-    name,
+    name: 'dsh-ccpg-document-preview',
     supports: (document) => canPreviewDocument(document),
     kind: (document) => documentPreviewKind(document?.name, document?.mimeType),
     normalize: normalizePreviewDocument,

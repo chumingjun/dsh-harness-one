@@ -1,11 +1,22 @@
 {
   "name": "dsh-ccpg-document-preview",
   "version": "0.1.0",
+  "private": false,
   "description": "Shared full-screen document preview for dsh and React applications",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chumingjun/harness-one.git",
+    "directory": "dsh-plugins/dsh-ccpg-document-preview"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
-  "main": "./src/index.js",
+  "main": "./src/host.js",
   "exports": {
-    ".": "./src/index.js",
+    ".": "./src/host.js",
+    "./lib": "./src/index.js",
     "./react": "./dist/react.js",
     "./client": "./dist/client.js",
     "./styles.css": "./dist/document-preview.css",
@@ -28,7 +39,7 @@
     "pdfjs-dist": "5.6.205",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "xlsx": "0.18.5"
   },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "*",

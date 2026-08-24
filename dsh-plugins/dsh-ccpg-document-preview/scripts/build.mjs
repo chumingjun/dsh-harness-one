@@ -29,12 +29,15 @@ await build({
 await build({
   root,
   plugins: [react()],
+  define: { 'process.env.NODE_ENV': '"production"' },
   build: {
     outDir: resolve(dist, 'client-assets'),
     emptyOutDir: true,
     cssCodeSplit: false,
     lib: { entry: resolve(root, 'src/client.jsx'), formats: ['es'], fileName: () => 'runtime.js' },
     rollupOptions: {
+      // runtime.js 经动态 import 进官方 UI（无 importmap，裸 "react" 解析不了），
+      // 全部自包含；define production 防 React dev 分支带进 process.env 引用
       output: {
         assetFileNames: (asset) => asset.name?.endsWith('.css') ? 'document-preview.css' : 'assets/[name]-[hash][extname]',
         chunkFileNames: 'renderers/[name]-[hash].js',
