@@ -159,6 +159,8 @@ export function NodeDetailModal({ runId, nodeId, onClose }) {
                   <span className="trace-block-label">工作区产物</span>
                   <ArtifactLinks
                     nodeLabel={data.label || nodeId}
+                    runId={runId}
+                    nodeId={nodeId}
                     artifacts={data.state.artifacts}
                   />
                 </div>

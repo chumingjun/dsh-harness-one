@@ -1861,12 +1861,47 @@ export function apply(ctx, config) {
     json(res, 405, { error: 'method' });
   } });
 
-  // ---- 产物下载/预览：?node=&file=&preview=1 读该节点工作区文件 ----
+  // ---- 产物下载/预览 ----
+  // 新格式 ?run=&node=<nodeId>&file=：运行文档 artifactIndex 命中则走快照目录，
+  // 未命中（运行中试运行尚未持久化）则直接解析该 run 的节点工作区。
+  // 旧格式 ?node=<label>&file= 读 legacy data/workspaces/<label>/，仅兼容旧数据。
   register({ kind: 'exact', path: '/wf1/api/artifact', async handler(req, res) {
     const url = new URL(req.url, 'http://x');
-    const nodeLabel = safeFileId(url.searchParams.get('node') || '', '');
+    const runId = url.searchParams.get('run') || '';
     const file = url.searchParams.get('file') || '';
-    if (!nodeLabel || !file) return json(res, 400, { error: '需要 node 和 file' });
+    const nodeParam = url.searchParams.get('node') || '';
+    if (!runId && !nodeParam) return json(res, 400, { error: '需要 node 和 file' });
+    if (!file) return json(res, 400, { error: '需要 node 和 file' });
+    if (runId) {
+      // node 参数是 nodeId；artifactId 生成规则与 snapshotRunArtifacts 一致（run-results.js）
+      const run = readRun(runId);
+      const artifactId = runArtifactId(nodeParam, file);
+      const resolved = run && resolveRunArtifact(artifactLocationsForRun(run), run, artifactId);
+      if (resolved) {
+        const mediaType = resolved.artifact.mediaType || mediaTypeFor(resolved.artifact.name);
+        const preview = url.searchParams.get('preview') === '1'
+          && resolved.artifact.previewable
+          && isPreviewableMediaType(mediaType);
+        return streamArtifactResponse(req, res, {
+          file: resolved.file, filename: resolved.artifact.name, mediaType, preview,
+        });
+      }
+      // 运行中/试运行：运行文档还没有快照，直接从节点工作区解析
+      const ws = resolveInside(STORAGE.workspaceForNode({
+        workflowId: run?.workflowId || 'draft', runId, nodeId: nodeParam,
+      }), file);
+      if (ws && existsSync(ws) && statSync(ws).isFile()) {
+        const realWsParent = realpathSync(dirname(ws));
+        const realWs = realpathSync(ws);
+        if (resolveInside(realWsParent, realWs) === realWs) {
+          const mediaType = mediaTypeFor(file);
+          const preview = url.searchParams.get('preview') === '1' && isPreviewableMediaType(mediaType);
+          return streamArtifactResponse(req, res, { file: realWs, filename: file, mediaType, preview });
+        }
+      }
+      return json(res, 404, { error: '产物不存在' });
+    }
+    const nodeLabel = safeFileId(nodeParam, '');
     const dir = resolveInside(STORAGE.legacy.workspaces, nodeLabel);
     const full = dir && resolveInside(dir, file);
     if (!dir || !full || !existsSync(full) || !statSync(full).isFile()) {

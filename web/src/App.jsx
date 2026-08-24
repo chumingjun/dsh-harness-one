@@ -256,7 +256,7 @@ export default function App() {
           if (p.outputPreview != null) data.runOutput = p.outputPreview;
           if (p.hasTrace) data.hasTrace = true;
           if (p.model) data.runtimeModel = p.model;
-          if (p.artifacts) data.artifacts = p.artifacts;
+          if (p.artifacts) { data.artifacts = p.artifacts; data.artifactsRunId = p.runId || null; }
           if (p.sessionId) data.sessionId = p.sessionId;
           return { ...n, data };
         })
@@ -396,7 +396,7 @@ export default function App() {
           if (st.error) data.runError = st.error;
           if (st.durationMs != null) data.durationMs = st.durationMs;
           if (st.model) data.runtimeModel = st.model;
-          if (st.artifacts) data.artifacts = st.artifacts;
+          if (st.artifacts) { data.artifacts = st.artifacts; data.artifactsRunId = p.runId || null; }
           if (st.sessionId) data.sessionId = st.sessionId;
           const out = (p.outputs || {})[nodeId];
           if (out != null) data.runOutput = String(out).slice(0, 4000);
