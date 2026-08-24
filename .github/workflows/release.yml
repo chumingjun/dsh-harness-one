@@ -29,7 +29,9 @@ jobs:
             dsh-plugins/*/package-lock.json
 
       - name: install dsh (for boot-smoke)
-        run: npm i -g @deepseek-ai/dsh
+        run: |
+          npm i -g @deepseek-ai/dsh
+          npm --prefix web install --no-audit --no-fund
 
       - name: pack
         run: |
