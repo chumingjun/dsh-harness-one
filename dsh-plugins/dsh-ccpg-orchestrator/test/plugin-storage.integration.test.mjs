@@ -135,6 +135,62 @@ try {
   assert.equal(existsSync(join(workspaceA, '.workflow-one', 'runs', `${newRunId}.json`)), false);
   assert.equal(existsSync(join(dshHome, 'plugin-data', 'dsh-ccpg-orchestrator', 'runs', `${newRunId}.json`)), false);
 
+  const originalFetch = globalThis.fetch;
+  let finishLiveFetch;
+  let liveRunId;
+  try {
+    globalThis.fetch = () => new Promise((resolve) => {
+      finishLiveFetch = () => resolve(new Response('ok', { status: 200 }));
+    });
+    const liveRunRes = responseCapture();
+    await route('/wf1/api/run')(request('POST', withSession('/wf1/api/run', 'session-b'), {
+      graph: {
+        nodes: [
+          { id: 'live_input', type: 'input', position: { x: 0, y: 0 }, data: { label: '实时输入', text: 'hello' } },
+          { id: 'live_http', type: 'http', position: { x: 200, y: 0 }, data: { label: '实时请求', url: 'https://example.test', allowPrivate: true } },
+          { id: 'live_output', type: 'output', position: { x: 400, y: 0 }, data: { label: '实时输出' } },
+        ],
+        edges: [
+          { source: 'live_input', target: 'live_http' },
+          { source: 'live_http', target: 'live_output' },
+        ],
+      },
+      triggerInput: '',
+    }), liveRunRes);
+    assert.equal(liveRunRes.status, 200);
+    liveRunId = liveRunRes.json().runId;
+
+    let liveDetail;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const detailRes = responseCapture();
+      await route('/wf1/api/runs/detail')(request('GET', withSession(`/wf1/api/runs/detail?id=${liveRunId}`, 'session-b')), detailRes);
+      liveDetail = detailRes.json();
+      if (liveDetail.nodeStates?.live_http?.status === 'running') break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(liveDetail.status, 'running');
+    assert.equal(liveDetail.graph.nodes.length, 3);
+    assert.equal(liveDetail.nodeStates.live_input.status, 'success');
+    assert.equal(liveDetail.nodeStates.live_http.status, 'running');
+    assert.equal(liveDetail.nodeStates.live_output, undefined);
+    assert.equal(liveDetail.workspaceRoot, undefined);
+
+    const crossWorkspaceDetail = responseCapture();
+    await route('/wf1/api/runs/detail')(request('GET', withSession(`/wf1/api/runs/detail?id=${liveRunId}`, 'session-a')), crossWorkspaceDetail);
+    assert.equal(crossWorkspaceDetail.status, 404);
+  } finally {
+    finishLiveFetch?.();
+    globalThis.fetch = originalFetch;
+  }
+
+  let finishedLiveRun;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    finishedLiveRun = JSON.parse(readFileSync(join(runsDirB, `${liveRunId}.json`), 'utf8'));
+    if (finishedLiveRun.status !== 'running') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(finishedLiveRun.status, 'success');
+
   const resumeGraph = {
     nodes: [
       { id: 'resume_input', type: 'input', position: { x: 0, y: 0 }, data: { label: '输入', text: 'hello' } },

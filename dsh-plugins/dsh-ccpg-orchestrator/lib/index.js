@@ -511,7 +511,17 @@ export function apply(ctx, config) {
       if (history.length > RUNS_KEEP) history.length = RUNS_KEEP;
     } catch { /* 目录不可读 */ }
   };
+  let orch;
   const readRun = (runId) => {
+    const live = orch?.runs.get(runId);
+    if (live?.run.workspaceRoot === currentStore().workspaceRoot) {
+      const { workspaceRoot: _workspaceRoot, ...run } = live.run;
+      const graph = {
+        nodes: live.s.graph.nodes.map((node) => ({ id: node.id, type: node.type, position: node.position, data: node.data })),
+        edges: live.s.graph.edges,
+      };
+      return normalizeRunDocument({ ...run, graph });
+    }
     const filename = `${safeFileId(runId, 'invalid')}.json`;
     for (const dir of [currentPaths().runs]) {
       try { return normalizeRunDocument(JSON.parse(readFileSync(join(dir, filename), 'utf8'))); } catch { /* 回退下一位置 */ }
@@ -593,7 +603,7 @@ export function apply(ctx, config) {
   };
 
   // ---- 引擎 ----
-  const orch = new Orchestrator(ctx, { onEvent: broadcast, renderTemplate });
+  orch = new Orchestrator(ctx, { onEvent: broadcast, renderTemplate });
   orch.nodeRunner = async (node, run, s, ctl) => runAgentNode(ctx, node, run, s, ctl);
   orch.scriptRunner = async ({ node, input, signal, timeoutMs, workflowId, runId }) => {
     const ws = workspaceFor(node, { workflowId: workflowId || 'draft', runId });
