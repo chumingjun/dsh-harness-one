@@ -13,7 +13,7 @@ TL;DR：**Desktop 不需要任何专用安装脚本或专用插件分支**——
 从 Desktop 托盘菜单打开 **Open DSH Terminal**（该终端已绑定当前 profile），执行：
 
 ```sh
-dsh plugin add dsh-ccpg-one@0.2.0
+dsh plugin add dsh-ccpg-one@0.2.1
 ```
 
 聚合包自带 `dsh.bundle.patch`：`dsh plugin add` 一步完成「装依赖 + 进 bundles 层 + 挂载」7 个默认插件与 better-sidebar。安装完成后**重启 Desktop**（新 bundle 要在下一次 Loader 组合中生效）。
