@@ -5,6 +5,15 @@
   "type": "module",
   "main": "lib/index.js",
   "description": "Workflow One 飞书账号授权：lark-cli Device Flow 登录（扫码）+ 授权状态管理，/wf1/api/lark-auth 端点",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chumingjun/harness-one.git",
+    "directory": "dsh-plugins/dsh-ccpg-larkauth"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "*"
   },
@@ -28,7 +37,7 @@
   },
   "files": [
     "lib",
-    "src",
+    "skills",
     "cordis.patch.yml"
   ],
   "peerDependenciesMeta": {
