@@ -242,7 +242,7 @@ window.__ModuleLoader__.load({
       };
     }
 
-    // 语义化流程摘要：真实主路径 + 全图序号，比缩小整张画布更适合消息卡片。
+    // 语义化流程摘要：真实主路径 + 连续序号，比缩小整张画布更适合消息卡片。
     function graphThumbnail(graph, run) {
       var model = flowPreviewModel(graph, run && run.nodeStates);
       if (!model) return null;
