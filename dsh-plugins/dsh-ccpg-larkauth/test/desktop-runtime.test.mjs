@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -8,6 +8,7 @@ import {
   LARK_CLI_VERSION,
   larkAuthStatus,
   larkLoginQrcode,
+  larkLoginStart,
 } from '../lib/lark-auth.js';
 
 const PLACEHOLDER_YAML = `packages:\n  - .\n\nallowBuilds:\n  '@larksuite/cli': set this to true or false\n`;
@@ -26,6 +27,30 @@ function completedHandle({ stdout = '', stderr = '', exitCode = 0, signal = null
   return { stdout: out, stderr: err, done, cancel() {} };
 }
 
+function writeProfileCli(profileDir) {
+  const bin = join(profileDir, 'node_modules', '@larksuite', 'cli', 'bin', 'lark-cli');
+  mkdirSync(join(bin, '..'), { recursive: true });
+  writeFileSync(bin, `#!/bin/sh
+if [ "$1" = "auth" ] && [ "$2" = "qrcode" ]; then
+  previous=""
+  for arg in "$@"; do
+    if [ "$previous" = "--output" ]; then printf 'png' > "$arg"; fi
+    previous="$arg"
+  done
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
+  printf '%s' '{"verification_url":"https://example.com/device","device_code":"device","expires_in":600}'
+  exit 0
+fi
+if [ "$1" = "fail" ]; then echo 'bad' >&2; exit 7; fi
+if [ "$1" = "wait" ]; then sleep 30; exit 0; fi
+printf '%s' '{"ok":true,"appId":"cli_app","defaultAs":"user","identities":{"user":{"available":true,"tokenStatus":"valid"},"bot":{"status":"ready"}}}'
+`);
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
 const profileDir = mkdtempSync(join(tmpdir(), 'wf1-desktop-lark-'));
 const packageFile = join(profileDir, 'package.json');
 writeFileSync(packageFile, JSON.stringify({ name: 'desktop-profile', dependencies: {} }));
@@ -40,19 +65,10 @@ try {
           const pkg = JSON.parse(readFileSync(packageFile, 'utf8'));
           pkg.dependencies['@larksuite/cli'] = LARK_CLI_VERSION;
           writeFileSync(packageFile, JSON.stringify(pkg));
+          writeProfileCli(profileDir);
         } });
       }
-      if (args.includes('qrcode')) {
-        const output = args[args.indexOf('--output') + 1];
-        writeFileSync(join(profileDir, output), Buffer.from('png'));
-        return completedHandle();
-      }
-      return completedHandle({ stdout: JSON.stringify({
-        ok: true,
-        appId: 'cli_app',
-        defaultAs: 'user',
-        identities: { user: { available: true, tokenStatus: 'valid' }, bot: { status: 'ready' } },
-      }) });
+      return completedHandle();
     },
   };
 
@@ -64,69 +80,54 @@ try {
 
   const status = await larkAuthStatus(runtime);
   assert.equal(status.user.tokenStatus, 'valid');
-  assert.deepEqual(calls[1].args.slice(0, 4), ['exec', 'lark-cli', 'auth', 'status']);
+  assert.equal(calls.length, 1, 'runtime status must bypass desktopPnpm');
+
+  const start = await larkLoginStart({ runtime });
+  assert.equal(start.ok, true);
+  assert.equal(start.deviceCode, 'device');
+  assert.equal(calls.length, 1, 'runtime login must bypass desktopPnpm');
 
   const qr = await larkLoginQrcode('https://example.com/device', runtime);
   assert.equal(qr.dataUrl, 'data:image/png;base64,cG5n');
-  const output = calls[2].args[calls[2].args.indexOf('--output') + 1];
-  assert.throws(() => readFileSync(join(profileDir, output)), /ENOENT/);
+  assert.equal(calls.length, 1, 'runtime qrcode must bypass desktopPnpm');
+  assert.equal(existsSync(join(profileDir, '.dsh-ccpg-larkauth-qr-does-not-exist.png')), false);
   await runtime.dispose();
 
-  const failed = createDesktopLarkCliRuntime({
-    profileDir,
-    desktopPnpm: { run: () => completedHandle({ stderr: 'bad', exitCode: 7 }) },
-  });
-  const failure = await failed.run(['auth', 'status']);
+  const failed = createDesktopLarkCliRuntime({ profileDir, desktopPnpm: { run: () => { throw new Error('pnpm should not run'); } } });
+  const failure = await failed.run(['fail']);
   assert.equal(failure.ok, false);
   assert.match(failure.error, /exit=7/);
   await failed.dispose();
 
-  let cancelled = false;
-  let finish;
-  const pending = createDesktopLarkCliRuntime({
-    profileDir,
-    desktopPnpm: { run() {
-      const stdout = new PassThrough();
-      const stderr = new PassThrough();
-      return {
-        stdout,
-        stderr,
-        done: new Promise((resolve) => { finish = resolve; }),
-        cancel() { cancelled = true; finish({ exitCode: null, signal: 'SIGTERM' }); },
-      };
-    } },
-  });
-  const running = pending.run(['auth', 'status']);
-  await new Promise((resolve) => setImmediate(resolve));
+  const pending = createDesktopLarkCliRuntime({ profileDir, desktopPnpm: { run: () => { throw new Error('pnpm should not run'); } } });
+  const running = pending.run(['wait']);
+  await new Promise((resolve) => setTimeout(resolve, 50));
   await pending.dispose();
-  assert.equal(cancelled, true);
   assert.equal((await running).ok, false);
 
-  // pnpm 忽略构建时写入的占位符：exec 失败 → 修复 allowBuilds → 补 install → 重试成功
+  // pnpm ignores the CLI postinstall: repair the profile config and let install download the binary.
   const healDir = mkdtempSync(join(tmpdir(), 'wf1-desktop-heal-'));
   try {
     writeFileSync(join(healDir, 'package.json'), JSON.stringify({ name: 'heal', dependencies: { '@larksuite/cli': LARK_CLI_VERSION } }));
     writeFileSync(join(healDir, 'pnpm-workspace.yaml'), PLACEHOLDER_YAML);
-    const binPath = join(healDir, 'node_modules', '@larksuite', 'cli', 'bin', 'lark-cli');
     let installRuns = 0;
     const healed = createDesktopLarkCliRuntime({
       profileDir: healDir,
       desktopPnpm: { run(args) {
         if (args[0] === 'install') {
           installRuns += 1;
-          mkdirSync(join(binPath, '..'), { recursive: true });
-          writeFileSync(binPath, 'bin');
-          return completedHandle();
+          writeProfileCli(healDir);
         }
-        if (args[0] === 'exec' && !existsSync(binPath)) return completedHandle({ exitCode: 1 });
-        return completedHandle({ stdout: JSON.stringify({ ok: true, appId: 'heal' }) });
+        return completedHandle();
       } },
     });
-    const status = await larkAuthStatus(healed);
-    assert.equal(status.installed, true);
-    assert.equal(status.appId, 'heal');
+    assert.equal(healed.available(), false);
+    assert.equal((await healed.install()).ok, true);
     assert.equal(installRuns, 1);
+    assert.equal(healed.available(), true);
     assert.match(readFileSync(join(healDir, 'pnpm-workspace.yaml'), 'utf8'), /'@larksuite\/cli': true/);
+    const status = await larkAuthStatus(healed);
+    assert.equal(status.appId, 'cli_app');
     await healed.dispose();
   } finally {
     rmSync(healDir, { recursive: true, force: true });

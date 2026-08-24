@@ -323,7 +323,7 @@ export function createDesktopLarkCliRuntime({ desktopPnpm, profileDir, version =
   const available = () => {
     try {
       const pkg = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'));
-      return Boolean(pkg.dependencies?.['@larksuite/cli'] || pkg.devDependencies?.['@larksuite/cli']);
+      return Boolean(pkg.dependencies?.['@larksuite/cli'] || pkg.devDependencies?.['@larksuite/cli']) && binReady();
     } catch {
       return false;
     }
@@ -378,26 +378,70 @@ export function createDesktopLarkCliRuntime({ desktopPnpm, profileDir, version =
     }
   });
 
+  const runCli = (args, { cwd = profileDir, timeoutMs = 20000 } = {}) => enqueue(() => new Promise((resolve) => {
+    if (disposed) {
+      resolve({ ok: false, error: 'Desktop generation disposed' });
+      return;
+    }
+    const bin = join(profileDir, 'node_modules', '@larksuite', 'cli', 'bin', `lark-cli${process.platform === 'win32' ? '.exe' : ''}`);
+    let child;
+    let out = '';
+    let err = '';
+    let timedOut = false;
+    let settled = false;
+    const append = (current, chunk) => (current + String(chunk)).slice(-MAX_OUTPUT);
+    const finish = (code, signal, error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (active?.child === child) active = null;
+      if (error) {
+        resolve({ ok: false, error: String(error.message || error) });
+        return;
+      }
+      const ok = code === 0 && signal == null;
+      const parsed = parseResult(out, err, ok);
+      if (!ok) {
+        parsed.ok = false;
+        parsed.error ||= timedOut
+          ? `lark-cli operation timed out after ${timeoutMs}ms`
+          : `lark-cli operation failed: exit=${String(code)} signal=${String(signal)}`;
+      }
+      resolve(parsed);
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child?.kill();
+    }, timeoutMs);
+    try {
+      child = spawn(bin, args, { cwd });
+      active = {
+        child,
+        cancel: () => child.kill(),
+        done: new Promise((done) => child.once('close', done)),
+      };
+      child.stdout.on('data', (chunk) => { out = append(out, chunk); });
+      child.stderr.on('data', (chunk) => { err = append(err, chunk); });
+      child.once('error', (error) => finish(null, null, error));
+      child.once('close', (code, signal) => finish(code, signal));
+    } catch (error) {
+      finish(null, null, error);
+    }
+  }));
+
   const runtime = {
     kind: 'desktop',
     available,
     installing: () => Boolean(installing),
-    run: (args, options) => runPnpm(['exec', 'lark-cli', ...args], options).then(async (result) => {
-      // exec 失败且占位符在场：修复后补跑一次 install（触发 postinstall 下载二进制）再重试。
-      if (!result.ok && !disposed && !binReady() && repairAllowBuildsPlaceholder(profileDir)) {
-        await runPnpm(['install'], { timeoutMs: 300000 }).catch(() => ({ ok: false }));
-        return runPnpm(['exec', 'lark-cli', ...args], options);
-      }
-      return result;
-    }),
+    run: runCli,
     install() {
-      if (available() && binReady()) return Promise.resolve({ ok: true, already: true, target });
+      if (available()) return Promise.resolve({ ok: true, already: true, target });
       if (installing) return installing;
       installing = (async () => {
         const repaired = repairAllowBuildsPlaceholder(profileDir);
         const result = await runPnpm(['add', '--save-exact', target], { timeoutMs: 300000 });
-        // add 完成但二进制不在（postinstall 被 pnpm 忽略/占位符拦截）：修复后补 install。
-        if (result.ok && !binReady() && repairAllowBuildsPlaceholder(profileDir)) {
+        // add 完成但二进制不在（postinstall 被 pnpm 忽略/占位符拦截）时补 install。
+        if (result.ok && !binReady()) {
           await runPnpm(['install'], { timeoutMs: 300000 });
         }
         return { ...result, target, ...(repaired ? { repairedAllowBuilds: true } : {}) };
