@@ -43,7 +43,7 @@ jobs:
           sh dsh-plugins/boot-smoke.sh \
             "dist-release/dsh-ccpg-plugins-$(echo "$GITHUB_REF_NAME" | sed 's/^v//').tar.gz"
 
-      - name: build aggregate npm package
+      - name: build npm packages（8 包：7 子插件 + 聚合壳）
         run: sh dsh-plugins/publish-npm.sh --dry-run
         env:
           SKIP_BUILD: '1'
@@ -56,13 +56,9 @@ jobs:
             dist-release/dsh-ccpg-one-*.tgz
           generate_release_notes: true
 
-      - name: publish aggregate package to npm
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          if npm view "dsh-ccpg-one@$VERSION" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
-            echo "dsh-ccpg-one@$VERSION already published"
-            exit 0
-          fi
-          npm publish "./dist-release/dsh-ccpg-one-$VERSION.tgz" --registry https://registry.npmjs.org --access public
+      # 8 包顺序发布（子插件→聚合壳；已存在版本自动跳过，重跑安全）
+      - name: publish npm packages
+        run: sh dsh-plugins/publish-npm.sh
         env:
+          SKIP_BUILD: '1'
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
