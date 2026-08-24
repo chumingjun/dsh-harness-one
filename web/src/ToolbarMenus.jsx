@@ -30,13 +30,14 @@ export function AddNodeMenu({ onPick }) {
   return (
     <div className="tb-menu" ref={ref}>
       <button
-        className={`btn ${open ? 'btn-menu-on' : ''}`}
+        className={`btn tb-add-btn ${open ? 'btn-menu-on' : ''}`}
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-label="添加节点"
         title="添加节点（或双击画布空白处）"
       >
-        ＋ 添加 <span className={`tb-caret ${open ? 'tb-caret-open' : ''}`}>▾</span>
+        <span aria-hidden="true">＋</span><span className="tb-add-label">添加</span><span aria-hidden="true" className={`tb-caret ${open ? 'tb-caret-open' : ''}`}>▾</span>
       </button>
       {open && (
         <div className="tb-dropdown" role="menu">
@@ -104,7 +105,7 @@ export function MoreMenu({ items }) {
       {open && (
         <div className="tb-dropdown tb-dropdown-right" role="menu">
           {items.filter(Boolean).map((it) => (
-            <button key={it.key} role="menuitem" className={`tb-menu-item ${it.danger ? 'tb-menu-danger' : ''}`}
+            <button key={it.key} role="menuitem" className={`tb-menu-item ${it.compactOnly ? 'tb-menu-compact-only' : ''} ${it.danger ? 'tb-menu-danger' : ''}`}
               disabled={it.disabled}
               onClick={() => { setOpen(false); it.onClick?.(); }}>
               {it.icon && <span className="tb-menu-icon tb-menu-glyph">{it.icon}</span>}

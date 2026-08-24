@@ -73,7 +73,7 @@ body {
 .app { display: flex; flex-direction: column; height: 100%; }
 .main { flex: 1; display: flex; min-height: 0; }
 .canvas-wrap { flex: 1; min-width: 0; position: relative; }
-.toolbar-spacer { flex: 1; }
+.toolbar-spacer { flex: 1 1 0; min-width: 0; }
 
 /* ============ 工具栏 ============ */
 .toolbar {
@@ -82,11 +82,16 @@ body {
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
 }
+.toolbar > :not(.toolbar-spacer), .toolbar .btn { flex-shrink: 0; }
+.toolbar .btn { white-space: nowrap; }
 .toolbar > strong {
   font-size: 15px; font-weight: 700; letter-spacing: .2px;
   background: linear-gradient(135deg, var(--fg), var(--primary));
   -webkit-background-clip: text; background-clip: text; color: transparent;
   margin-right: 4px;
+}
+.toolbar-workflow-badge {
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis;
 }
 
 /* 视图 tab（分段控件） */
@@ -153,11 +158,34 @@ body {
 }
 .tb-menu-item:hover:not(:disabled) { background: rgba(139,92,246,.14); color: var(--fg); }
 .tb-menu-item:disabled { opacity: .4; cursor: default; }
+.tb-menu-compact-only { display: none; }
 .tb-menu-icon { display: inline-flex; width: 16px; color: var(--item-color, var(--fg-faint)); flex-shrink: 0; }
 .tb-menu-glyph { color: var(--fg-faint); font-size: 13px; }
 .tb-menu-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .tb-menu-sub { font-size: 11px; color: var(--fg-faint); font-weight: 400; }
 .tb-menu-danger:hover:not(:disabled) { background: rgba(239,68,68,.12); color: #F87171; }
+
+@media (max-width: 860px) {
+  .toolbar { gap: 6px; padding: 8px 10px; }
+  .toolbar-runtime-badge, .toolbar .toolbar-compact-hide, .run-last { display: none; }
+  .tb-menu-compact-only { display: flex; }
+}
+@media (max-width: 760px) {
+  .toolbar-brand { display: none; }
+  .toolbar-workflow-badge { max-width: 120px; }
+}
+@media (max-width: 520px) {
+  .toolbar { gap: 4px; padding: 7px 8px; }
+  .toolbar-workflow-badge, .toolbar-progress-badge { display: none; }
+  .view-tab { padding: 5px 8px; }
+  .tb-add-btn { width: 34px; height: 30px; padding: 0; justify-content: center; }
+  .tb-add-label, .tb-add-btn .tb-caret { display: none; }
+}
+@media (max-width: 360px) {
+  .view-tab { padding-inline: 6px; }
+  .tb-run-btn { width: 34px; padding: 6px; justify-content: center; }
+  .tb-run-label { display: none; }
+}
 
 /* 双击/右键画布弹出的浮动加节点菜单 */
 .tb-canvas-menu {

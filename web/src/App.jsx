@@ -1258,30 +1258,33 @@ export default function App() {
   return (
     <div className="app">
       <header className="toolbar">
-        <strong>Workflow One</strong>
+        <strong className="toolbar-brand">Workflow One</strong>
         <nav className="view-tabs">
           <button className={`view-tab ${view === 'canvas' ? 'view-tab-on' : ''}`} onClick={() => setView('canvas')}>画布</button>
           <button className={`view-tab ${view === 'workflows' ? 'view-tab-on' : ''}`} onClick={() => setView('workflows')}>工作流</button>
           <button className={`view-tab ${historyOpen ? 'view-tab-on' : ''}`} onClick={() => setHistoryOpen(true)}>历史</button>
         </nav>
-        {view === 'canvas' && currentWf && <span className="mode-badge" title="当前编辑的工作流">{currentWf.name}{dirty ? ' •' : ''}</span>}
+        {view === 'canvas' && currentWf && <span className="mode-badge toolbar-workflow-badge" title={`当前编辑的工作流：${currentWf.name}`}>{currentWf.name}{dirty ? ' •' : ''}</span>}
         {runtime && (
-          <span className={`mode-badge ${runtime.available ? 'mode-glm' : ''}`} title={runtime.available ? 'agent 节点默认由 dsh (DeepSeek Harness) 驱动' : (runtime.reasons || []).join('；')}>
+          <span className={`mode-badge toolbar-runtime-badge ${runtime.available ? 'mode-glm' : ''}`} title={runtime.available ? 'agent 节点默认由 dsh (DeepSeek Harness) 驱动' : (runtime.reasons || []).join('；')}>
             {runtime.available ? '⚡ dsh 底座' : '内置循环（dsh 不可用）'}
           </span>
         )}
         <div className="toolbar-spacer" />
         {view === 'canvas' && (
           <>
-            {runStatus.running && <span className="mode-badge mode-glm">{doneCount}/{runStatus.total || nodes.length} 节点</span>}
-            <button className="btn tb-refresh-btn" onClick={() => window.location.reload()} title="重新加载当前画布" aria-label="刷新画布"><span aria-hidden="true">⟳</span> 刷新</button>
+            {runStatus.running && <span className="mode-badge mode-glm toolbar-progress-badge">{doneCount}/{runStatus.total || nodes.length} 节点</span>}
+            <button className="btn tb-refresh-btn toolbar-compact-hide" onClick={() => window.location.reload()} title="重新加载当前画布" aria-label="刷新画布"><span aria-hidden="true">⟳</span> 刷新</button>
             <AddNodeMenu onPick={(type) => addNode(type)} />
-            <button className="btn tb-icon-btn" onClick={undo} disabled={!undoInfo.canUndo} title="撤销（Cmd+Z）" aria-label="撤销">↩</button>
-            <button className="btn tb-icon-btn" onClick={redo} disabled={!undoInfo.canRedo} title="重做（Cmd+Shift+Z）" aria-label="重做">↪</button>
+            <button className="btn tb-icon-btn toolbar-compact-hide" onClick={undo} disabled={!undoInfo.canUndo} title="撤销（Cmd+Z）" aria-label="撤销">↩</button>
+            <button className="btn tb-icon-btn toolbar-compact-hide" onClick={redo} disabled={!undoInfo.canRedo} title="重做（Cmd+Shift+Z）" aria-label="重做">↪</button>
             <button className="btn tb-icon-btn" onClick={save} title={dirty ? '保存（Cmd+S）· 有未保存改动' : '保存（Cmd+S）'} aria-label="保存">
               <span className={dirty ? 'save-dot' : ''}>💾</span>
             </button>
             <MoreMenu items={[
+              { key: 'refresh', icon: '⟳', label: '刷新画布', compactOnly: true, onClick: () => window.location.reload() },
+              { key: 'undo', icon: '↩', label: '撤销', hint: 'Cmd+Z', compactOnly: true, disabled: !undoInfo.canUndo, onClick: undo },
+              { key: 'redo', icon: '↪', label: '重做', hint: 'Cmd+Shift+Z', compactOnly: true, disabled: !undoInfo.canRedo, onClick: redo },
               larkStatus?.installed ? { key: 'lark', icon: '◈', label: larkStatus.user?.tokenStatus === 'valid' ? `飞书已登录：${larkStatus.user.userName}` : '飞书登录 / 设置', onClick: () => { setFocusLark(true); setCredOpen(true); } } : null,
               { key: 'variables', icon: '⌘', label: '变量与输入', hint: '实例变量 / 工作流变量 / 运行输入', onClick: () => setVariableCenterOpen(true) },
               { key: 'settings', icon: '⚙', label: '设置', hint: '凭据 / 飞书', onClick: () => setCredOpen(true) },
@@ -1289,9 +1292,9 @@ export default function App() {
               { key: 'reset', icon: '⟲', label: '重置为示例', danger: true, onClick: resetGraph },
             ]} />
             {runStatus.running ? (
-              <button className="btn btn-danger" onClick={cancelRun}>■ 取消</button>
+              <button className="btn btn-danger tb-run-btn" onClick={cancelRun} aria-label="取消运行"><span aria-hidden="true">■</span><span className="tb-run-label">取消</span></button>
             ) : (
-              <button className="btn btn-primary" onClick={run}>▶ 运行</button>
+              <button className="btn btn-primary tb-run-btn" onClick={run} aria-label="运行工作流"><span aria-hidden="true">▶</span><span className="tb-run-label">运行</span></button>
             )}
           </>
         )}
