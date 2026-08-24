@@ -146,8 +146,10 @@ assert.equal(withFailure.issues[0].message, '模型超时');
 
 assert.deepEqual(normalizeRunEvent({ type: 'node-status', node: { id: 'n1', label: '节点一' }, state: 'success', timestamp: 123 }), {
   id: '123-0', time: 123, kind: 'node-status', status: 'success', nodeId: 'n1', nodeLabel: '节点一', text: '', meta: undefined,
+  startedAt: undefined, durationMs: undefined,
   raw: { type: 'node-status', node: { id: 'n1', label: '节点一' }, state: 'success', timestamp: 123 },
 });
+assert.equal(normalizeRunEvent({ nodeId: 'n1', status: 'running', startedAt: '2026-08-24T12:00:00.000Z', durationMs: 2500 }).durationMs, 2500, 'live 事件携带时长/开始时间供过程行展示');
 
 assert.equal(artifactPreviewKind('report.md'), 'markdown');
 assert.equal(artifactPreviewKind('data.json'), 'json');
