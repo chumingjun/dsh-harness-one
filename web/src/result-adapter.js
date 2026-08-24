@@ -251,6 +251,10 @@ export function normalizeRunEvent(event, index = 0) {
     status,
     nodeId: first(value.nodeId, value.node?.id),
     nodeLabel: first(value.nodeLabel, value.label, value.node?.label),
+    turns: value.turns,
+    preview: textOf(value.preview) || undefined,
+    durationMs: value.durationMs,
+    startedAt: first(value.startedAt, value.startedat),
     text: textOf(first(value.text, value.message, value.error, value.detail, value.summary)),
     meta: first(value.meta, value.durationMs != null ? formatDuration(value.durationMs) : undefined),
     raw: event,
@@ -318,9 +322,21 @@ export function adaptRunResults(payload, context = {}) {
   const sourceTimeline = asArray(source.nodeTimeline).length
     ? source.nodeTimeline.map((row) => normalizeResultRow(row, nodes, runDetail)).filter(isRuntimeNode)
     : fallback;
+  const liveNodesSeen = new Set();
   const nodeTimeline = sourceTimeline.map((row) => {
     const live = liveByNode.get(row.nodeId);
-    const merged = live ? { ...row, status: live.status || row.status, error: live.text || row.error } : row;
+    if (live) liveNodesSeen.add(row.nodeId);
+    // live 事件是此刻真实状态（detail 是启动快照/竞态残影），status/轮次/预览以 live 为准
+    const merged = live
+      ? {
+        ...row,
+        status: live.status || row.status,
+        error: live.text || row.error,
+        turns: live.turns ?? row.turns,
+        preview: live.preview ?? row.preview,
+        durationMs: live.status === 'running' ? undefined : first(live.durationMs, row.durationMs),
+      }
+      : row;
     return {
       ...merged,
       id: `node:${row.nodeId}`,
@@ -329,6 +345,24 @@ export function adaptRunResults(payload, context = {}) {
       meta: merged.durationMs != null ? formatDuration(merged.durationMs) : undefined,
     };
   });
+  // run-results/detail 尚未就绪时（live 运行），时间线骨架可能缺失该节点：用 live 事件补行
+  for (const [nodeId, live] of liveByNode) {
+    if (liveNodesSeen.has(nodeId)) continue;
+    if (live.status === 'queued' || live.status === 'pending') continue;
+    nodeTimeline.push({
+      id: `node:${nodeId}`,
+      kind: 'node',
+      nodeId,
+      nodeLabel: live.nodeLabel || nodeId,
+      nodeType: nodes.get(nodeId)?.type,
+      status: live.status || 'running',
+      error: live.text,
+      turns: live.turns,
+      preview: live.preview,
+      startedAt: live.startedAt,
+      text: timelineText({ status: live.status || 'running', error: live.text }),
+    });
+  }
   const runEvents = [
     ...asArray(context.events), ...asArray(source.events), ...asArray(source.process),
     ...asArray(result.events), ...asArray(result.process),

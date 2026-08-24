@@ -76,6 +76,12 @@ function ProcessView({ events, runId, onFocusNode, onOpenNodeDetail }) {
                 </div>
               )}
               {event.error && <p className="result-step-text">{event.error}</p>}
+              {event.status === 'running' && (event.turns != null || event.preview) && (
+                <div className="result-step-live">
+                  {event.turns != null && <span className="result-step-live-turns">第 {event.turns} 轮</span>}
+                  {event.preview && <pre className="result-step-live-preview">{event.preview}</pre>}
+                </div>
+              )}
               {canOpenDetail && <span className="result-detail-link">查看节点详情 <ChevronRight size={12} /></span>}
             </div>
           </li>
