@@ -89,8 +89,8 @@ export function apply(ctx) {
 
 要点：
 
-- runtime 抽象统一两套执行链（`runtime.run(args)` / `runtime.install()` / `runtime.qrcode()`），上层业务函数（`larkAuthStatus` / `larkLoginStart` …）对环境无感知
-- `desktopPnpm.run()` 返回 handle（stdout/stderr 流 + `done` promise + `cancel()`），**没有内建超时**——调用方自己包 AbortController/定时器，退出时在 `ctx.effect` disposer 里 `cancel()` 并 `await done`
+- runtime 抽象统一两套执行链（`runtime.run(args)` / `runtime.install()` / `runtime.qrcode()`），上层业务函数（`larkAuthStatus` / `larkLoginStart` …）对环境无感知。Desktop 的 `runtime.run()` 直接执行当前 profile 内已下载的 `@larksuite/cli/bin/lark-cli`，避免把状态查询和授权命令放进 Electron 的 pnpm 子进程；`desktopPnpm` 只负责安装与修复该 profile 的包
+- `desktopPnpm.run()` 返回 handle（stdout/stderr 流 + `done` promise + `cancel()`），**没有内建超时**——仅包操作使用它，调用方自己包 AbortController/定时器，退出时在 `ctx.effect` disposer 里 `cancel()` 并 `await done`
 - 包操作（add/install）只应由**明确的用户动作**触发（Desktop 官方 checklist 第 1 条）；插件启动时探测到未安装就等待用户确认，不要自作主张改 profile
 
 ### 2.3 插件形态通用约束（Desktop 下同样生效）
