@@ -8,10 +8,12 @@ PROFILE_DIR="$1"
 [ -z "$PROFILE_DIR" ] && { echo "用法: $0 <profile目录>   例: sh bootstrap-deps.sh ~/.dsh/profiles/dsh-ccpg-test"; exit 1; }
 
 DSH_BIN=$(node -e "console.log(require.resolve('@deepseek-ai/dsh/lib/bin.js'))" 2>/dev/null || true)
+[ -z "$DSH_BIN" ] && DSH_BIN=$(command -v dsh 2>/dev/null || true)
 [ -z "$DSH_BIN" ] && for c in "$HOME/.local/npm-global/lib/node_modules/@deepseek-ai/dsh/lib/bin.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"; do
   [ -f "$c" ] && DSH_BIN="$c" && break
 done
 [ -z "$DSH_BIN" ] && { echo "找不到 dsh 安装（先 npm i -g @deepseek-ai/dsh）"; exit 1; }
+DSH_BIN=$(node -e "console.log(require('fs').realpathSync(process.argv[1]))" "$DSH_BIN")
 
 # <prefix>/node_modules/@deepseek-ai/dsh/lib/bin.js → dsh 包目录
 DSH_PKG=$(node -e "console.log(require('path').dirname(require('path').dirname(process.argv[1])))" "$DSH_BIN")

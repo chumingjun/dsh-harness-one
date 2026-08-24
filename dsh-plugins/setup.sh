@@ -14,11 +14,18 @@ if [ "${1:-}" = "--one" ]; then AGGREGATE=1; shift; fi
 PROFILE="${1:-dsh-ccpg}"
 PORT="${2:-4021}"
 HERE=$(cd "$(dirname "$0")" && pwd)
+NODE_BIN="${DSH_NODE:-}"
+[ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "console.log(Number(process.versions.node.split('.')[0])>=20?process.execPath:'')" 2>/dev/null || true)
+[ -z "$NODE_BIN" ] && { echo "✗ 需要 node>=20（或设 DSH_NODE 指向）"; exit 1; }
+PATH=$(dirname "$NODE_BIN"):$PATH
+export PATH
 export DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
 PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-llm-guard"
-# better-sidebar 安装源：release 包 vendor/ 里的 tgz 优先（pack 当次 npm latest，
-# 断网/下架也能装），没有则回退 npm registry 拉最新。源码仓库 checkout 没有
+# better-sidebar 安装源：release 包 vendor/ 里的 tgz 优先（版本与聚合包精确依赖一致，
+# 断网/下架也能装），没有则回退 npm registry 拉同一版本。源码仓库 checkout 没有
 # vendor/（不入库），自动走 registry。
+SIDEBAR_VER=$("$NODE_BIN" -e "console.log(require(process.argv[1]).dependencies['dsh-better-sidebar'] || '')" "$HERE/dsh-ccpg-one/package.json")
+[ -n "$SIDEBAR_VER" ] || { echo "✗ dsh-ccpg-one 未声明 dsh-better-sidebar 精确依赖"; exit 1; }
 SIDEBAR_TGZ=""
 for f in "$HERE"/vendor/dsh-better-sidebar-*.tgz; do
   [ -f "$f" ] && SIDEBAR_TGZ="$f"
@@ -27,19 +34,19 @@ if [ -n "$SIDEBAR_TGZ" ]; then
   SIDEBAR_SRC="$SIDEBAR_TGZ"
   echo "· better-sidebar 用本地 vendor: $(basename "$SIDEBAR_TGZ")"
 else
-  SIDEBAR_SRC="dsh-better-sidebar@latest"
+  SIDEBAR_SRC="dsh-better-sidebar@$SIDEBAR_VER"
   echo "· better-sidebar 未发现 vendor tgz，从 npm 拉 $SIDEBAR_SRC"
 fi
 
 # 安装前先校验完整分发目录，避免 plugin add 部分成功后留下半成品 profile。
 for pkg in $PLUGINS; do
   [ -f "$HERE/$pkg/package.json" ] || { echo "✗ 插件缺失: $HERE/$pkg/package.json"; exit 1; }
-  node -e "const p=require(process.argv[1]); if(p.name!==process.argv[2]) throw new Error('package name 应为 '+process.argv[2])" \
+  "$NODE_BIN" -e "const p=require(process.argv[1]); if(p.name!==process.argv[2]) throw new Error('package name 应为 '+process.argv[2])" \
     "$HERE/$pkg/package.json" "$pkg" || exit 1
 done
 if [ "$AGGREGATE" = 1 ]; then
   [ -f "$HERE/dsh-ccpg-one/cordis.patch.yml" ] || { echo "✗ 聚合包缺失: dsh-ccpg-one/cordis.patch.yml"; exit 1; }
-  node -e "const p=require('$HERE/dsh-ccpg-one/package.json'); if(!p.dsh?.bundle?.patch) throw new Error('dsh-ccpg-one 缺 dsh.bundle.patch')" || exit 1
+  "$NODE_BIN" -e "const p=require('$HERE/dsh-ccpg-one/package.json'); if(!p.dsh?.bundle?.patch) throw new Error('dsh-ccpg-one 缺 dsh.bundle.patch')" || exit 1
 fi
 
 # orchestrator 真实依赖（含 QuickJS WASM）：源码安装与分发包都由脚本兜底，用户无需手动 npm install。
@@ -50,7 +57,7 @@ if [ ! -d "$HERE/dsh-ccpg-orchestrator/node_modules/quickjs-emscripten" ]; then
     npm install --no-audit --no-fund --prefix "$HERE/dsh-ccpg-orchestrator"
   fi
 fi
-node --input-type=module - "$HERE/dsh-ccpg-orchestrator" <<'NODE'
+"$NODE_BIN" --input-type=module - "$HERE/dsh-ccpg-orchestrator" <<'NODE'
 import { pathToFileURL } from 'node:url';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -85,11 +92,13 @@ sh "$HERE/build-canvasui.sh" --check >/dev/null || { echo "✗ canvasui bundle �
 echo "✓ canvasui bundle 就绪"
 
 # 定位 dsh bin
-DSH_BIN=$(node -e "console.log(require.resolve('@deepseek-ai/dsh/lib/bin.js'))" 2>/dev/null || true)
+DSH_BIN=$("$NODE_BIN" -e "console.log(require.resolve('@deepseek-ai/dsh/lib/bin.js'))" 2>/dev/null || true)
+[ -z "$DSH_BIN" ] && DSH_BIN=$(command -v dsh 2>/dev/null || true)
 [ -z "$DSH_BIN" ] && for c in "$HOME/.local/npm-global/lib/node_modules/@deepseek-ai/dsh/lib/bin.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"; do
   [ -f "$c" ] && DSH_BIN="$c" && break
 done
 [ -z "$DSH_BIN" ] && { echo "✗ 未找到 dsh（先 npm i -g @deepseek-ai/dsh，需要 node>=20）"; exit 1; }
+DSH_BIN=$("$NODE_BIN" -e "console.log(require('fs').realpathSync(process.argv[1]))" "$DSH_BIN")
 
 # 1. 建_profile（已存在则跳过）
 # bundles 必须含 dsh-web-app：官方 Web UI（聊天/侧边栏/会话管理）是它的 surface；
@@ -116,7 +125,7 @@ PLUGIN_LOG=$(mktemp "${TMPDIR:-/tmp}/dsh-ccpg-plugin-add.XXXXXX")
 trap 'rm -f "$PLUGIN_LOG"' EXIT HUP INT TERM
 if [ "$AGGREGATE" = 1 ]; then
   # ---- 聚合安装：只 add dsh-ccpg-one（七插件 + better-sidebar 全由它的 bundle patch 挂载）----
-  # 先装聚合包自身的 file: 依赖（七插件实体进聚合包 node_modules；overrides 钉 SDK 版本，
+  # 先装聚合包依赖（workspace overrides 把七插件实体指向同级源码目录并钉 SDK 版本，
   # 见 dsh-ccpg-one/pnpm-workspace.yaml——registry latest 停 0.0.1-rc.1，0.1.x 只在 next tag）。
   # better-sidebar：vendor tgz 在场则临时注入 file: override（npm 不可达也能装），
   # pnpm install 完成后（无论成败）移除——workspace yaml 不留本机路径残留。
@@ -131,14 +140,14 @@ if [ "$AGGREGATE" = 1 ]; then
   \"dsh-better-sidebar\": \"file:$SIDEBAR_TGZ\"
 " "$WS_YML" && rm -f "$WS_YML.bak"
   fi
-  if ! (cd "$HERE/dsh-ccpg-one" && pnpm install --no-frozen-lockfile) >/dev/null 2>&1; then
+  if ! (cd "$HERE/dsh-ccpg-one" && pnpm install --no-frozen-lockfile); then
     rm_vendor_ov
     echo "✗ dsh-ccpg-one 依赖安装失败（在该目录跑 pnpm install 看详情）"
     exit 1
   fi
   rm_vendor_ov
-  # better-sidebar 走聚合包 peer（optional）声明，不单独 add——聚合 patch 已挂它，双 add 会 duplicate id。
-  if ! node "$DSH_BIN" plugin --profile "$PROFILE" add "$HERE/dsh-ccpg-one" >"$PLUGIN_LOG" 2>&1; then
+  # better-sidebar 是聚合包直接依赖，不单独 add——聚合 patch 已挂它，双 add 会 duplicate id。
+  if ! "$NODE_BIN" "$DSH_BIN" plugin --profile "$PROFILE" add "$HERE/dsh-ccpg-one" >"$PLUGIN_LOG" 2>&1; then
     cat "$PLUGIN_LOG" >&2
     echo "✗ 聚合包安装失败"
     exit 1
@@ -161,7 +170,7 @@ else
     PLUGIN_PATHS="$PLUGIN_PATHS $HERE/$pkg"
   done
   # PLUGIN_PATHS 按受控插件目录拆分为多个参数。
-  if ! node "$DSH_BIN" plugin --profile "$PROFILE" add $PLUGIN_PATHS >"$PLUGIN_LOG" 2>&1; then
+  if ! "$NODE_BIN" "$DSH_BIN" plugin --profile "$PROFILE" add $PLUGIN_PATHS >"$PLUGIN_LOG" 2>&1; then
     cat "$PLUGIN_LOG" >&2
     echo "✗ 插件安装失败"
     exit 1
@@ -174,7 +183,7 @@ echo "✓ 插件已安装"
 
 # 3. 依赖引导（SDK 软链进插件源码目录 + profile 兜底）
 sh "$HERE/bootstrap-deps.sh" "$PDIR" >/dev/null
-SDK_DIR=$(node -e "console.log(require('path').dirname(require('path').dirname(process.argv[1])) + '/node_modules/@deepseek-ai')" "$DSH_BIN")
+SDK_DIR=$("$NODE_BIN" -e "console.log(require('path').dirname(require('path').dirname(process.argv[1])) + '/node_modules/@deepseek-ai')" "$DSH_BIN")
 for pkg in $PLUGINS; do
   mkdir -p "$HERE/$pkg/node_modules/@deepseek-ai"
   for dep in schemastery cordis dsh-tools dsh-llm dsh-session; do
@@ -211,9 +220,9 @@ fi
 # 4.5 DSH-better-sidebar（社区侧边栏工作台，npm 安装）——「工作流」侧栏的宿主。
 # canvasui 对它是软依赖：装不上时官方 UI 内无法打开画布，独立 /wf1/ 入口仍可用，故失败仅告警。
 # 逐插件模式：走 registry npm 包单独 add（自带 dsh.bundle.patch 一步挂载）。
-# 聚合模式：聚合包 peer(optional) 已带 + bundle patch 已挂，单独 add 会 duplicate id——跳过。
+# 聚合模式：聚合包直接依赖已带 + bundle patch 已挂，单独 add 会 duplicate id——跳过。
 if [ "$AGGREGATE" != 1 ]; then
-  if ! node "$DSH_BIN" plugin --profile "$PROFILE" add "$SIDEBAR_SRC" >/dev/null 2>&1; then
+  if ! "$NODE_BIN" "$DSH_BIN" plugin --profile "$PROFILE" add "$SIDEBAR_SRC" >/dev/null 2>&1; then
     echo "⚠ dsh-better-sidebar 安装失败（官方 UI 工作流侧栏不可用；可稍后手动：dsh plugin --profile $PROFILE add $SIDEBAR_SRC）"
   else
     echo "✓ dsh-better-sidebar 已安装（侧边栏工作台 + 工作流画布）"
@@ -222,11 +231,12 @@ fi
 
 # 5. lark-cli（飞书官方 CLI）——飞书账号扫码登录与 agent 飞书操作依赖它。
 # 装到 ~/.local/npm-global（插件按此路径探测；启动时插件也会自检补装，这里先装好免去首启等待）。
+LARK_CLI_VERSION="1.0.89"
 LARK_BIN="$HOME/.local/npm-global/bin/lark-cli"
 if [ ! -x "$LARK_BIN" ] && ! command -v lark-cli >/dev/null 2>&1; then
   if command -v npm >/dev/null 2>&1; then
     mkdir -p "$HOME/.local/npm-global/bin"
-    npm install -g @larksuite/cli --prefix "$HOME/.local/npm-global" >/dev/null 2>&1 \
+    npm install -g "@larksuite/cli@$LARK_CLI_VERSION" --prefix "$HOME/.local/npm-global" >/dev/null 2>&1 \
       && echo "✓ lark-cli 已安装（$LARK_BIN）" \
       || echo "⚠ lark-cli 安装失败（可稍后手动 npm i -g @larksuite/cli，或启动后插件会自动重试）"
   else

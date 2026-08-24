@@ -5,6 +5,15 @@
   "type": "module",
   "main": "lib/index.js",
   "description": "Workflow One 物业编排工具插件：飞书文档读写、工作区文件、技能加载，注册到 ctx.tools",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chumingjun/harness-one.git",
+    "directory": "dsh-plugins/dsh-ccpg-tools"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "*",
     "@deepseek-ai/dsh-tools": "*"

@@ -45,3 +45,4 @@ dsh-plugins/dsh-ccpg-one/pnpm-lock.yaml
 # better-sidebar vendor tgz（pack.sh 从 npm 拉取放进 release 归档；源码树一般没有，
 # 防本机手动 pack 时误提交二进制）
 dsh-plugins/vendor/
+.playwright-mcp/

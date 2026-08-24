@@ -44,8 +44,10 @@ window.__ModuleLoader__.load({
 			var login = lo[0], setLogin = lo[1];
 			var be = react.useState(false);
 			var busy = be[0], setBusy = be[1];
-			var pollRef = react.useRef(null);
-			var deadlineRef = react.useRef(0);
+		var pollRef = react.useRef(null);
+		var deadlineRef = react.useRef(0);
+		var se = react.useState(null);
+		var startError = se[0], setStartError = se[1];
 
 			var load = react.useCallback(function () {
 				apiGet().then(function (d) { if (d.ok) setStatus(d.status); }).catch(function () {});
@@ -73,22 +75,22 @@ window.__ModuleLoader__.load({
 				}, 4000);
 			};
 
-			var start = function () {
-				setBusy(true);
-				apiPost({ action: "start" }).then(function (d) {
-					if (!d.ok) { setBusy(false); return; }
-					return apiPost({ action: "qrcode", verificationUrl: d.verificationUrl }).then(function (q) {
-						setLogin({
-							verificationUrl: d.verificationUrl,
-							deviceCode: d.deviceCode,
-							qrDataUrl: q.ok ? q.dataUrl : null,
-						});
-						deadlineRef.current = Date.now() + (d.expiresIn || 600) * 1000;
-						schedulePoll(d.deviceCode);
-						setBusy(false);
+		var start = function () {
+			setBusy(true);
+			apiPost({ action: "start" }).then(function (d) {
+				if (!d.ok) { setBusy(false); setStartError(d.error || "发起登录失败"); return; }
+				return apiPost({ action: "qrcode", verificationUrl: d.verificationUrl }).then(function (q) {
+					setLogin({
+						verificationUrl: d.verificationUrl,
+						deviceCode: d.deviceCode,
+						qrDataUrl: q.ok ? q.dataUrl : null,
 					});
-				}).catch(function () { setBusy(false); });
-			};
+					deadlineRef.current = Date.now() + (d.expiresIn || 600) * 1000;
+					schedulePoll(d.deviceCode);
+					setBusy(false);
+				});
+			}).catch(function () { setBusy(false); setStartError("网络错误，请重试"); });
+		};
 
 			var cancel = function () {
 				if (pollRef.current) clearTimeout(pollRef.current);
@@ -122,9 +124,11 @@ window.__ModuleLoader__.load({
 							},
 						}, status.installing ? "安装中…" : "自动安装 lark-cli"),
 						close ? react.createElement("button", { style: S.btn, onClick: close }, "关闭") : null),
-					react.createElement("div", { style: S.muted },
-						"安装后此处即可扫码登录；也可手动执行 ",
-						react.createElement("code", { style: S.code }, "npm i -g @larksuite/cli")));
+					status.runtime === "desktop"
+						? react.createElement("div", { style: S.muted }, "确认后将安装到当前 Desktop profile；切换 profile 时需分别安装。")
+						: react.createElement("div", { style: S.muted },
+							"安装后此处即可扫码登录；也可手动执行 ",
+							react.createElement("code", { style: S.code }, "npm i -g @larksuite/cli")));
 			}
 
 			var u = status.user || {};
@@ -151,6 +155,10 @@ window.__ModuleLoader__.load({
 						: react.createElement("button", { style: Object.assign({}, S.btn, S.btnPrimary), onClick: start, disabled: busy },
 							needsRefresh ? "重新扫码授权" : "扫码登录飞书"),
 					close ? react.createElement("button", { style: S.btn, onClick: close }, "关闭") : null),
+				startError ? react.createElement("div", { style: S.warn },
+					startError, " · ", react.createElement("a", {
+						href: "#", style: S.link, onClick: function (e) { e.preventDefault(); setStartError(null); start(); },
+					}, "重试")) : null,
 				login ? react.createElement("div", { style: S.qrBox },
 					react.createElement("div", { style: S.qrTip }, "用飞书 App 扫码完成授权（10 分钟内有效）"),
 					react.createElement("div", { style: S.qrRow },

@@ -5,6 +5,18 @@
   "type": "module",
   "main": "lib/index.js",
   "description": "Workflow One 编排画布：静态托管 /wf1/",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chumingjun/harness-one.git",
+    "directory": "dsh-plugins/dsh-ccpg-web"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prepack": "sh ../build-web.sh"
+  },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "*"
   },
@@ -20,7 +32,7 @@
   },
   "files": [
     "lib",
-    "src",
+    "web-dist",
     "cordis.patch.yml"
   ]
 }

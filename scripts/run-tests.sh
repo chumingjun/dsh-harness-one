@@ -23,6 +23,7 @@ run_suite web/src '*.test.mjs'
 run_suite dsh-plugins/dsh-ccpg-orchestrator/test '*.test.mjs'
 run_suite dsh-plugins/dsh-ccpg-llm-guard/test '*.test.mjs'
 run_suite dsh-plugins/dsh-ccpg-canvasui/test '*.test.mjs'
+run_suite dsh-plugins/dsh-ccpg-larkauth/test '*.test.mjs'
 
 # document-preview 用 node --test runner
 echo "→ dsh-plugins/dsh-ccpg-document-preview/test"

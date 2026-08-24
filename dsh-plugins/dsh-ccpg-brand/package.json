@@ -5,6 +5,15 @@
   "type": "module",
   "main": "lib/index.js",
   "description": "CCPG 品牌定制：官方 Web UI 首页品牌改为 CCPG AI 工作台（tapIndex 改 title + 注入样式隐藏原字标换 CCPG logo；exact 路由服务 logo/favicon）",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chumingjun/harness-one.git",
+    "directory": "dsh-plugins/dsh-ccpg-brand"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "*"
   },
@@ -19,7 +28,7 @@
   },
   "files": [
     "lib",
-    "src",
+    "assets",
     "cordis.patch.yml"
   ],
   "peerDependenciesMeta": {

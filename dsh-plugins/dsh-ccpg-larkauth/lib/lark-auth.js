@@ -13,6 +13,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const NPM_GLOBAL = join(homedir(), '.local', 'npm-global');
+export const LARK_CLI_VERSION = '1.0.89';
+const MAX_OUTPUT = 64 * 1024;
 
 const CANDIDATES = [
   join(NPM_GLOBAL, 'bin', 'lark-cli'),
@@ -31,11 +33,21 @@ export function larkCliBin() {
   return null;
 }
 
-export function larkCliAvailable() {
+function localLarkCliAvailable() {
   return Boolean(larkCliBin());
 }
 
-function run(args, { timeoutMs = 20000 } = {}) {
+function parseResult(out, err, ok) {
+  const text = (out || err || '').trim();
+  try {
+    const parsed = JSON.parse(text);
+    return parsed.ok !== undefined ? { ...parsed, ok: ok && parsed.ok !== false } : { ok, ...parsed };
+  } catch {
+    return { ok, raw: text.slice(0, 2000) };
+  }
+}
+
+function runLocal(args, { timeoutMs = 20000 } = {}) {
   const bin = larkCliBin();
   if (!bin) return Promise.resolve({ ok: false, error: 'lark-cli not installed' });
   return new Promise((resolve) => {
@@ -45,26 +57,34 @@ function run(args, { timeoutMs = 20000 } = {}) {
     child.stderr.on('data', (d) => { err += d; });
     child.on('error', (e) => resolve({ ok: false, error: String(e.message || e) }));
     child.on('close', (code) => {
-      const text = (out || err || '').trim();
-      try {
-        const parsed = JSON.parse(text);
-        resolve(parsed.ok !== undefined ? parsed : { ok: code === 0, ...parsed });
-      } catch {
-        resolve({ ok: code === 0, raw: text.slice(0, 2000) });
-      }
+      resolve(parseResult(out, err, code === 0));
     });
   });
 }
 
+function runtimeAvailable(runtime) {
+  return runtime ? runtime.available() : localLarkCliAvailable();
+}
+
+function runtimeRun(runtime, args, options) {
+  return runtime ? runtime.run(args, options) : runLocal(args, options);
+}
+
+export function larkCliAvailable(runtime) {
+  return runtimeAvailable(runtime);
+}
+
 /** 授权状态摘要：installed / installing / appId / defaultIdentity / user{...} / bot{status} / autoRenew{...} */
-export async function larkAuthStatus() {
-  if (!larkCliAvailable()) return { installed: false, installing: larkCliInstalling() };
-  const res = await run(['auth', 'status', '--json'], { timeoutMs: 15000 });
+export async function larkAuthStatus(runtime) {
+  const runtimeKind = runtime?.kind || 'local';
+  if (!runtimeAvailable(runtime)) return { installed: false, installing: larkCliInstalling(runtime), runtime: runtimeKind };
+  const res = await runtimeRun(runtime, ['auth', 'status', '--json'], { timeoutMs: 15000 });
   if (!res.ok && !res.appId) return { installed: true, error: res.error || res.raw || 'auth status 失败' };
   const user = res.identities?.user || {};
   const bot = res.identities?.bot || {};
   return {
     installed: true,
+    runtime: runtimeKind,
     appId: res.appId,
     defaultIdentity: res.defaultAs || 'auto',
     user: user.available ? {
@@ -80,11 +100,11 @@ export async function larkAuthStatus() {
 }
 
 /** 发起设备流登录：返回 verification_url / user_code / device_code / expires_in */
-export async function larkLoginStart({ recommend = true, domain } = {}) {
+export async function larkLoginStart({ recommend = true, domain, runtime } = {}) {
   const args = ['auth', 'login', '--no-wait', '--json'];
   if (recommend) args.push('--recommend');
   if (domain) args.push('--domain', String(domain));
-  const res = await run(args, { timeoutMs: 20000 });
+  const res = await runtimeRun(runtime, args, { timeoutMs: 20000 });
   if (!res.verification_url) {
     return { ok: false, error: res.error?.message || res.error || res.raw || '发起登录失败' };
   }
@@ -101,8 +121,9 @@ export async function larkLoginStart({ recommend = true, domain } = {}) {
  * 生成登录二维码 PNG（data URL）。qrcode 子命令要求 --output 为相对路径，
  * 故在临时目录执行后读回、清理。
  */
-export async function larkLoginQrcode(verificationUrl) {
-  if (!larkCliAvailable()) return { ok: false, error: 'lark-cli not installed' };
+export async function larkLoginQrcode(verificationUrl, runtime) {
+  if (!runtimeAvailable(runtime)) return { ok: false, error: 'lark-cli not installed' };
+  if (runtime) return runtime.qrcode(verificationUrl);
   const dir = mkdtempSync(join(tmpdir(), 'wf1-qr-'));
   const bin = larkCliBin();
   return new Promise((resolve) => {
@@ -126,30 +147,31 @@ export async function larkLoginQrcode(verificationUrl) {
 }
 
 /** 用 device_code 轮询完成授权（用户扫码确认后调用；CLI 阻塞至成功/超时） */
-export async function larkLoginPoll(deviceCode) {
-  const res = await run(['auth', 'login', '--device-code', String(deviceCode), '--json'], { timeoutMs: 60000 });
+export async function larkLoginPoll(deviceCode, runtime) {
+  const res = await runtimeRun(runtime, ['auth', 'login', '--device-code', String(deviceCode), '--json'], { timeoutMs: 60000 });
   if (res.ok) {
-    await setDefaultIdentityUser(); // 授权成功即固定默认身份为 user
-    const status = await larkAuthStatus();
+    await setDefaultIdentityUser(runtime); // 授权成功即固定默认身份为 user
+    const status = await larkAuthStatus(runtime);
     return { ok: true, status };
   }
   return { ok: false, error: res.error?.message || res.error || res.raw || '授权未完成' };
 }
 
 /** 退出登录（清 token） */
-export async function larkLogout() {
-  const res = await run(['auth', 'logout', '--json'], { timeoutMs: 20000 });
+export async function larkLogout(runtime) {
+  const res = await runtimeRun(runtime, ['auth', 'logout', '--json'], { timeoutMs: 20000 });
   return { ok: Boolean(res.ok), error: res.error?.message || res.error };
 }
 
 // ---------- 自动安装 ----------
 
 let _installing = null; // 进行中的安装 Promise（防并发）
-export function larkCliInstalling() { return Boolean(_installing); }
+export function larkCliInstalling(runtime) { return runtime ? runtime.installing() : Boolean(_installing); }
 
 /** 未安装时自动 npm 全局安装到 ~/.local/npm-global（bin 落在 CANDIDATES[0]） */
-export function ensureLarkCli() {
-  if (larkCliAvailable()) return Promise.resolve({ ok: true, already: true, bin: larkCliBin() });
+export function ensureLarkCli(runtime) {
+  if (runtime) return runtime.install();
+  if (localLarkCliAvailable()) return Promise.resolve({ ok: true, already: true, bin: larkCliBin() });
   if (_installing) return _installing;
   mkdirSync(join(NPM_GLOBAL, 'bin'), { recursive: true });
   _installing = new Promise((resolve) => {
@@ -170,9 +192,9 @@ export function ensureLarkCli() {
 // ---------- 默认用户身份 ----------
 
 /** 把 CLI 级默认身份固定为 user（agent 不加 --as 时也以用户身份执行） */
-export async function setDefaultIdentityUser() {
-  if (!larkCliAvailable()) return { ok: false, error: 'lark-cli not installed' };
-  const res = await run(['config', 'default-as', 'user'], { timeoutMs: 15000 });
+export async function setDefaultIdentityUser(runtime) {
+  if (!runtimeAvailable(runtime)) return { ok: false, error: 'lark-cli not installed' };
+  const res = await runtimeRun(runtime, ['config', 'default-as', 'user'], { timeoutMs: 15000 });
   const ok = res.ok !== false;
   return { ok, error: ok ? undefined : (res.error?.message || res.error || res.raw) };
 }
@@ -190,12 +212,12 @@ const _renew = { lastAt: null, lastResult: null, running: false };
 export function larkRenewState() { return { ..._renew, intervalMs: RENEW_INTERVAL_MS }; }
 
 /** 续约一轮：临期/失效则发一次真实用户 API 调用触发 uat-client 刷新；返回最新状态摘要 */
-export async function renewUserToken({ force = false } = {}) {
-  if (!larkCliAvailable()) return { ok: false, skipped: 'not-installed' };
+export async function renewUserToken({ force = false, runtime } = {}) {
+  if (!runtimeAvailable(runtime)) return { ok: false, skipped: 'not-installed' };
   if (_renew.running) return { ok: true, skipped: 'running' };
   _renew.running = true;
   try {
-    const st = await run(['auth', 'status', '--json'], { timeoutMs: 15000 });
+    const st = await runtimeRun(runtime, ['auth', 'status', '--json'], { timeoutMs: 15000 });
     const u = st.identities?.user || {};
     if (!u.available) {
       _renew.lastAt = new Date().toISOString();
@@ -215,8 +237,8 @@ export async function renewUserToken({ force = false } = {}) {
       _renew.lastResult = 'fresh';
       return { ok: true, skipped: 'fresh' };
     }
-    const call = await run(['api', 'GET', '/open-apis/authen/v1/user_info', '--as', 'user'], { timeoutMs: 30000 });
-    const after = await run(['auth', 'status', '--json'], { timeoutMs: 15000 });
+    const call = await runtimeRun(runtime, ['api', 'GET', '/open-apis/authen/v1/user_info', '--as', 'user'], { timeoutMs: 30000 });
+    const after = await runtimeRun(runtime, ['auth', 'status', '--json'], { timeoutMs: 15000 });
     const au = after.identities?.user || {};
     _renew.lastAt = new Date().toISOString();
     const callError = call.ok === false ? (call.error?.message || call.error || call.raw) : null;
@@ -252,7 +274,7 @@ function seedSkillFile(targetDir) {
  * （dsh-skill-filesystem 自动发现，官方聊天 agent 与画布 agent 共用）。
  * 另：~/.agents/skills 缺官方 lark-* 技能时后台 npx skills add 补齐（best-effort，不阻塞）。
  */
-export function ensureSkillFiles({ log } = {}) {
+export function ensureSkillFiles({ log, installOfficial = true } = {}) {
   const written = [];
   const dirs = [join(homedir(), '.dsh', 'skills')];
   for (const dir of dirs) {
@@ -263,10 +285,145 @@ export function ensureSkillFiles({ log } = {}) {
   }
   // 官方 lark-* 技能（lark-doc/lark-im/lark-base 等）：装到 ~/.agents/skills，dsh 同为发现根
   const agentsSkills = join(homedir(), '.agents', 'skills');
-  if (!existsSync(join(agentsSkills, 'lark-shared'))) {
+  if (installOfficial && !existsSync(join(agentsSkills, 'lark-shared'))) {
     const child = spawn('npx', ['-y', 'skills', 'add', 'larksuite/cli', '-g', '-y'], { timeout: 300000 });
     child.on('error', (e) => log?.(`官方 lark 技能安装跳过：${e.message || e}`));
     child.on('close', (code) => log?.(code === 0 ? '官方 lark-* 技能已安装到 ~/.agents/skills' : `官方 lark 技能安装退出码 ${code}`));
   }
   return written;
+}
+
+// pnpm 11 忽略 @larksuite/cli 的 postinstall 时，会把占位值写进 profile 的
+// pnpm-workspace.yaml（allowBuilds.'@larksuite/cli': set this to true or false）。
+// 占位符不是合法 boolean，后续每次 pnpm exec 都因 ignored-builds 失败（Desktop 的
+// pnpm 服务强制 CI=true，报错被吞只剩 exit=1）。检测到就替换为 true：lark-cli 的
+// postinstall 只下载官方二进制，可信。
+function repairAllowBuildsPlaceholder(profileDir) {
+  const file = join(profileDir, 'pnpm-workspace.yaml');
+  const PLACEHOLDER = "'@larksuite/cli': set this to true or false";
+  try {
+    const before = readFileSync(file, 'utf8');
+    const after = before.replace(PLACEHOLDER, "'@larksuite/cli': true");
+    if (after === before) return false;
+    writeFileSync(file, after);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function createDesktopLarkCliRuntime({ desktopPnpm, profileDir, version = LARK_CLI_VERSION }) {
+  if (!desktopPnpm?.run || !profileDir) throw new TypeError('desktopPnpm and profileDir are required');
+  const target = `@larksuite/cli@${version}`;
+  let active = null;
+  let disposed = false;
+  let installing = null;
+  let tail = Promise.resolve();
+
+  const available = () => {
+    try {
+      const pkg = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'));
+      return Boolean(pkg.dependencies?.['@larksuite/cli'] || pkg.devDependencies?.['@larksuite/cli']);
+    } catch {
+      return false;
+    }
+  };
+
+  const binReady = () => {
+    const ext = process.platform === 'win32' ? '.exe' : '';
+    try {
+      return statSync(join(profileDir, 'node_modules', '@larksuite', 'cli', 'bin', `lark-cli${ext}`)).isFile();
+    } catch {
+      return false;
+    }
+  };
+
+  const enqueue = (task) => {
+    const result = tail.then(task, task);
+    tail = result.then(() => undefined, () => undefined);
+    return result;
+  };
+
+  const runPnpm = (args, { timeoutMs = 20000 } = {}) => enqueue(async () => {
+    if (disposed) return { ok: false, error: 'Desktop generation disposed' };
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      active?.cancel();
+    }, timeoutMs);
+    let out = '';
+    let err = '';
+    try {
+      active = desktopPnpm.run(args, controller.signal);
+      const append = (current, chunk) => (current + String(chunk)).slice(-MAX_OUTPUT);
+      active.stdout?.on?.('data', (chunk) => { out = append(out, chunk); });
+      active.stderr?.on?.('data', (chunk) => { err = append(err, chunk); });
+      const outcome = await active.done;
+      const ok = outcome.exitCode === 0 && outcome.signal == null;
+      const parsed = parseResult(out, err, ok);
+      if (!ok) {
+        parsed.ok = false;
+        parsed.error ||= timedOut
+          ? `lark-cli operation timed out after ${timeoutMs}ms`
+          : `lark-cli operation failed: exit=${String(outcome.exitCode)} signal=${String(outcome.signal)}`;
+      }
+      return parsed;
+    } catch (error) {
+      return { ok: false, error: String(error?.message || error) };
+    } finally {
+      clearTimeout(timer);
+      active = null;
+    }
+  });
+
+  const runtime = {
+    kind: 'desktop',
+    available,
+    installing: () => Boolean(installing),
+    run: (args, options) => runPnpm(['exec', 'lark-cli', ...args], options).then(async (result) => {
+      // exec 失败且占位符在场：修复后补跑一次 install（触发 postinstall 下载二进制）再重试。
+      if (!result.ok && !disposed && !binReady() && repairAllowBuildsPlaceholder(profileDir)) {
+        await runPnpm(['install'], { timeoutMs: 300000 }).catch(() => ({ ok: false }));
+        return runPnpm(['exec', 'lark-cli', ...args], options);
+      }
+      return result;
+    }),
+    install() {
+      if (available() && binReady()) return Promise.resolve({ ok: true, already: true, target });
+      if (installing) return installing;
+      installing = (async () => {
+        const repaired = repairAllowBuildsPlaceholder(profileDir);
+        const result = await runPnpm(['add', '--save-exact', target], { timeoutMs: 300000 });
+        // add 完成但二进制不在（postinstall 被 pnpm 忽略/占位符拦截）：修复后补 install。
+        if (result.ok && !binReady() && repairAllowBuildsPlaceholder(profileDir)) {
+          await runPnpm(['install'], { timeoutMs: 300000 });
+        }
+        return { ...result, target, ...(repaired ? { repairedAllowBuilds: true } : {}) };
+      })().finally(() => { installing = null; });
+      return installing;
+    },
+    async qrcode(verificationUrl) {
+      const output = `.dsh-ccpg-larkauth-qr-${process.pid}-${Date.now().toString(36)}.png`;
+      const file = join(profileDir, output);
+      try {
+        const result = await runtime.run(['auth', 'qrcode', verificationUrl, '--output', output], { timeoutMs: 15000 });
+        if (!result.ok) return result;
+        const buf = readFileSync(file);
+        return { ok: true, dataUrl: `data:image/png;base64,${buf.toString('base64')}` };
+      } catch (error) {
+        return { ok: false, error: String(error?.message || error) };
+      } finally {
+        rmSync(file, { force: true });
+      }
+    },
+    async dispose() {
+      disposed = true;
+      active?.cancel();
+      await active?.done.catch(() => {});
+      await tail.catch(() => {});
+    },
+  };
+  return runtime;
 }

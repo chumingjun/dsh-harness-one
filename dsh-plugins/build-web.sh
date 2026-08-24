@@ -2,6 +2,7 @@
 # 构建画布 dist（base=/wf1/）注入 API base 后拷入 dsh-ccpg-web/web-dist
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
+sh "$HERE/build-canvasui.sh"
 sh "$HERE/build-document-preview.sh"
 cd "$HERE/../web"
 WF1_BASE=/wf1/ npm run build >/dev/null

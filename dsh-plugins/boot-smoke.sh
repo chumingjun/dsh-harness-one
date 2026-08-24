@@ -2,8 +2,8 @@
 # boot-smoke.sh — release tarball 的安装+启动端到端冒烟。
 #
 # 在隔离环境完整走一遍"用户拿到包"的路径：解包 → setup 聚合安装 → dsh 启动 →
-# 探活官方 UI / 独立画布 / better-sidebar 挂载 → 关停清理。better-sidebar 版本随
-# pack 当次 npm latest，上游破坏性变更会在这里（而不是用户机器上）先炸。
+# 探活官方 UI / 独立画布 / better-sidebar 挂载 → 关停清理。better-sidebar 使用
+# 聚合包声明的精确版本，渠道间版本漂移会在这里（而不是用户机器上）先炸。
 #
 # 用法：sh boot-smoke.sh <tarball> [端口]
 # 环境隔离：DSH_HOME / HOME 之外的全局态不触碰；profile 与临时目录用完即删。
@@ -31,7 +31,11 @@ tar -xzf "$TARBALL" -C "$SMOKE_ROOT"
 [ -d "$SMOKE_ROOT/dsh-plugins" ] || { echo "✗ tarball 缺 dsh-plugins/"; exit 1; }
 
 echo "· 聚合安装（--one，better-sidebar 走 vendor tgz）…"
-( cd "$SMOKE_ROOT" && DSH_HOME="$DSH_HOME" sh dsh-plugins/setup.sh --one "$PROFILE" "$PORT" >/dev/null )
+if ! ( cd "$SMOKE_ROOT" && DSH_HOME="$DSH_HOME" sh dsh-plugins/setup.sh --one "$PROFILE" "$PORT" ) \
+  >"$SMOKE_ROOT/setup.log" 2>&1; then
+  cat "$SMOKE_ROOT/setup.log"
+  exit 1
+fi
 
 # 安装结果断言：聚合包 node_modules 里 better-sidebar 实体在场（vendor 件被真正消费）
 BS_DIR="$SMOKE_ROOT/dsh-plugins/dsh-ccpg-one/node_modules/dsh-better-sidebar"

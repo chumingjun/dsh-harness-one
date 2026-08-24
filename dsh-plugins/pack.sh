@@ -14,7 +14,7 @@
 #   sh pack.sh [tag]     # tag 默认取最近 git tag（无则 0.0.0）
 # 环境变量：
 #   PACK_DIR   打包根目录（默认 /tmp/dsh-ccpg-pack），结束后可删
-#   WF1_NODE   构建画布用的 node（默认自动探测，要求 >=20）
+#   DSH_NODE   构建画布用的 node（默认自动探测，要求 >=20；兼容旧名 WF1_NODE）
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$HERE/.." && pwd)
@@ -28,19 +28,17 @@ PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh
 OPTIONAL_PLUGINS="dsh-ccpg-brand"
 # 聚合壳（bundle patch 挂载七插件 + better-sidebar，可选件 env 门控）；其 node_modules 是本地安装产物，不打包
 AGG="dsh-ccpg-one"
-# better-sidebar 版本 = pack 当次的 npm latest（每次打包用最新版 vendor 进归档）。
-# 精确解析再 pack（而不是 npm pack dsh-better-sidebar@latest）：文件名带版本，setup.sh
-# 的 glob 探测与提示信息才有确定性；npm 不可达则中止打包——vendor 是归档必含件。
-SIDEBAR_VER=$(npm view dsh-better-sidebar version 2>/dev/null) || true
-[ -n "$SIDEBAR_VER" ] || { echo "✗ 无法解析 dsh-better-sidebar 最新版本（npm view 失败，网络？）"; exit 1; }
 
 # ---- 0. node（>=20）----
-NODE_BIN="${WF1_NODE:-}"
+NODE_BIN="${DSH_NODE:-${WF1_NODE:-}}"
 [ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "console.log(Number(process.versions.node.split('.')[0])>=20?process.execPath:'')" 2>/dev/null || true)
-[ -z "$NODE_BIN" ] && { echo "✗ 需要 node>=20（或设 WF1_NODE 指向）"; exit 1; }
+[ -z "$NODE_BIN" ] && { echo "✗ 需要 node>=20（或设 DSH_NODE 指向）"; exit 1; }
 echo "✓ node: $("$NODE_BIN" -v)"
 PATH=$(dirname "$NODE_BIN"):$PATH
 export PATH
+# release 与 npm 聚合包使用同一精确 sidebar 版本，避免两个渠道漂移。
+SIDEBAR_VER=$("$NODE_BIN" -e "console.log(require(process.argv[1]).dependencies['dsh-better-sidebar'] || '')" "$HERE/$AGG/package.json")
+[ -n "$SIDEBAR_VER" ] || { echo "✗ $AGG 未声明 dsh-better-sidebar 精确依赖"; exit 1; }
 
 # ---- 0.1 插件清单 ----
 for p in $PLUGINS $OPTIONAL_PLUGINS; do
@@ -66,9 +64,11 @@ fi
 # 否则 pack 过后本机 npm test 全挂（plugin-storage.integration 等解析不到 SDK）。
 SDK_DIR=""
 DSH_PROBE=$(node -e "console.log(require.resolve('@deepseek-ai/dsh/lib/bin.js'))" 2>/dev/null || true)
+[ -z "$DSH_PROBE" ] && DSH_PROBE=$(command -v dsh 2>/dev/null || true)
 [ -z "$DSH_PROBE" ] && for c in "$HOME/.local/npm-global/lib/node_modules/@deepseek-ai/dsh/lib/bin.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"; do
   [ -f "$c" ] && DSH_PROBE="$c" && break
 done
+[ -n "$DSH_PROBE" ] && DSH_PROBE=$(node -e "console.log(require('fs').realpathSync(process.argv[1]))" "$DSH_PROBE")
 [ -n "$DSH_PROBE" ] && SDK_DIR=$(node -e "console.log(require('path').dirname(require('path').dirname(process.argv[1])))" "$DSH_PROBE")/node_modules/@deepseek-ai
 if [ -n "$SDK_DIR" ] && [ -d "$SDK_DIR/dsh-tools" ]; then
   mkdir -p node_modules/@deepseek-ai
@@ -168,8 +168,8 @@ try {
 NODE
 echo "✓ QuickJS WASM 归档 smoke 通过"
 
-# ---- 3.5 vendor better-sidebar（pack 当次 npm latest，源码仓库不进二进制）----
-# 从 npm 拉解析到的最新版 tgz 放进归档 vendor/；setup.sh 优先装它，
+# ---- 3.5 vendor better-sidebar（与聚合包同版，源码仓库不进二进制）----
+# 从 npm 拉精确版本 tgz 放进归档 vendor/；setup.sh 优先装它，
 # 安装机断网/包下架也不缺件（依赖树仍走在线装）。
 mkdir -p "$OUT/dsh-plugins/vendor"
 ( cd "$OUT/dsh-plugins/vendor" && npm pack "dsh-better-sidebar@$SIDEBAR_VER" --silent >/dev/null ) \
