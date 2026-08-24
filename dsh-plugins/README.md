@@ -22,7 +22,7 @@
 从 Desktop 托盘打开 **Open DSH Terminal**；该终端已绑定当前 profile：
 
 ```sh
-dsh plugin add dsh-ccpg-one@0.1.0
+dsh plugin add dsh-ccpg-one@0.1.1
 ```
 
 安装后重启 Desktop，让新 bundle 进入 Loader 组合。compatibility 与 advanced 模式都继续使用普通 DSH Web Client；画布、同源 `/wf1/api/*`、侧栏和预览无需 Desktop 专用注册。飞书账号页首次点击「自动安装」时，插件通过公开 `desktopPnpm` service 把固定版本 lark-cli 安装到当前 profile，并在 profile 切换或退出时取消仍在运行的操作。
@@ -109,7 +109,7 @@ sh start.sh dev
 聚合包和 7 个默认插件均为带 `dsh.bundle.patch` 的自描述包。推荐一条命令：
 
 ```sh
-dsh plugin --profile myprofile add dsh-ccpg-one@0.1.0
+dsh plugin --profile myprofile add dsh-ccpg-one@0.1.1
 ```
 
 需要 CCPG 品牌外观时，再显式安装独立插件：

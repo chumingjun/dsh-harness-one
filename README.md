@@ -1,20 +1,28 @@
-# harness-one — dsh 插件开发工作区
+# Workflow One
 
-本仓库是 **dsh（DeepSeek Harness）插件开发工作区**：在这里开发、构建、分发跑在 dsh 进程内的 Cordis 插件；未来任何新 dsh 插件都在这里孵化，命名延续 `dsh-ccpg-*` 前缀（ccpg 系列）。
+**运行在 [DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) 中的可视化 AI 工作流编排器。** 用拖拽 DAG 组合真实 dsh agent、脚本、条件分支和 HTTP 节点，实时查看运行进度，异常后从中断节点恢复，并将成果写回飞书。
 
-当前主体是 **Workflow One 物业智能体编排套件**（7 个默认 `dsh-ccpg-*` 插件 + 独立可选 brand + `web/` 画布）：拖拽式工作流画布跑在 dsh 进程内，**每个智能体节点是一个真实 dsh agent**（自主循环、bash/文件系统工具、会话持久化、技能系统），以当前 dsh 会话工作目录为 cwd 读取项目文件，节点交付物隔离写入工作区 `.workflow-one/runtime/`。画布 → 拓扑调度 → 节点状态实时回流，全链路闭环。
+[![npm](https://img.shields.io/npm/v/dsh-ccpg-one)](https://www.npmjs.com/package/dsh-ccpg-one)
+[![CI](https://github.com/chumingjun/harness-one/actions/workflows/ci.yml/badge.svg)](https://github.com/chumingjun/harness-one/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/chumingjun/harness-one)](https://github.com/chumingjun/harness-one/releases/latest)
+[![MIT License](https://img.shields.io/github/license/chumingjun/harness-one)](LICENSE)
 
-- 画布入口：`http://127.0.0.1:4021/wf1/`（dsh web profile）
-- 官方 dsh Web UI：`http://127.0.0.1:4021/`（同进程同端口；主区保留官方对话，点击输入框旁工作流按钮展开右侧画布）
-- 右侧工作台侧边栏：官方 UI 右侧为 [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（setup.sh 默认从 npm 安装）；我们的「工作流」tab 排在其 + 菜单第一位
+![Workflow One 完整工作流画布](images/workflow01.png)
 
-> 远程访问：setup.sh 里 webserver host 默认 `127.0.0.1`，局域网/Tailscale 需改 `0.0.0.0`（dsh agent 有 bash 能力，仅在可信网络开放）。官方 UI 的 settings/credentials 等特权页仅限 loopback（远程 403 属安全设计），插件自有路由不受影响。
+## 立即安装
+
+Node.js >= 20 且已安装 `@deepseek-ai/dsh`：
+
+```sh
+dsh plugin --profile web add dsh-ccpg-one@0.1.1
+dsh web
+```
+
+Harness Desktop 用户在 **Open DSH Terminal** 中执行 `dsh plugin add dsh-ccpg-one@0.1.1`，然后重启 Desktop。也可以从 [GitHub Releases](https://github.com/chumingjun/harness-one/releases/latest) 下载离线聚合包。
 
 ## 界面与使用方式
 
 Workflow One 嵌在 dsh 官方界面中：左侧保留与智能体的对话，中间是可缩放的工作流画布。节点按连线组成 DAG，可以串行执行，也可以并行分组、条件分支和失败打回。紫色节点是智能体，橙色节点负责条件判定；运行时节点会直接显示排队、执行、成功或失败状态。
-
-![Workflow One 完整工作流画布](images/workflow01.png)
 
 典型使用流程：
 
@@ -32,7 +40,7 @@ Workflow One 嵌在 dsh 官方界面中：左侧保留与智能体的对话，�
 **Harness Desktop（npm 包发布后）**：从 Desktop 托盘打开 **Open DSH Terminal**，对当前 profile 安装并重启 Desktop：
 
 ```sh
-dsh plugin add dsh-ccpg-one@0.1.0
+dsh plugin add dsh-ccpg-one@0.1.1
 ```
 
 Desktop 使用官方 DSH/Cordis 插件组合，不需要另一套插件。不要在 Desktop 里运行 `setup.sh`：Desktop 自己管理 profile、Node/pnpm 和随机 loopback 端口；飞书账号页首次点击「自动安装」时，lark-cli 会通过 Desktop 的受管 pnpm 安装到当前 profile。安装使用细节、环境差异与常见问题排查见 [`dsh-plugins/DESKTOP.md`](dsh-plugins/DESKTOP.md)；Desktop 开发兼容契约（`desktopProfiles`/`desktopPnpm` 动态探测、跨环境插件写法）也在该文档第 2 节。
