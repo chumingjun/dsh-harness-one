@@ -397,12 +397,17 @@ export class Orchestrator {
   }
 
   // 跳过传播：next 已被标 skipped，将其下游依赖减一并按需连锁跳过；不重复扣 remaining。
+  // 合流保护：pendingDeps 归零时若已有 success 上游，则不应跳过，应正常执行（交还 _pump 调度）。
   _propagateSkip(s, skippedId) {
     for (const next of s.outgoing.get(skippedId) || []) {
       const deg = s.pendingDeps.get(next) - 1;
       s.pendingDeps.set(next, deg);
       if (deg > 0) continue;
       if (s.run.nodeStates[next] === undefined || s.run.nodeStates[next].status === 'queued') {
+        // 存在 success 上游 → 合流节点仍应执行（不标记 skipped，交给 _pump 调度）
+        const upstreamIds = s.incoming.get(next) || [];
+        const hasSuccessUpstream = upstreamIds.some((id) => s.run.nodeStates[id]?.status === 'success');
+        if (hasSuccessUpstream) continue;
         if (s.run.nodeStates[next] === undefined) s.remaining -= 1;
         s.run.nodeStates[next] = { status: 'skipped' };
         this.emit('node-status', { runId: s.run.runId, nodeId: next, status: 'skipped' });
