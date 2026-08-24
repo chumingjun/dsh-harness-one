@@ -20,7 +20,7 @@ import {
 import { eventBelongsToCanvas, eventBelongsToRun } from './run-event-routing.js';
 import { useToast, PromptModal, ConfirmModal, Modal } from './ui.jsx';
 
-const STATUS_CN = { running: '运行中', success: '成功', error: '失败', canceled: '已取消', skipped: '跳过', waiting: '等待审批' };
+const STATUS_CN = { running: '运行中', success: '成功', error: '失败', canceled: '已取消', interrupted: '异常中断', skipped: '跳过', waiting: '等待审批' };
 
 import { FlowNode } from './FlowNode.jsx';
 import { EdgeLine } from './EdgeLine.jsx';
@@ -683,7 +683,7 @@ export default function App() {
     const startResume = async () => {
       const res = await fetch(apiUrl('/runs/resume'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ runId: resumeCandidate.runId, graph: saved.graph, canvasId: canvasIdRef.current }),
+        body: JSON.stringify({ runId: resumeCandidate.runId, canvasId: canvasIdRef.current }),
       });
       const data = await res.json();
       if (!res.ok) { toast(`续跑失败：${data.error}`, 'error'); return null; }
@@ -695,9 +695,8 @@ export default function App() {
       const listRes = await fetch(apiUrl('/runs'));
       if (listRes.ok) {
         const { runs = [] } = await listRes.json();
-        resumeCandidate = runs.find((r) => r.resumable
-          && !r.live
-          && (r.workflowId || null) === (runWorkflowId || null)) || null;
+        const latestRun = runs.find((r) => (r.workflowId || null) === (runWorkflowId || null)) || null;
+        resumeCandidate = latestRun?.resumable && !latestRun.live ? latestRun : null;
       }
     } catch { /* 历史不可读不阻塞正常运行 */ }
     let runId;
@@ -1468,7 +1467,7 @@ export default function App() {
         >
           <p className="panel-note" style={{ marginBottom: 8 }}>
             上次运行（{new Date(resumeChoice.lastRun.startedAt).toLocaleString('zh-CN', { hour12: false })}）
-            {resumeChoice.lastRun.status === 'error' ? '失败' : '被取消'}，
+            {resumeChoice.lastRun.status === 'interrupted' ? '异常中断' : resumeChoice.lastRun.status === 'error' ? '失败' : '被取消'}，
             已完成 <strong>{resumeChoice.lastRun.progress?.succeeded ?? '?'}/{resumeChoice.lastRun.progress?.total ?? '?'}</strong> 个节点。
           </p>
           <p className="sec-hint">「从上次继续」复用已完成节点的输出，只补跑未完成部分（图未修改）。「重新运行」全部节点从头执行。</p>

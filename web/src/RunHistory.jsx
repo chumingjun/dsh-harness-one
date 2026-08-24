@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { apiUrl } from './api.js';
 import { Modal } from './ui.jsx';
 
-const STATUS_LABEL = { running: '运行中', success: '成功', error: '失败', canceled: '已取消' };
+const STATUS_LABEL = { running: '运行中', success: '成功', error: '失败', canceled: '已取消', interrupted: '异常中断' };
 
 function progressText(r) {
   const p = r.progress;

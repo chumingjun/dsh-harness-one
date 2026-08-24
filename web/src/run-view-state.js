@@ -12,6 +12,7 @@ const STATUS_META = {
   success: { label: '已完成', tone: 'success' },
   error: { label: '运行失败', tone: 'danger' },
   canceled: { label: '已取消', tone: 'neutral' },
+  interrupted: { label: '异常中断', tone: 'danger' },
 };
 
 export function getRunStatusMeta(status) {

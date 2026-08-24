@@ -45,6 +45,7 @@ const runDetail = {
 
 assert.equal(getRunId(runDetail, {}, {}), 'run-42');
 assert.equal(getRunId(null, { runId: 'run-live' }, null), 'run-live');
+assert.deepEqual(getRunStatusMeta('interrupted'), { label: '异常中断', tone: 'danger' });
 
 const fallback = adaptRunResults({}, { runDetail });
 assert.equal(fallback.runId, 'run-42');
