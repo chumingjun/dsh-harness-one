@@ -1,13 +1,32 @@
 {
   "name": "dsh-ccpg-one",
-  "version": "0.1.0",
-  "description": "Workflow One 聚合壳：一条命令装齐七个默认 dsh-ccpg 插件（可选件按 CCPG_* 环境变量门控）",
+  "version": "0.1.1",
+  "description": "Workflow One - Visual AI workflow orchestrator for DeepSeek Harness (dsh), with multi-agent DAGs, live execution, recovery, and Feishu integration",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/chumingjun/harness-one.git",
     "directory": "dsh-plugins/dsh-ccpg-one"
   },
+  "homepage": "https://github.com/chumingjun/harness-one#readme",
+  "bugs": {
+    "url": "https://github.com/chumingjun/harness-one/issues"
+  },
+  "keywords": [
+    "deepseek",
+    "dsh",
+    "dsh-plugin",
+    "ai-agents",
+    "agentic-workflow",
+    "workflow-automation",
+    "visual-workflow",
+    "multi-agent",
+    "dag",
+    "react-flow",
+    "feishu",
+    "lark",
+    "cordis"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -23,13 +42,13 @@
   ],
   "dependencies": {
     "dsh-better-sidebar": "0.15.2",
-    "dsh-ccpg-canvasui": "0.1.0",
-    "dsh-ccpg-document-preview": "0.1.0",
-    "dsh-ccpg-larkauth": "0.1.0",
-    "dsh-ccpg-llm-guard": "0.1.0",
-    "dsh-ccpg-orchestrator": "0.1.0",
-    "dsh-ccpg-tools": "0.1.0",
-    "dsh-ccpg-web": "0.1.0"
+    "dsh-ccpg-canvasui": "0.1.1",
+    "dsh-ccpg-document-preview": "0.1.1",
+    "dsh-ccpg-larkauth": "0.1.1",
+    "dsh-ccpg-llm-guard": "0.1.1",
+    "dsh-ccpg-orchestrator": "0.1.1",
+    "dsh-ccpg-tools": "0.1.1",
+    "dsh-ccpg-web": "0.1.1"
   },
   "bundleDependencies": [
     "dsh-ccpg-canvasui",
