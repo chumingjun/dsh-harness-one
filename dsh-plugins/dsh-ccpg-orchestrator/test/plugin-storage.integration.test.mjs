@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { apply } from '../lib/index.js';
 
 function responseCapture() {
+  const listeners = new Map();
   return {
     status: 0,
     headers: {},
@@ -14,7 +15,10 @@ function responseCapture() {
     writeHead(status, headers = {}) { this.status = status; this.headers = headers; },
     write(chunk) { this.chunks.push(Buffer.from(chunk)); },
     end(chunk) { if (chunk) this.chunks.push(Buffer.from(chunk)); this.writableEnded = true; },
-    destroy(error) { throw error; },
+    on(event, callback) { listeners.set(event, callback); return this; },
+    once(event, callback) { const inner = listeners.get(event); listeners.set(event, () => { inner?.(); callback(); }); return this; },
+    emit(event) { listeners.get(event)?.(); return this; },
+    destroy(error) { if (error) throw error; },
     json() { return JSON.parse(Buffer.concat(this.chunks).toString('utf8') || '{}'); },
   };
 }
@@ -133,6 +137,57 @@ try {
   const missingSession = responseCapture();
   await route('/wf1/api/graph')(request('GET', '/wf1/api/graph'), missingSession);
   assert.equal(missingSession.status, 409);
+
+  // 产物预览链路：/run-results 回传的 URL 必须继承 sessionId，
+  // 前端原样 fetch 才不会撞 scoped 路由的 409 workspace-session-required。
+  const artifactRunRes = responseCapture();
+  await route('/wf1/api/run')(request('POST', withSession('/wf1/api/run', 'session-b'), {
+    graph: {
+      nodes: [
+        { id: 'input_src', type: 'input', position: { x: 0, y: 0 }, data: { label: '输入', text: 'hi' } },
+        { id: 'script_doc', type: 'script', position: { x: 0, y: 0 }, data: {
+          label: '写文件',
+          code: 'function main(input, workspace) { workspace.write("report.md", "# 成果"); return { ok: true }; }',
+          outputSchema: null,
+        } },
+      ],
+      edges: [{ source: 'input_src', target: 'script_doc' }],
+    },
+    triggerInput: '',
+  }), artifactRunRes);
+  assert.equal(artifactRunRes.status, 200);
+  const artifactRunId = artifactRunRes.json().runId;
+  let artifactRunDoc;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    artifactRunDoc = readdirSync(runsDirB)
+      .map((file) => JSON.parse(readFileSync(join(runsDirB, file), 'utf8')))
+      .find((run) => run.runId === artifactRunId);
+    if (artifactRunDoc && artifactRunDoc.status !== 'running') break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(artifactRunDoc?.status, 'success');
+  assert.ok(artifactRunDoc.artifactIndex.length >= 1);
+
+  const resultsRes = responseCapture();
+  await route('/wf1/api/run-results')(request('GET', withSession(`/wf1/api/run-results?id=${artifactRunId}`, 'session-b')), resultsRes);
+  assert.equal(resultsRes.status, 200);
+  const artifactRow = resultsRes.json().artifacts.find((row) => row.name === 'report.md');
+  assert.ok(artifactRow, 'report.md 应在产物清单中');
+  assert.match(artifactRow.downloadUrl, /[?&]sessionId=session-b$/);
+  assert.match(artifactRow.previewUrl, /[?&]sessionId=session-b$/);
+
+  // 前端拿响应 URL 直接请求（相对路径挂在服务根上）：命中 scoped 会话应 200 而非 409
+  const previewPath = artifactRow.previewUrl.replace(/^https?:\/\/[^/]+/, '');
+  const previewRes = responseCapture();
+  await new Promise((resolve, reject) => {
+    previewRes.on('error', reject);
+    const origEnd = previewRes.end.bind(previewRes);
+    previewRes.end = (chunk) => { origEnd(chunk); resolve(); };
+    route('/wf1/api/run-artifact')(request('GET', previewPath), previewRes);
+  });
+  assert.equal(previewRes.status, 200);
+  assert.equal(previewRes.headers['Content-Type'], 'text/markdown; charset=utf-8');
+
   console.log('plugin storage integration tests: ALL PASS');
 } finally {
   if (original === undefined) delete process.env.DSH_HOME;

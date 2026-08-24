@@ -103,6 +103,23 @@ await test('run results use output nodes as final results and include every runt
   assert.equal(result.links[0].url, 'https://example.test/doc');
 });
 
+await test('artifact URLs inherit sessionId so scoped routes can resolve the workspace', () => {
+  const run = normalizeRunDocument({
+    ...baseRun(),
+    artifactIndex: [
+      { id: 'a2', nodeId: 'output', nodeLabel: '最终成果', name: 'final.pdf', relativePath: 'final.pdf', previewable: true },
+    ],
+  });
+  const withSession = createRunResults(run, { sessionId: 'sess/单 元' });
+  assert.equal(withSession.artifacts[0].downloadUrl,
+    '/wf1/api/run-artifact?run=run_test_1&artifact=a2&sessionId=sess%2F%E5%8D%95%20%E5%85%83');
+  assert.equal(withSession.artifacts[0].previewUrl,
+    '/wf1/api/run-artifact?run=run_test_1&artifact=a2&preview=1&sessionId=sess%2F%E5%8D%95%20%E5%85%83');
+  const withoutSession = createRunResults(run);
+  assert.equal(withoutSession.artifacts[0].downloadUrl, '/wf1/api/run-artifact?run=run_test_1&artifact=a2');
+  assert.equal(withoutSession.artifacts[0].previewUrl, '/wf1/api/run-artifact?run=run_test_1&artifact=a2&preview=1');
+});
+
 await test('non-technical generated artifacts become final when output nodes have no files', () => {
   const run = normalizeRunDocument({
     ...baseRun(),

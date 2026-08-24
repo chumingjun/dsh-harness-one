@@ -1357,7 +1357,9 @@ export function apply(ctx, config) {
     if (!id) return json(res, 400, { error: '缺少 id' });
     const run = readRun(id);
     if (!run) return json(res, 404, { error: '运行记录不存在' });
-    return json(res, 200, createRunResults(run));
+    // 产物 URL 回传给前端后会被直接 fetch，必须继承本次请求的会话标识
+    const sessionId = url.searchParams.get('sessionId') || req.headers?.['x-wf1-session'] || '';
+    return json(res, 200, createRunResults(run, { sessionId }));
   } });
 
   const artifactLocationsForRun = (run) => ({

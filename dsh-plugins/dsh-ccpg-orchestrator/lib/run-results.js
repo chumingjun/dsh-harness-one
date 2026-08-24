@@ -106,7 +106,7 @@ export function streamArtifactResponse(req, res, { file, filename, mediaType, pr
 
 const clone = (value) => value == null ? value : structuredClone(value);
 const nodeLabel = (run, nodeId) => (run.graph?.nodes || []).find((node) => node.id === nodeId)?.data?.label || nodeId;
-const artifactId = (nodeId, relativePath) => createHash('sha256').update(`${nodeId}\0${relativePath}`).digest('hex').slice(0, 24);
+export const artifactId = (nodeId, relativePath) => createHash('sha256').update(`${nodeId}\0${relativePath}`).digest('hex').slice(0, 24);
 const asIso = (value) => {
   if (!value) return null;
   const date = new Date(value);
@@ -326,7 +326,10 @@ function extractHttpLinks(text) {
   return [...new Set(matches)].map((url) => ({ type: 'output', url }));
 }
 
-export function createRunResults(value, { apiBase = '/wf1/api' } = {}) {
+// 产物 URL 必须带 sessionId：scoped 路由靠它定位会话工作目录，缺了会 409 workspace-session-required。
+// 默认 '' 保持 createRunExport 等无会话场景的 URL 形状不变。
+export function createRunResults(value, { apiBase = '/wf1/api', sessionId = '' } = {}) {
+  const sessionQuery = sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : '';
   const run = normalizeRunDocument(value);
   const rows = orderedGraphNodes(run).map((node) => resultRow(run, node));
   const configuredOutputs = rows.filter((row) => row.nodeType === 'output');
@@ -350,8 +353,8 @@ export function createRunResults(value, { apiBase = '/wf1/api' } = {}) {
     mediaType: artifact.mediaType,
     previewable: Boolean(artifact.previewable),
     sha256: artifact.sha256,
-    downloadUrl: `${apiBase}/run-artifact?run=${encodeURIComponent(run.runId)}&artifact=${encodeURIComponent(artifact.id)}`,
-    previewUrl: artifact.previewable ? `${apiBase}/run-artifact?run=${encodeURIComponent(run.runId)}&artifact=${encodeURIComponent(artifact.id)}&preview=1` : null,
+    downloadUrl: `${apiBase}/run-artifact?run=${encodeURIComponent(run.runId)}&artifact=${encodeURIComponent(artifact.id)}${sessionQuery}`,
+    previewUrl: artifact.previewable ? `${apiBase}/run-artifact?run=${encodeURIComponent(run.runId)}&artifact=${encodeURIComponent(artifact.id)}&preview=1${sessionQuery}` : null,
   }));
   const outputNodeIds = new Set(configuredOutputs.map((row) => row.nodeId));
   const outputArtifacts = artifacts.filter((artifact) => outputNodeIds.has(artifact.nodeId));
