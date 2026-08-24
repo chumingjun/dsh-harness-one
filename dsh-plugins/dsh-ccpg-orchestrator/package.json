@@ -5,6 +5,12 @@
   "type": "module",
   "main": "lib/index.js",
   "description": "Workflow One 物业编排插件：DAG 调度 + 节点级 dsh agent 执行（ctx.agents 进程内驱动）+ HTTP API/SSE",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chumingjun/harness-one.git",
+    "directory": "dsh-plugins/dsh-ccpg-orchestrator"
+  },
   "engines": {
     "node": ">=20"
   },

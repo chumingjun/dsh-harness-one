@@ -5,6 +5,18 @@
   "type": "module",
   "main": "lib/index.js",
   "description": "工作流画布进官方 Web UI：better-sidebar 注册工作流侧栏（iframe 载 /wf1/ 画布），与官方聊天同会话共存",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chumingjun/harness-one.git",
+    "directory": "dsh-plugins/dsh-ccpg-canvasui"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prepack": "sh ../build-canvasui.sh"
+  },
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",

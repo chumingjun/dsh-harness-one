@@ -5,6 +5,15 @@
   "type": "module",
   "main": "lib/index.js",
   "description": "Reject malformed model tool calls before they can poison a dsh session",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chumingjun/harness-one.git",
+    "directory": "dsh-plugins/dsh-ccpg-llm-guard"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "exports": {
     ".": "./lib/index.js",
     "./package.json": "./package.json"
