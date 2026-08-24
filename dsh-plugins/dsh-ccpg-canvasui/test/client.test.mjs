@@ -215,6 +215,47 @@ assert.equal(client.__test.runDotState({ status: "canceled" }), "error");
 assert.equal(client.__test.runDotState(null, "running"), "running");
 assert.equal(client.__test.runDotState(null), "running"); // 无数据按运行中
 
+// 分支图摘要取最长路径，主路径连续编号，未展示节点使用中性计数。
+const branchGraph = {
+  nodes: [
+    { id: "in", type: "input", position: { x: 0, y: 0 }, data: { label: "报修输入" } },
+    { id: "route", type: "condition", position: { x: 100, y: 0 }, data: { label: "紧急判断" } },
+    { id: "urgent", type: "agent", position: { x: 200, y: 0 }, data: { label: "紧急派单" } },
+    { id: "normal", type: "agent", position: { x: 200, y: 100 }, data: { label: "普通派单" } },
+    { id: "out", type: "output", position: { x: 300, y: 0 }, data: { label: "工单输出" } },
+  ],
+  edges: [
+    { source: "in", target: "route" },
+    { source: "route", target: "urgent" },
+    { source: "route", target: "normal" },
+    { source: "urgent", target: "out" },
+    { source: "normal", target: "out" },
+  ],
+};
+const preview = client.__test.flowPreviewModel(branchGraph);
+assert.deepEqual([...preview.items].map((item) => item && item.id), ["in", "route", "urgent", "out"]);
+assert.deepEqual([...preview.items].map((item) => item && item.number), [1, 2, 3, 4]);
+assert.equal(preview.pathLength, 4);
+assert.equal(preview.otherNodeCount, 1);
+
+// 实际运行命中下方分支时，不能继续展示按画布位置选出的上方分支。
+const executedPreview = client.__test.flowPreviewModel(branchGraph, {
+  in: { status: "success" },
+  route: { status: "success" },
+  urgent: { status: "skipped" },
+  normal: { status: "success" },
+  out: { status: "success" },
+});
+assert.deepEqual([...executedPreview.items].map((item) => item && item.id), ["in", "route", "normal", "out"]);
+assert.deepEqual([...executedPreview.items].map((item) => item && item.number), [1, 2, 3, 4]);
+assert.equal(executedPreview.otherNodeCount, 1);
+
+const longPreview = client.__test.flowPreviewModel({
+  nodes: Array.from({ length: 7 }, (_, index) => ({ id: `n${index + 1}`, type: "agent", data: { label: `步骤${index + 1}` } })),
+  edges: Array.from({ length: 6 }, (_, index) => ({ source: `n${index + 1}`, target: `n${index + 2}` })),
+});
+assert.deepEqual([...longPreview.items].map((item) => item && item.id), ["n1", "n2", null, "n6", "n7"]);
+
 // 卡片组件渲染断言：GraphPatchCard/WorkflowRunCard 的渲染链在 vm 内闭包引用 react——
 // 用第二批 vm context 以 react shim 加载（createElement 记录调用），专门断言 props：
 // running → 应用中；settled 成功带 lint 通过 → 已应用；settled isError → 被拒绝。
@@ -252,6 +293,17 @@ const cardContext = {
 vm.runInNewContext(bundle, cardContext, {
   filename: "dsh-ccpg-canvasui/src/client.js",
 });
+
+// SVG 的可访问名称包含视觉摘要，读屏信息与卡片底部文案一致。
+cardCalls.length = 0;
+const thumbnail = cardClient.__test.graphThumbnail(branchGraph, {
+  nodeStates: {
+    in: { status: "success" }, route: { status: "success" },
+    urgent: { status: "skipped" }, normal: { status: "success" }, out: { status: "success" },
+  },
+});
+assert.match(thumbnail.props["aria-label"], /^主流程 4 步 · 另有 1 个节点：/);
+assert.match(thumbnail.props["aria-label"], /3 普通派单/);
 
 // GraphPatchCard：running（argsRaw 携带 ops）
 cardCalls.length = 0;
