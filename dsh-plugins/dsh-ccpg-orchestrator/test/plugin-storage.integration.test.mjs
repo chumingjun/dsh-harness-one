@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSyn
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { apply } from '../lib/index.js';
+import { graphFingerprint } from '../lib/run-scope.js';
 
 function responseCapture() {
   const listeners = new Map();
@@ -133,6 +134,37 @@ try {
   assert.equal(storedRun?.workspaceRoot, undefined);
   assert.equal(existsSync(join(workspaceA, '.workflow-one', 'runs', `${newRunId}.json`)), false);
   assert.equal(existsSync(join(dshHome, 'plugin-data', 'dsh-ccpg-orchestrator', 'runs', `${newRunId}.json`)), false);
+
+  const resumeGraph = {
+    nodes: [
+      { id: 'resume_input', type: 'input', position: { x: 0, y: 0 }, data: { label: '输入', text: 'hello' } },
+      { id: 'resume_output', type: 'output', position: { x: 200, y: 0 }, data: { label: '输出' } },
+    ],
+    edges: [{ source: 'resume_input', target: 'resume_output' }],
+  };
+  writeFileSync(join(runsDirB, 'run_resume_seed.json'), JSON.stringify({
+    runId: 'run_resume_seed', schemaVersion: 3, status: 'error',
+    startedAt: '2026-08-24T00:00:00.000Z', finishedAt: '2026-08-24T00:00:01.000Z', durationMs: 1000,
+    triggerInput: '', runInputs: {}, graph: resumeGraph, graphFingerprint: graphFingerprint(resumeGraph),
+    nodeStates: { resume_input: { status: 'success' }, resume_output: { status: 'error', error: '模拟失败' } },
+    outputs: { resume_input: 'hello' }, structuredOutputs: {}, nodeOrder: ['resume_input', 'resume_output'],
+  }));
+
+  const changedGraph = structuredClone(resumeGraph);
+  changedGraph.nodes[0].data.text = 'changed';
+  const changedResume = responseCapture();
+  await route('/wf1/api/runs/resume')(request('POST', withSession('/wf1/api/runs/resume', 'session-b'), {
+    runId: 'run_resume_seed', graph: changedGraph,
+  }), changedResume);
+  assert.equal(changedResume.status, 409);
+  assert.equal(changedResume.json().code, 'workflow-graph-mismatch');
+
+  const matchingResume = responseCapture();
+  await route('/wf1/api/runs/resume')(request('POST', withSession('/wf1/api/runs/resume', 'session-b'), {
+    runId: 'run_resume_seed', graph: resumeGraph, graphFingerprint: 'stale-client-fingerprint',
+  }), matchingResume);
+  assert.equal(matchingResume.status, 200);
+  assert.equal(matchingResume.json().resumedFrom, 'run_resume_seed');
 
   const missingSession = responseCapture();
   await route('/wf1/api/graph')(request('GET', '/wf1/api/graph'), missingSession);
