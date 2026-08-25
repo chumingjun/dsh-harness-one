@@ -59,6 +59,19 @@ export class FeishuClient {
     return data.data ?? data;
   }
 
+  async sendMessageCard({ receiveId, receiveIdType = 'chat_id', card, signal }) {
+    if (!receiveId) throw new Error('发送飞书消息卡片失败：缺少接收目标');
+    return this.api(`/im/v1/messages?receive_id_type=${encodeURIComponent(receiveIdType)}`, {
+      method: 'POST',
+      signal,
+      body: JSON.stringify({
+        receive_id: receiveId,
+        msg_type: 'interactive',
+        content: JSON.stringify(card),
+      }),
+    });
+  }
+
   // wiki 链接换取真实文档 token
   async resolveToken(type, token) {
     if (type !== 'wiki') return { objType: 'docx', token };

@@ -10,6 +10,7 @@ const ICONS = {
   http: I('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18M12 3a15 15 0 000 18"/>'),
   script: I('<path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/>'),
   output: I('<path d="M12 15V3m0 0l-4 4m4-4l4 4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/>'),
+  notify: I('<path d="M10.3 21a2 2 0 003.4 0"/><path d="M4 17h16c-1.5-1.6-2-3.2-2-7a6 6 0 00-12 0c0 3.8-.5 5.4-2 7z"/>'),
   note: I('<path d="M4 5h16M4 12h10M4 19h7"/>'),
 };
 
@@ -65,6 +66,20 @@ export const NODE_REGISTRY = [
       d.writeback?.type === 'feishu-new' && { text: '新建飞书文档' },
       d.writeback?.type === 'feishu-append' && { text: '追加飞书文档' },
     ].filter(Boolean),
+  },
+  {
+    type: 'notify',
+    icon: ICONS.notify, label: '消息通知', color: 'var(--accent)',
+    preset: () => ({
+      label: '消息通知', channel: 'feishu', mode: 'terminal',
+      channelConfig: { targetType: 'chat_id', targetId: '' },
+    }),
+    summary: (d) => `${d.channel === 'feishu' ? '飞书' : (d.channel || '未选渠道')} · ${d.channelConfig?.targetType === 'open_id' ? '私聊' : '群聊'} · ${d.mode === 'each_node' ? '逐节点' : '仅结束'}`,
+    badges: (d) => [
+      { text: d.channel === 'feishu' ? '飞书卡片' : (d.channel || '渠道') },
+      { text: d.channelConfig?.targetType === 'open_id' ? '私聊' : '群聊' },
+      { text: d.mode === 'each_node' ? '逐节点' : '运行结束' },
+    ],
   },
   {
     type: 'note',

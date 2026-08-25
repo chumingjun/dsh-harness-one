@@ -65,7 +65,7 @@ export default function App() {
   const [hostSession, setHostSession] = useState({ id: null, canSaveToWorkspace: false });
   const terminalNodesByRunRef = useRef(new Map());
   const [canvasMenu, setCanvasMenu] = useState(null); // 双击画布 { x, y } 弹加节点菜单
-  const [catalog, setCatalog] = useState({ tools: [], feishuEnabled: false });
+  const [catalog, setCatalog] = useState({ tools: [], feishuEnabled: false, notificationChannels: [] });
   const [skills, setSkills] = useState([]);
   const [llmConfig, setLLMConfig] = useState({});
   const [runtime, setRuntime] = useState(null);
@@ -274,6 +274,7 @@ export default function App() {
         });
       }
       if (['success', 'error', 'canceled', 'skipped'].includes(p.status)) {
+        if (nodesRef.current.find((node) => node.id === p.nodeId)?.data?.nodeType === 'notify') return;
         const completed = terminalNodesByRunRef.current.get(p.runId) || new Set();
         completed.add(p.nodeId);
         terminalNodesByRunRef.current.set(p.runId, completed);
@@ -755,7 +756,7 @@ export default function App() {
       activeRunIdRef.current = runId;
       runningRef.current = true;
       setInspectedRunId(runId);
-      setRunStatus((current) => ({ ...current, running: true, runId, done: 0, total: graph.nodes.length }));
+      setRunStatus((current) => ({ ...current, running: true, runId, done: 0, total: graph.nodes.filter((node) => node.type !== 'notify').length }));
     }
   }, [save, setNodes, toGraph, triggerInput, runInputs, currentWf, toast, doLint]);
 
@@ -1282,7 +1283,8 @@ export default function App() {
     return out;
   }, [upstreamNodes, nodes]);
 
-  const doneCount = useMemo(() => nodes.filter((n) => ['success', 'error', 'skipped', 'canceled'].includes(n.data.runStatus)).length, [nodes]);
+  const businessNodeCount = useMemo(() => nodes.filter((node) => node.data?.nodeType !== 'notify').length, [nodes]);
+  const doneCount = useMemo(() => nodes.filter((n) => n.data?.nodeType !== 'notify' && ['success', 'error', 'skipped', 'canceled'].includes(n.data.runStatus)).length, [nodes]);
 
   return (
     <div className="app">
@@ -1302,7 +1304,7 @@ export default function App() {
         <div className="toolbar-spacer" />
         {view === 'canvas' && (
           <>
-            {runStatus.running && <span className="mode-badge mode-glm toolbar-progress-badge">{doneCount}/{runStatus.total || nodes.length} 节点</span>}
+            {runStatus.running && <span className="mode-badge mode-glm toolbar-progress-badge">{doneCount}/{runStatus.total || businessNodeCount} 节点</span>}
             <button className="btn tb-refresh-btn toolbar-compact-hide" onClick={() => window.location.reload()} title="重新加载当前画布" aria-label="刷新画布"><span aria-hidden="true">⟳</span> 刷新</button>
             <AddNodeMenu onPick={(type) => addNode(type)} />
             <button className="btn tb-icon-btn toolbar-compact-hide" onClick={undo} disabled={!undoInfo.canUndo} title="撤销（Cmd+Z）" aria-label="撤销">↩</button>
@@ -1410,6 +1412,7 @@ export default function App() {
             skills={skills}
             feishuEnabled={catalog.feishuEnabled}
             feishuCreds={feishuCreds}
+            notificationChannels={catalog.notificationChannels}
             llmConfig={llmConfig}
             upstreamNodes={upstreamNodes}
             upstreamPreviews={upstreamPreviews}

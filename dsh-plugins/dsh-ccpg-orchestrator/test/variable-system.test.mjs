@@ -397,8 +397,9 @@ await test('SSE 全局订阅恢复全部 live run 并携带归属', () => {
 await test('SSE 摘要不包含 envelope value/schema 或 trace', () => {
   const outputSummary = summarizeStructuredOutputs({ n: { version: 1, type: 'json', value: { secret: 1 }, schema: { secret: true } } });
   assert.deepEqual(outputSummary.n, { hasStructured: true, outputType: 'json' });
-  const stateSummary = summarizeNodeStates({ n: { status: 'success', durationMs: 1, trace: { secret: true }, input: 'raw' } });
-  assert.deepEqual(stateSummary.n, { status: 'success', durationMs: 1 });
+  const notification = { channel: 'feishu', sent: 1, failed: 0 };
+  const stateSummary = summarizeNodeStates({ n: { status: 'success', durationMs: 1, notification, trace: { secret: true }, input: 'raw' } });
+  assert.deepEqual(stateSummary.n, { status: 'success', durationMs: 1, notification });
   assert.deepEqual(summarizeOutputs({ n: '{"secret":1}', t: 'plain' }, { n: { version: 1, type: 'json', value: { secret: 1 } } }), {
     n: '(结构化输出，请在节点详情查看)', t: 'plain',
   });

@@ -8,7 +8,7 @@
 import { lintGraph } from './engine.js';
 
 // ---- 已知节点类型（与前端 registry.jsx、引擎 nodeKinds 对齐）----
-const NODE_TYPES = ['input', 'agent', 'script', 'condition', 'http', 'output', 'note'];
+const NODE_TYPES = ['input', 'agent', 'script', 'condition', 'http', 'output', 'notify', 'note'];
 
 // 服务端生成的节点 id：与前端 n_<type>_<ts><rand> 风格区分，AI 引用稳定
 export function newCanvasNodeId() {
@@ -170,6 +170,7 @@ export function summarizeGraphForAI(graph) {
       } : {}),
       ...(n.type === 'condition' ? { include: n.data?.include, exclude: n.data?.exclude } : {}),
       ...(n.type === 'http' ? { url: n.data?.url, method: n.data?.method } : {}),
+      ...(n.type === 'notify' ? { channel: n.data?.channel, mode: n.data?.mode, targetType: n.data?.channelConfig?.targetType } : {}),
     })),
     edges: (graph.edges || []).map((e) => ({ from: e.source, to: e.target, ...(e.branch ? { branch: e.branch } : {}) })),
   };
@@ -189,13 +190,14 @@ export function canvasAssistantPersona() {
   return `你是「物业工作流画布」的 AI 助手，帮助用户创建/修改/测试节点式工作流。用户在聊天里提需求，你调用画布工具落图。
 
 ## 画布模型
-- 图 = 节点 + 有向边。节点类型 7 种：
+- 图 = 节点 + 有向边。节点类型 8 种：
   - input 输入：data.text 触发文本模板（支持 {{变量}}）
   - agent 智能体：data.prompt 系统提示词、data.inputTemplate 输入模板（{{上游节点名}} 引用上游输出）、data.tools 工具名数组（如 feishu_doc_read/web_fetch）、data.model/data.channel 可选
   - script 脚本：固定 JavaScript；data.inputs 为命名参数数组，每项用 expression 完整变量或 value JSON 常量；data.code 必须声明同步 function main(input, workspace) 并返回 JSON；workspace 仅可 list/read/write/remove 当前节点工作区；可选 data.outputSchema 和 data.scriptTimeoutMs（100-10000）
   - condition 条件：data.include/data.exclude 逗号分隔关键词，命中走 true 边否则 false 边；条件节点的两条出边必须 branch="true"/"false"
   - http 请求：data.url/method/headers/body
   - output 输出：汇聚展示，可选 data.writeback 飞书写回
+  - notify 消息通知：运行级观察器，可独立放置或在线路中透传；data.channel="feishu"、data.mode="terminal"|"each_node"；群聊使用 data.channelConfig.targetType="chat_id" + oc_ 开头的群 ID，私聊使用 targetType="open_id" + ou_ 开头的用户 open_id；data.channelConfig.credentialId 可选
   - note 注释：不执行，data.text 说明文字
 - 节点 label 用中文短名（如「分类智能体」）；上下游引用靠 label（{{分类智能体}}）。
 

@@ -420,6 +420,7 @@ body {
 .type-condition { background: var(--type-condition); color: var(--type-condition-fg); }
 .type-http { background: var(--type-http); color: var(--type-http-fg); }
 .type-script { background: var(--type-script); color: var(--type-script-fg); }
+.type-notify { background: var(--accent); }
 .type-note { background: var(--type-note); color: var(--type-note-fg); }
 .badge-script { background: color-mix(in srgb, var(--type-script) 15%, transparent); color: var(--type-script); border-color: color-mix(in srgb, var(--type-script) 35%, transparent); }
 .badge-note { background: rgba(120,113,108,.15); color: var(--fg-muted); border-color: rgba(120,113,108,.3); }
