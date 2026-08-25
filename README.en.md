@@ -39,11 +39,13 @@
 ### npm
 
 ```sh
-dsh plugin --profile web add dsh-ccpg-one@latest
+dsh plugin --profile web add dsh-ccpg-one
 dsh web
 ```
 
-Harness Desktop users should open **Open DSH Terminal**, run `dsh plugin add dsh-ccpg-one@latest`, and restart Desktop. Do not run `setup.sh` in Desktop; it manages its own profile, Node/pnpm runtime, and loopback port. See [Desktop setup and troubleshooting](dsh-plugins/DESKTOP.md).
+[Harness Desktop](https://github.com/anywhere-labs/deepseek-harness-desktop) users should open **Open DSH Terminal**, run `dsh plugin add dsh-ccpg-one`, and restart Desktop. Do not run `setup.sh` in Desktop; it manages its own profile, Node/pnpm runtime, and loopback port. See [Desktop setup and troubleshooting](dsh-plugins/DESKTOP.md).
+
+**UI dependency:** Workflow One's embedded canvas is hosted in the official dsh interface by the open-source [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) project. `dsh-ccpg-one` installs and depends on it automatically. If DSH-better-sidebar is missing or disabled, the embedded Workflow entry is unavailable, while the standalone `/wf1/` canvas remains accessible.
 
 ### Offline bundle
 
