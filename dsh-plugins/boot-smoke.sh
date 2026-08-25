@@ -63,8 +63,14 @@ code=$(probe "http://127.0.0.1:$PORT/wf1/")
 [ "$code" = "200" ] || { echo "✗ 独立画布 /wf1/ 非 200（$code）"; exit 1; }
 echo "✓ 独立画布 /wf1/ 200"
 
-# better-sidebar 真挂载：官方 UI HTML 引用其 client bundle（canvasui 的侧栏 tab 依赖它）
-if ! curl -s --max-time 5 "http://127.0.0.1:$PORT/" | grep -q "better-sidebar/client.js"; then
+# better-sidebar 真挂载：官方 UI HTML 引用其 client bundle（canvasui 的侧栏 tab 依赖它）。
+# UI 200 ≠ client-modules 注入完成（首载注入有延迟），同样放宽到 60s 重试。
+bs_ok=""
+for i in $(seq 1 30); do
+  if curl -s --max-time 5 "http://127.0.0.1:$PORT/" | grep -q "better-sidebar/client.js"; then bs_ok=1; break; fi
+  sleep 2
+done
+if [ -z "$bs_ok" ]; then
   echo "✗ 官方 UI 未加载 better-sidebar/client.js（上游 API 变更或挂载失败）"
   tail -20 "$SMOKE_ROOT/boot.log"
   exit 1

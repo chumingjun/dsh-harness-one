@@ -164,6 +164,17 @@ if [ "$AGGREGATE" = 1 ]; then
     exit 1
   fi
   cat "$PLUGIN_LOG"
+  # 聚合 patch 已不 insert better-sidebar（挂载归上游包自己的 bundle 层，单点挂载），
+  # link: 安装又不会触发依赖包的 bundle 注册——必须单独 add 让它进 dsh.profile.bundles。
+  # pnpm 依赖去重：聚合包已声明同版本，此处 add 只做 bundle 注册不引入第二实体。
+  # （boot-smoke.sh 断言官方 UI 加载 better-sidebar/client.js，缺这步会直接挂。）
+  if ! "$NODE_BIN" "$DSH_BIN" plugin --profile "$PROFILE" add "$SIDEBAR_SRC" >"$PLUGIN_LOG" 2>&1; then
+    cat "$PLUGIN_LOG" >&2
+    echo "⚠ better-sidebar bundle 注册失败（官方 UI 工作流侧栏不可用；可稍后手动：dsh plugin --profile $PROFILE add $SIDEBAR_SRC）"
+  else
+    cat "$PLUGIN_LOG"
+    echo "✓ dsh-better-sidebar 已注册进 bundles（侧边栏工作台 + 工作流画布）"
+  fi
   # link: 安装时聚合包实体留在源码目录，loader 从 profile 根解析不到聚合 patch 挂载的
   # 子插件/better-sidebar——补链进 profile node_modules（npm 渠道 pnpm 会放实体，无需此步）。
   for pkg in $PLUGINS dsh-better-sidebar; do
