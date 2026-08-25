@@ -55,15 +55,15 @@
 ### 常用命令
 
 ```sh
-npm test                                   # 全量单测聚合（scripts/run-tests.sh：web 10 套 + orchestrator 14 套 + llm-guard + canvasui + document-preview）
+npm test                                   # 全量单测聚合（scripts/run-tests.sh：web 14 套 + orchestrator 17 套 + llm-guard + canvasui + larkauth + one + document-preview）
 sh dsh-plugins/build-web.sh                 # 画布双构建（/wf1/ base + 根 base），改前端后必跑（产物不入库，仅落工作区）
 sh dsh-plugins/setup.sh [profile] [端口]    # 安装（默认 dsh-ccpg / 4021）
 sh dsh-plugins/start.sh <profile>           # 启动
 sh dsh-plugins/pack.sh <tag>                # 打包 release（CI 同源）
 
 # 分套运行（改哪跑哪）
-cd web && npm test                          # 前端 10 套
-cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # 引擎 14 套
+cd web && npm test                          # 前端 14 套
+cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # orchestrator 17 套
 node dsh-plugins/dsh-ccpg-canvasui/test/client.test.mjs         # canvasui 客户端
 node dsh-plugins/dsh-ccpg-document-preview/test/index.test.mjs  # 4 例
 ```
@@ -72,11 +72,21 @@ CI：`.github/workflows/ci.yml` 在 PR 与 main push 上跑 `npm test` + `build-
 
 ### 架构铁律（Workflow One 专属）
 
-1. **双端节点注册表**：新增节点类型必须两处注册——引擎 `orchestrator/lib/engine.js` 的 `registerKind({execute, lint, edgeTaken, wantsSink})` + 前端 `web/src/registry.jsx`（icon/色/preset/summary/badges）。AI 助手侧同步 `lib/assistant.js`（NODE_TYPES + persona 契约）与 `lib/variable-schema.js`（变量树）。两处注册即得调度/审批/超时/重试/UI 全部能力，不要另起旁路。
+1. **双端节点注册表**：新增节点类型必须两处注册——引擎 `orchestrator/lib/engine.js` 的 `registerKind({execute, lint, edgeTaken, wantsSink, passThrough, observer})` + 前端 `web/src/registry.jsx`（icon/色/preset/summary/badges）。AI 助手侧同步 `lib/assistant.js`（NODE_TYPES + persona 契约）与 `lib/variable-schema.js`（变量树）。两处注册即得调度/审批/超时/重试/UI 全部能力，不要另起旁路。
 2. **canvasui bundle 是构建产物**：`lib/client.js` 由 `src/client.js` 生成（gitignore 不入库），直接改会被覆盖；改后重跑 `build-canvasui.sh`（`--check` 逐字比对防漂移）。
 3. **4020 Express 回退能力冻结**：新功能只做插件路径（`/wf1/api/*`）；`server/` 仅修 bug。同语义端点双入口实现时以插件端为准。
 4. **工作区本地存储**：工作流与运行记录位于当前 dsh 会话工作目录的 `.workflow-one/workflow-one.sqlite`；state/attachments/runtime 继续使用同目录下文件。节点 agent 以工作区根为 cwd、成果只收集各节点 runtime 输出目录；`.workflow-one/` 必须 gitignore，**绝不提交**。飞书凭据仍是 dsh 用户级数据，不迁入工作区。
 5. **构建产物一律不入库**（`web-dist/`、`canvasui lib/client.js`、`document-preview/dist/`、`web/dist/` 全部 gitignore）：分发包「拿到即装」由 `pack.sh` 现场重跑构建保证；源码安装先 `build-web.sh` 再 `setup.sh`（setup 已前置校验）。绝不为省一步构建把产物提交进仓库。
+6. **消息通知走渠道抽象**：运行级事件、去重、模式判断、摘要脱敏与失败隔离统一放在 `orchestrator/lib/notifications.js`；渠道实现只放 `notification-<channel>.js`，负责配置校验、消息渲染和发送。新增钉钉/企业微信时注册 provider 到 `NotificationChannelRegistry`，并通过 `/wf1/api/tools` 的 `notificationChannels` 暴露给前端；禁止复制运行监听器或在前端写死完整渠道清单。通知失败只能写节点 `notification` 元数据，不能改变业务运行状态。
+
+### 消息通知节点约束
+
+- `notify` 是 `passThrough + observer` 节点：在线路中必须透传上游输出，不连线也必须观察整次运行；进度统计排除 `notify` 与 `note`
+- `terminal` 模式在运行成功、异常或取消后发送一次；`each_node` 在每个业务节点成功/失败后发送，并在运行结束后追加结果通知；断点续跑恢复的节点不重复通知
+- 渠道事件保持中立，至少携带 workflow/run/progress/node/stats/summary/reason；飞书卡片结构不得泄漏到调度层
+- 飞书群聊使用 `targetType=chat_id` + `oc_`，私聊使用 `targetType=open_id` + `ou_`；旧节点缺少 `targetType` 时兼容为 `chat_id`
+- 卡片摘要优先输出节点，无输出节点时回退最后一个成功业务节点；常见 token/password/secret/API key 必须脱敏并限制长度
+- 飞书通知使用画布保存的自建应用凭据（或既有 env 兜底），与 larkauth 的用户扫码登录不是同一套身份；工作流导入导出不得携带凭据值
 
 ### 前端坑
 
@@ -88,5 +98,6 @@ CI：`.github/workflows/ci.yml` 在 PR 与 main push 上跑 `npm test` + `build-
 ### 测试与验证
 
 - 单测全部是零依赖 node 断言脚本（`node:assert` + 自写 runner），直接 `node <file>` 运行；新插件照此约定写测试
-- 改引擎跑 orchestrator 14 套；改前端跑 web 10 套；改 canvasui 跑其 client 测试并重建 bundle；改预览跑 document-preview 4 例
+- 改引擎跑 orchestrator 17 套；改前端跑 web 14 套；改 canvasui 跑其 client 测试并重建 bundle；改预览跑 document-preview 4 例
+- 通知单测：`node test/notifications.test.mjs && node test/notification-feishu.test.mjs`。真实飞书测试是 `test/notification-feishu.live.mjs`（文件名刻意不匹配 `*.test.mjs`，默认测试/CI 不发送消息）；仅在用户明确批准收件人与实发后，用临时环境变量传入 App ID、App Secret 及 `FEISHU_CHAT_ID=oc_...` 或 `FEISHU_OPEN_ID=ou_...`，凭据绝不写入命令文档、源码、fixture 或日志
 - E2E 用 CDP（chrome-devtools）跑真实浏览器验证；dsh 官方 UI 首载慢，等待时间放宽（画布就绪 3.5s→6s），wait text 偶超时先多等几秒再判失败
