@@ -4,14 +4,13 @@
 
 **运行在 [DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) 中的可视化 AI 工作流编排器。** 用拖拽 DAG 组合真实 dsh agent、脚本、条件分支和 HTTP 节点，实时查看运行进度，异常后从中断节点恢复，并将成果与运行进度推送到飞书。
 
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek-Harness-4D6BFE?labelColor=0F0F1A&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3hCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSI+PHBhdGggZD0iTTEyIDJMMjIgMTJMMTIgMjJMMiAxMloiIGZpbGw9IiM0RDZCRkUiLz48L3N2Zz4)](https://github.com/deepseek-ai/deepseek-harness)
 [![npm](https://img.shields.io/npm/v/dsh-ccpg-one)](https://www.npmjs.com/package/dsh-ccpg-one)
 [![CI](https://github.com/chumingjun/harness-one/actions/workflows/ci.yml/badge.svg)](https://github.com/chumingjun/harness-one/actions/workflows/ci.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/chumingjun/harness-one)](https://github.com/chumingjun/harness-one/releases/latest)
 [![MIT License](https://img.shields.io/github/license/chumingjun/harness-one)](LICENSE)
 
-![Workflow One 从完整画布切换到节点运行详情](images/workflow-one-demo.gif)
-
-[查看完整分辨率截图](images/workflow01.png)
+![Workflow One 封面——多智能体工作流，节点输出全透明](images/cover.png)
 
 ## 立即安装
 
@@ -34,6 +33,12 @@ Workflow One 嵌在 dsh 官方界面中：左侧保留与智能体的对话，�
 2. 从工具栏添加输入、智能体、脚本、条件、HTTP、输出、消息通知等节点，连线后在节点面板配置提示词、变量、工具和模型。
 3. 保存并从画布启动，也可以在左侧对话中让 AI 助手检查、修改和运行当前工作流。
 4. 运行卡实时显示已完成节点数和当前节点；点击节点查看实际输入与执行详情，在右侧「过程 / 成果 / 问题」中查看时间线、最终结果和产物。
+
+下面是画布与节点运行详情的完整演示（从全图缩放到节点详情）：
+
+![Workflow One 从完整画布切换到节点运行详情](images/workflow-one-demo.gif)
+
+[查看完整分辨率截图](images/workflow01.png)
 
 下图展示同一次运行的协同视图：左侧对话持续跟踪进度，中间选中正在执行的节点并查看配置，右侧按拓扑顺序展示每个节点的运行状态。
 

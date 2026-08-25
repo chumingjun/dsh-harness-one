@@ -4,27 +4,32 @@
 
 **A visual AI workflow orchestrator running inside [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness).** Build multi-agent DAGs with drag-and-drop nodes, watch live execution, recover interrupted runs, and send deliverables and run updates to Feishu.
 
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek-Harness-4D6BFE?labelColor=0F0F1A&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3hCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSI+PHBhdGggZD0iTTEyIDJMMjIgMTJMMTIgMjJMMiAxMloiIGZpbGw9IiM0RDZCRkUiLz48L3N2Zz4)](https://github.com/deepseek-ai/deepseek-harness)
 [![npm](https://img.shields.io/npm/v/dsh-ccpg-one)](https://www.npmjs.com/package/dsh-ccpg-one)
 [![CI](https://github.com/chumingjun/harness-one/actions/workflows/ci.yml/badge.svg)](https://github.com/chumingjun/harness-one/actions/workflows/ci.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/chumingjun/harness-one)](https://github.com/chumingjun/harness-one/releases/latest)
 [![MIT License](https://img.shields.io/github/license/chumingjun/harness-one)](LICENSE)
 
-![Workflow One switching from the full canvas to live node details](images/workflow-one-demo.gif)
-
-[View the full-resolution screenshot](images/workflow01.png)
+![Workflow One cover — multi-agent workflows with fully transparent node outputs](images/cover.png)
 
 ## Install
 
 Requires Node.js >= 24.15 and an existing dsh installation:
 
 ```sh
-dsh plugin --profile web add dsh-ccpg-one@0.2.1
+dsh plugin --profile web add dsh-ccpg-one@0.3.0
 dsh web
 ```
 
-In Harness Desktop, run `dsh plugin add dsh-ccpg-one@0.2.1` from **Open DSH Terminal**, then restart Desktop. A prebuilt offline bundle is also available from [GitHub Releases](https://github.com/chumingjun/harness-one/releases/latest).
+In Harness Desktop, run `dsh plugin add dsh-ccpg-one@0.3.0` from **Open DSH Terminal**, then restart Desktop. A prebuilt offline bundle is also available from [GitHub Releases](https://github.com/chumingjun/harness-one/releases/latest).
 
 ## What It Does
+
+A full walkthrough — zooming from the complete canvas down to live node details:
+
+![Workflow One switching from the full canvas to live node details](images/workflow-one-demo.gif)
+
+[View the full-resolution screenshot](images/workflow01.png)
 
 - Eight node types: input, agent, QuickJS script, condition, HTTP, output, notification, and note.
 - Parallel DAG scheduling with retries, timeouts, branch isolation, cancellation, replay, and restart recovery.
