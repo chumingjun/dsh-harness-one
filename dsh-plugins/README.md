@@ -22,7 +22,7 @@
 从 Desktop 托盘打开 **Open DSH Terminal**；该终端已绑定当前 profile：
 
 ```sh
-dsh plugin add dsh-ccpg-one@0.2.1
+dsh plugin add dsh-ccpg-one@0.2.2
 ```
 
 安装后重启 Desktop，让新 bundle 进入 Loader 组合。compatibility 与 advanced 模式都继续使用普通 DSH Web Client；画布、同源 `/wf1/api/*`、侧栏和预览无需 Desktop 专用注册。飞书账号页首次点击「自动安装」时，插件通过公开 `desktopPnpm` service 把固定版本 lark-cli 安装到当前 profile，并在 profile 切换或退出时取消仍在运行的操作。
@@ -72,15 +72,19 @@ sh start.sh dev
 - 改引擎（`dsh-ccpg-orchestrator/lib/`）→ 对应面测试（`cd dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done`）→ 重启
 - 发版：`npm run publish:dry-run` 验证 npm 包；`sh dsh-plugins/publish-npm.sh` 按子包→聚合包顺序发布；Git tag 仍由 release.yml 生成 tarball + boot-smoke asset
 
-### 可选件开关（`--one` 模式，启动前 export，可写进工作区 `.env`）
+### 可选件开关（`--one` 模式）
 
-| 开关 | 效果 |
-|---|---|
-| `CCPG_NO_LARK=1` | 不加载 larkauth（飞书扫码登录） |
-| `CCPG_NO_PREVIEW=1` | 不加载 document-preview（预览退化为下载） |
-| `CCPG_NO_SIDEBAR=1` | 不加载 better-sidebar（官方 UI 内工作流侧栏不可用，独立 `/wf1/` 入口仍可用） |
-| `CCPG_NO_GUARD=1` | 不加载 llm-guard（不建议关） |
-| `CCPG_ONLY_CORE=1` | 一键只留核心：tools/orchestrator/web/canvasui |
+启动前 export（源码/`setup.sh --one` 渠道可写进工作区 `.env`；npm 渠道的 sidebar 开关在**安装时**生效，见下表注）：
+
+| 开关 | 效果 | 生效位置 |
+|---|---|---|
+| `CCPG_NO_LARK=1` | 不加载 larkauth（飞书扫码登录） | 运行时（bundle patch） |
+| `CCPG_NO_PREVIEW=1` | 不加载 document-preview（预览退化为下载） | 运行时（bundle patch） |
+| `CCPG_NO_GUARD=1` | 不加载 llm-guard（不建议关） | 运行时（bundle patch） |
+| `CCPG_NO_SIDEBAR=1` | 不装 better-sidebar（官方 UI 内工作流侧栏宿主不可用，独立 `/wf1/` 入口不受影响） | **安装时**（npm 渠道：`npx dsh-ccpg-one` 检测到即 `dsh plugin remove dsh-better-sidebar`；源码渠道：setup.sh 未装它即无） |
+| `CCPG_ONLY_CORE=1` | 一键只留核心：tools/orchestrator/web/canvasui（+ 移除 sidebar） | 运行时 + 安装时 |
+
+> better-sidebar 的挂载由它自己的 `dsh.bundle.patch` 提供（聚合层不再 insert——双 insert 会 duplicate route）。因此关闭 sidebar 无法在运行时做，npm 渠道由安装器移除依赖实现。
 
 > `dsh-ccpg-brand` 不属于聚合包，需要时必须单独安装（`dsh plugin --profile <name> add <repo>/dsh-plugins/dsh-ccpg-brand`）。聚合模式不要再单独 add 其余 7 个子插件或手写 insert 行——双层挂载 = duplicate prefix route。`dsh plugin --profile <name> remove dsh-ccpg-one` 一次卸掉聚合包包含的默认插件。
 
@@ -106,11 +110,19 @@ sh start.sh dev
 
 ### npm 直装
 
-聚合包和 7 个默认插件均为带 `dsh.bundle.patch` 的自描述包。推荐一条命令：
+聚合包和 7 个默认插件均为带 `dsh.bundle.patch` 的自描述包。**pnpm 11 环境推荐**（见下）：
 
 ```sh
-dsh plugin --profile myprofile add dsh-ccpg-one@0.2.1
+npx dsh-ccpg-one myprofile        # 预写 pnpm 11 放行（node-pty/koffi 构建许可）再一步装齐
 ```
+
+也可直接用官方命令：
+
+```sh
+dsh plugin --profile myprofile add dsh-ccpg-one@0.2.2
+```
+
+> **pnpm 11 注意（issue #24）**：`dsh plugin add` 是 profile 目录里裸跑 pnpm，聚合依赖链里的 `node-pty`（dsh-better-sidebar 传递依赖，原生模块）会被 strict-dep-builds 拦下：安装非零退出、且 pnpm 往 profile 的 `pnpm-workspace.yaml` 写非法占位符 `node-pty: set this to true or false`，把 `pnpm approve-builds` 与重跑 install 一起堵死——**重试无效**。0.2.2 起用 `npx dsh-ccpg-one` 安装即可（它先把放行写对再装，幂等，可反复重跑）；已中招的 profile 也能用它自愈。
 
 需要 CCPG 品牌外观时，再显式安装独立插件：
 
