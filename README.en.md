@@ -1,43 +1,86 @@
+<p align="right">
+  <a href="./README.md">简体中文</a> · <strong>English</strong>
+</p>
+
 # Workflow One
 
-[简体中文](README.md) | English
+<p align="center">
+  <img src="./images/cover.png" width="100%" alt="Workflow One multi-agent workflows with fully transparent node outputs">
+</p>
 
-**A visual AI workflow orchestrator running inside [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness).** Build multi-agent DAGs with drag-and-drop nodes, watch live execution, recover interrupted runs, and send deliverables and run updates to Feishu.
+<p align="center">
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/DeepSeek-Harness-4D6BFE?labelColor=0F0F1A" alt="DeepSeek Harness plugin"></a>
+  <a href="https://www.npmjs.com/package/dsh-ccpg-one"><img src="https://img.shields.io/npm/v/dsh-ccpg-one" alt="npm version"></a>
+  <a href="https://github.com/chumingjun/harness-one/actions/workflows/ci.yml"><img src="https://github.com/chumingjun/harness-one/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/chumingjun/harness-one/releases/latest"><img src="https://img.shields.io/github/v/release/chumingjun/harness-one" alt="latest release"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/chumingjun/harness-one" alt="MIT license"></a>
+</p>
 
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek-Harness-4D6BFE?labelColor=0F0F1A&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3hCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSI+PHBhdGggZD0iTTEyIDJMMjIgMTJMMTIgMjJMMiAxMloiIGZpbGw9IiM0RDZCRkUiLz48L3N2Zz4)](https://github.com/deepseek-ai/deepseek-harness)
-[![npm](https://img.shields.io/npm/v/dsh-ccpg-one)](https://www.npmjs.com/package/dsh-ccpg-one)
-[![CI](https://github.com/chumingjun/harness-one/actions/workflows/ci.yml/badge.svg)](https://github.com/chumingjun/harness-one/actions/workflows/ci.yml)
-[![GitHub Release](https://img.shields.io/github/v/release/chumingjun/harness-one)](https://github.com/chumingjun/harness-one/releases/latest)
-[![MIT License](https://img.shields.io/github/license/chumingjun/harness-one)](LICENSE)
+## Turn real agents into observable workflows
 
-![Workflow One cover — multi-agent workflows with fully transparent node outputs](images/cover.png)
+`Workflow One` is a visual AI workflow orchestrator for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness). Build DAGs from real dsh agents, scripts, conditions, and HTTP nodes; start them from the canvas or chat; inspect every node's input, output, and artifacts; and resume interrupted runs without starting over.
+
+## Why Workflow One?
+
+| Capability | What changes |
+| --- | --- |
+| **Visual orchestration** | Express sequential, parallel, and conditional paths as nodes and edges instead of hiding the process in a prompt. |
+| **Real dsh agents** | Each agent node uses dsh models, tools, and Skills, with different models and roles on the same canvas. |
+| **Observable runs** | Inspect live state, actual inputs, outputs, tokens, traces, and artifacts while concurrent runs stay isolated. |
+| **Recoverable execution** | Retry, timeout, continue after failure, or resume from an interruption instead of rerunning the whole workflow. |
+| **Multiple triggers** | Start from the canvas, chat, a webhook, or cron; the AI assistant can also inspect, edit, and run workflows. |
+| **Deliverable results** | Preview or download artifacts and send progress or final results to Feishu groups and users. |
 
 ## Install
 
-Requires Node.js >= 24.15 and an existing dsh installation:
+> [!NOTE]
+> Requires Node.js >= 22.13.0 and [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): `npm i -g @deepseek-ai/dsh`.
+
+### npm
 
 ```sh
-dsh plugin --profile web add dsh-ccpg-one@0.3.0
+dsh plugin --profile web add dsh-ccpg-one@latest
 dsh web
 ```
 
-In Harness Desktop, run `dsh plugin add dsh-ccpg-one@0.3.0` from **Open DSH Terminal**, then restart Desktop. A prebuilt offline bundle is also available from [GitHub Releases](https://github.com/chumingjun/harness-one/releases/latest).
+Harness Desktop users should open **Open DSH Terminal**, run `dsh plugin add dsh-ccpg-one@latest`, and restart Desktop. Do not run `setup.sh` in Desktop; it manages its own profile, Node/pnpm runtime, and loopback port. See [Desktop setup and troubleshooting](dsh-plugins/DESKTOP.md).
 
-## What It Does
+### Offline bundle
 
-A full walkthrough — zooming from the complete canvas down to live node details:
+Download the prebuilt bundle from [GitHub Releases](https://github.com/chumingjun/harness-one/releases/latest):
+
+```sh
+curl -LO https://github.com/chumingjun/harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
+tar -xzf dsh-ccpg-plugins-<tag>.tar.gz && cd dsh-plugins
+sh setup.sh --one wf1 4021
+sh start.sh wf1                         # http://127.0.0.1:4021/
+```
+
+### Build from source
+
+```sh
+git clone https://github.com/chumingjun/harness-one.git
+cd harness-one
+npm test                                # Optional: run the complete test suite
+sh dsh-plugins/build-web.sh             # Required for source installs
+sh dsh-plugins/setup.sh --one dev 4021
+sh dsh-plugins/start.sh dev
+```
+
+Models and API keys are managed entirely by the dsh profile. This repository and its plugins never hard-code or store keys. See [`dsh-plugins/README.md`](dsh-plugins/README.md) for complete setup, configuration, and development details.
+
+## How it works
+
+Workflow One lives inside the official dsh interface: the conversation remains visible on the left, with a zoomable workflow canvas beside it.
+
+1. Open **Workflow** beside the dsh chat input, then create or load a workflow.
+2. Add input, agent, script, condition, HTTP, output, notification, or note nodes and configure their prompts, variables, tools, and models.
+3. Save and run from the canvas, or ask the AI assistant in chat to inspect, edit, and run the workflow.
+4. Select a running node to inspect its actual input and execution details, then review the timeline, final result, and artifacts in the result panel.
 
 ![Workflow One switching from the full canvas to live node details](images/workflow-one-demo.gif)
 
 [View the full-resolution screenshot](images/workflow01.png)
-
-- Eight node types: input, agent, QuickJS script, condition, HTTP, output, notification, and note.
-- Parallel DAG scheduling with retries, timeouts, branch isolation, cancellation, replay, and restart recovery.
-- Live SSE status, per-node inputs and outputs, token usage, traces, artifacts, and document previews.
-- Stable template variables, workflow inputs, global variables, and structured agent outputs.
-- AI-assisted canvas editing through native dsh tools.
-- Webhook and cron triggers, optional Feishu document writeback, and workflow notification cards.
-- Workspace-local SQLite storage for workflows and run history.
 
 ![Conversation, node configuration, and live run progress](images/workflow.png)
 
@@ -55,19 +98,6 @@ Cards show progress, duration, node counts, output summaries, and failure or can
 ## Importable Examples
 
 [`examples/workflows/`](examples/workflows/) contains three ready-to-import workflows: repair ticket normalization, urgency routing, and parallel review. Open the Workflow list, choose **Import**, and select a `.workflow-one.json` file.
-
-## Source Setup
-
-```sh
-git clone https://github.com/chumingjun/harness-one.git
-cd harness-one
-npm test
-sh dsh-plugins/build-web.sh
-sh dsh-plugins/setup.sh --one dev 4021
-sh dsh-plugins/start.sh dev
-```
-
-The plugin uses the model provider configured by dsh. This repository never stores API keys.
 
 ## Packages
 
