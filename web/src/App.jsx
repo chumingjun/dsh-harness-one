@@ -159,6 +159,23 @@ export default function App() {
         done: Object.values(detail.nodeStates || {}).filter((st) => ['success', 'error', 'canceled', 'skipped'].includes(st.status)).length,
         total: (detail.graph?.nodes || []).filter((n) => n.type !== 'notify').length || current.total,
       }));
+      // 未旁观过的运行（定时触发/历史）没有过程事件，从详情合成一份，过程 tab 不空白
+      setEventsByRunId((current) => (current[runId]?.length ? current : {
+        ...current,
+        [runId]: [
+          ...Object.entries(detail.nodeStates || {})
+            .filter(([, st]) => st.status !== 'queued')
+            .map(([nodeId, st]) => ({
+              t: Date.now(), kind: 'node', runId, nodeId,
+              nodeLabel: labelOf(nodesRef.current, nodeId).replace(/\(.*\)$/, ''),
+              status: st.status, text: st.error, chars: st.chars, durationMs: st.durationMs,
+            })),
+          {
+            t: Date.now(), kind: 'run', runId, status: detail.status,
+            text: detail.status === 'running' ? '运行进行中' : `运行：${STATUS_CN[detail.status] || detail.status}`,
+          },
+        ],
+      }));
     };
     const cached = runDetailsRef.current[runId];
     if (cached) applyDetail(cached);
