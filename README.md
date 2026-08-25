@@ -99,6 +99,12 @@ sh start.sh dev
 
 官方 dsh Web UI 的聊天里直接改图（同 session，经 canvas_* 工具落图）：`canvas_get_graph` / `canvas_graph_summary` / `canvas_graph_patch`（批量原子操作，含 script 节点契约）/ `canvas_lint_graph` / `canvas_run_workflow` / `canvas_run_status`。点击对话输入框旁的工作流按钮，在右侧 better-sidebar 打开当前 session 的画布；主区对话持续可见。
 
+**workflow_* 工具家族**（按工作流 id/name 操作，不依赖画布绑定，任意官方聊天会话可用；按会话 cwd 定工作区）：
+
+- 查询：`workflow_list`（清单+各 live 运行数）/ `workflow_get`（概要省 token 或完整图）/ `workflow_runs`（live 优先+最近 N，可过滤）/ `workflow_run_status`（单 run 详情）
+- 运行：`workflow_run`（异步返回 runId）/ `workflow_run_cancel`（按 runId、工作流或 all 批量）
+- 管理：`workflow_patch`（原子改图+可选改名，正打开的画布实时同步）/ `workflow_create` / `workflow_delete`（confirm 门 + live/webhook/定时关联守卫）/ `workflow_open`（把绑定画布切到指定工作流，SSE 联动）
+
 ## 飞书
 
 - **账号登录**：官方 dsh Web UI 设置面板「飞书账号」扫码（lark-cli Device Flow，token 由 CLI 自管零落盘）；user token 后台自动续约（refresh 轮换，授权长期有效）
