@@ -155,9 +155,12 @@ if [ "$AGGREGATE" = 1 ]; then
   fi
   rm_vendor_ov
   # better-sidebar 是聚合包直接依赖，不单独 add——聚合 patch 已挂它，双 add 会 duplicate id。
+  # pnpm 11 预放行（issue #24）：node-pty（better-sidebar 传递依赖）原生构建被 strict-dep-builds
+  # 拦截会让 add 非零退出且写坏 pnpm-workspace.yaml 占位符——复用包内安装入口的预写（幂等）。
+  "$NODE_BIN" "$HERE/dsh-ccpg-one/bin/install.js" "$PROFILE" --prewrite
   if ! "$NODE_BIN" "$DSH_BIN" plugin --profile "$PROFILE" add "$HERE/dsh-ccpg-one" >"$PLUGIN_LOG" 2>&1; then
     cat "$PLUGIN_LOG" >&2
-    echo "✗ 聚合包安装失败"
+    echo "✗ 聚合包安装失败（pnpm 11 用户可改用: npx dsh-ccpg-one $PROFILE，自带放行预写）"
     exit 1
   fi
   cat "$PLUGIN_LOG"
@@ -227,9 +230,11 @@ fi
 
 # 4.5 DSH-better-sidebar（社区侧边栏工作台，npm 安装）——「工作流」侧栏的宿主。
 # canvasui 对它是软依赖：装不上时官方 UI 内无法打开画布，独立 /wf1/ 入口仍可用，故失败仅告警。
-# 逐插件模式：走 registry npm 包单独 add（自带 dsh.bundle.patch 一步挂载）。
+# 逐插件模式：走 registry npm 包单独 add（自带 dsh.bundle.patch 一步挂载）；
+# pnpm 11 下先预放行 node-pty 构建（与聚合模式同源，issue #24）。
 # 聚合模式：聚合包直接依赖已带 + bundle patch 已挂，单独 add 会 duplicate id——跳过。
 if [ "$AGGREGATE" != 1 ]; then
+  "$NODE_BIN" "$HERE/dsh-ccpg-one/bin/install.js" "$PROFILE" --prewrite
   if ! "$NODE_BIN" "$DSH_BIN" plugin --profile "$PROFILE" add "$SIDEBAR_SRC" >/dev/null 2>&1; then
     echo "⚠ dsh-better-sidebar 安装失败（官方 UI 工作流侧栏不可用；可稍后手动：dsh plugin --profile $PROFILE add $SIDEBAR_SRC）"
   else
