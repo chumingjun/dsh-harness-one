@@ -133,7 +133,7 @@ export function mergeExecutionResults(baseResult, patchResult) {
   };
 }
 
-const NODE_META_ALLOWLIST = ['status', 'chars', 'durationMs', 'model', 'runtime', 'turns', 'usage', 'writeback', 'toleratedError'];
+const NODE_META_ALLOWLIST = ['status', 'chars', 'durationMs', 'model', 'runtime', 'turns', 'usage', 'writeback', 'notification', 'toleratedError'];
 
 export function safeNodeStateMeta(state = {}) {
   return Object.fromEntries(NODE_META_ALLOWLIST.filter((key) => state[key] !== undefined).map((key) => [key, state[key]]));

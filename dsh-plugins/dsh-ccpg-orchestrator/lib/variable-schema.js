@@ -24,6 +24,7 @@ const META_SCHEMA = objectSchema({
   status: field('string', '节点执行状态'), chars: field('number', '文本输出字符数'), durationMs: field('number', '执行耗时（毫秒）'),
   model: field('string', '使用的模型'), runtime: field('string', '执行运行时'), turns: field('number', '智能体轮数'),
   usage: objectSchema({}, 'Token 用量'), writeback: field('any', '输出写回结果'),
+  notification: field('any', '消息通知发送结果'),
   toleratedError: field('string', '容错继续的错误'),
 });
 

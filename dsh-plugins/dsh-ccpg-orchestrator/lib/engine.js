@@ -6,6 +6,7 @@ import { getAgentOutputConfig } from './agent-schema.js';
 import { lintScriptInputs, resolveScriptInputs } from './typed-expression.js';
 import { getScriptOutputSchema, validateScriptOutput } from './script-schema.js';
 import { normalizeScriptTimeout, SCRIPT_LIMITS } from './script-runner.js';
+import { validateNotificationNodeData } from './notifications.js';
 // 相对 v1 的升级：
 //   - 多运行实例并存（Map 而非单 this.s）
 //   - 并发上限（就绪节点排队，槽位释放依次启动）
@@ -51,9 +52,10 @@ export function listKinds() {
 }
 
 // lint 共用上下文（lintGraph 构造）
-function lintContextFor(graph, nodes, labels, labelCount, incomingIds) {
+function lintContextFor(graph, nodes, labels, labelCount, incomingIds, options) {
   return {
     graph, nodes, labels, labelCount, incomingIds,
+    ...options,
     renderRef: (tpl) => tpl, // lint 阶段不渲染，仅提供字段
   };
 }
@@ -723,6 +725,17 @@ registerKind({
   },
 });
 
+// 消息通知是运行级观察器；节点执行本身只负责在线路中透传数据。
+registerKind({
+  type: 'notify',
+  passThrough: true,
+  observer: true,
+  async execute() { return ''; },
+  lint(node, lintCtx) {
+    return validateNotificationNodeData(node.data, lintCtx.notificationChannels);
+  },
+});
+
 // 注释节点：画布上的说明便签，不参与执行。passThrough 让引擎跳过执行并把
 // 其上游输出原样转发给下游（图结构语义不变，纯标注用途）。
 registerKind({
@@ -733,7 +746,7 @@ registerKind({
 
 // ---- 图静态校验（lint）----
 // 返回 { ok, issues: [{level:'error'|'warn', nodeId?, message}] }
-export function lintGraph(graph) {
+export function lintGraph(graph, options = {}) {
   const issues = [];
   if (!graph || !Array.isArray(graph.nodes) || graph.nodes.length === 0) {
     return { ok: false, issues: [{ level: 'error', message: '图中没有节点' }] };
@@ -770,7 +783,7 @@ export function lintGraph(graph) {
     if (!kind) {
       issues.push({ level: 'error', nodeId: n.id, message: `未知节点类型：${n.type || '(空)'}` });
     } else if (kind.lint) {
-      const lintCtx = lintContextFor(graph, nodes, labels, labelCount, incomingIds.get(n.id) || []);
+      const lintCtx = lintContextFor(graph, nodes, labels, labelCount, incomingIds.get(n.id) || [], options);
       for (const iss of kind.lint(n, lintCtx) || []) issues.push({ nodeId: n.id, ...iss });
     }
 

@@ -49,6 +49,8 @@ import {
   validateStructuredOutputWithRepair,
 } from './agent-schema.js';
 import { FeishuClient } from './feishu.js';
+import { createFeishuNotificationChannel } from './notification-feishu.js';
+import { NotificationChannelRegistry, WorkflowNotificationManager } from './notifications.js';
 import { listFeishuCreds, addFeishuCred, removeFeishuCred, setDefaultFeishuCred, getFeishuCredOrEnv } from './credentials.js';
 import { Orchestrator, lintGraph, getKind } from './engine.js';
 import { createWorkflowExportManifest, importWorkflowDocument, normalizeWorkflowDocument } from './workflow-document.js';
@@ -109,6 +111,10 @@ export function apply(ctx, config) {
   ctxRef = ctx; // replayTrace 需要在路由 handler 里拿到 ctx.sessionPersistence
   const stores = new Map();
   const publicHooks = new Map();
+  const notificationChannels = new NotificationChannelRegistry();
+  notificationChannels.register(createFeishuNotificationChannel({ getCredential: getFeishuCredOrEnv }));
+  const notifications = new WorkflowNotificationManager({ channels: notificationChannels, logger: ctx.logger });
+  const lintWorkflowGraph = (graph) => lintGraph(graph, { notificationChannels });
   let legacyClaimedWorkspace = null;
 
   const canonicalWorkspace = (cwd) => {
@@ -415,7 +421,7 @@ export function apply(ctx, config) {
         const cv = canvasOf(exec.canvasId);
         if (!cv.graph) return '画布尚未打开或未上报图。';
         const graph = cv.workflowId ? (() => { try { return readWf(cv.workflowId)?.graph || cv.graph; } catch { return cv.graph; } })() : cv.graph;
-        const lint = lintGraph(graph);
+        const lint = lintWorkflowGraph(graph);
         if (!lint.ok) return `图有错误不能运行：\n${lint.issues.filter((x) => x.level === 'error').map((x) => x.message).join('\n')}`;
         const globals = (() => { try { return globalContext(); } catch { return { globalVariables: {} }; } })();
         const { runId } = startRun(graph, {
@@ -600,6 +606,7 @@ export function apply(ctx, config) {
   };
   const onOrchestratorEvent = (event, payload) => {
     if (event === 'node-status' && TERMINAL_NODE_STATUSES.has(payload?.status)) {
+      notifications.onNodeStatus(payload, orch?.runs.get(payload.runId)?.run);
       try { checkpointRun(payload.runId); }
       catch (error) { ctx.logger?.error?.(`dsh-ccpg 运行检查点写入失败（${payload?.runId || 'unknown'}）：${error.message}`); }
     }
@@ -689,6 +696,7 @@ export function apply(ctx, config) {
   } = {}) => {
     const store = currentStore();
     const runId = providedRunId || `run_${Date.now().toString(36)}_${++runIdSeq}`;
+    notifications.startRun({ runId, graph, workflowName, workflowId });
     pendingRunIds.add(runId);
     // 启动即落盘运行中快照：成果面板在 run-start 后立刻拉 /run-results，
     // 只等最终 persistRun 的话长运行期间 readRun 一直 404（前端退避耗尽即报「运行记录不存在」）。
@@ -708,11 +716,17 @@ export function apply(ctx, config) {
       workspaceRoot: store.workspaceRoot,
       globalVariables, workflowVariables, runInputs,
       resume,
-    })).then((run) => {
+    })).then(async (run) => {
       if (replayOf) run.replayOf = replayOf;
+      try { await notifications.complete(runId, run); }
+      catch (error) {
+        notifications.discard(runId);
+        ctx.logger?.warn?.(`[notify] 运行通知收尾失败（${runId}）：${error.message}`);
+      }
       persistRun(run, graph, workflowName, workflowId);
       return run;
     })).catch((error) => {
+      notifications.discard(runId);
       ctx.logger?.error?.(`dsh-ccpg 运行失败（${runId}）：${error.message}`);
       return null;
     }).finally(() => pendingRunIds.delete(runId));
@@ -1118,7 +1132,7 @@ export function apply(ctx, config) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
     if (!body?.graph) return json(res, 400, { error: '缺少 graph' });
-    json(res, 200, lintGraph(body.graph));
+    json(res, 200, lintWorkflowGraph(body.graph));
   } });
 
   // ---- 工作流库 ----
@@ -1234,7 +1248,7 @@ export function apply(ctx, config) {
     }
     try { assertNonSensitiveVariableDefinitions(definitions, '工作流变量定义'); } catch (error) { return routeError(res, error); }
     if (!graph || !Array.isArray(graph.nodes)) return json(res, 400, { error: '缺少 graph' });
-    const lint = lintGraph(graph);
+    const lint = lintWorkflowGraph(graph);
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });
     const { runId } = startRun(graph, {
       triggerInput: body.triggerInput ?? '', workflowName, workflowId,
@@ -1398,10 +1412,12 @@ export function apply(ctx, config) {
   register({ kind: 'exact', path: '/wf1/api/runs', handler(_req, res) {
     const live = [...orch.runs.values()].filter((entry) => entry.run.workspaceRoot === currentStore().workspaceRoot).map((entry) => entry.run.runId);
     const runProgress = (r) => {
-      // 进度 = 终态节点数 / 图节点数。passThrough 注释节点通常不进 nodeStates，用图快照兜底总数。
-      const total = (r.graph?.nodes?.length ?? Object.keys(r.nodeStates || {}).length) || Object.keys(r.nodeStates || {}).length;
-      const done = Object.values(r.nodeStates || {}).filter((st) => ['success', 'error', 'canceled', 'skipped'].includes(st?.status)).length;
-      const succeeded = Object.values(r.nodeStates || {}).filter((st) => st?.status === 'success').length;
+      const nodeIds = r.graph?.nodes?.filter((node) => node.type !== 'notify').map((node) => node.id)
+        || Object.keys(r.nodeStates || {});
+      const states = nodeIds.map((nodeId) => r.nodeStates?.[nodeId]);
+      const total = nodeIds.length;
+      const done = states.filter((st) => ['success', 'error', 'canceled', 'skipped'].includes(st?.status)).length;
+      const succeeded = states.filter((st) => st?.status === 'success').length;
       return { done, total, succeeded };
     };
     const resumable = (r, isLive) => !isLive
@@ -1578,7 +1594,7 @@ export function apply(ctx, config) {
     let globals; try { globals = globalContext(); } catch (error) { return routeError(res, error); }
     const persistedWorkflow = prev.workflowId ? readWf(prev.workflowId) : null;
     const workflowVariables = variableDefinitionsToValues(persistedWorkflow?.variables || []);
-    const lint = lintGraph(graph);
+    const lint = lintWorkflowGraph(graph);
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });
     const { runId } = startRun(graph, {
       triggerInput, workflowName: prev.workflowName || null, workflowId: prev.workflowId || null,
@@ -1629,7 +1645,7 @@ export function apply(ctx, config) {
     let runInputs; try { runInputs = assertSafeContextObject(prev.runInputs, 'runInputs'); } catch (error) { return routeError(res, error); }
     let globals; try { globals = globalContext(); } catch (error) { return routeError(res, error); }
     const workflowVariables = variableDefinitionsToValues(persistedWorkflow?.variables || []);
-    const lint = lintGraph(graph);
+    const lint = lintWorkflowGraph(graph);
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });
     const reusableSet = new Set(reusable);
     const resumeSeed = {
@@ -1673,7 +1689,7 @@ export function apply(ctx, config) {
       }
       wf.name = wf.name.slice(0, 60);
       wf.graph = { nodes: wf.graph.nodes, edges: Array.isArray(wf.graph.edges) ? wf.graph.edges : [] };
-      const lint = lintGraph(wf.graph);
+      const lint = lintWorkflowGraph(wf.graph);
       if (!lint.ok) return json(res, 400, { error: `导入的图校验失败：${lint.issues.find((i) => i.level === 'error').message}` });
       wf = writeWf(wf);
       return json(res, 200, { ok: true, id, name: wf.name, warnings: lint.issues.filter((i) => i.level === 'warn').length });
@@ -2050,6 +2066,7 @@ export function apply(ctx, config) {
       json(res, 200, {
         tools: schemas.map((s) => ({ name: s.name, description: s.description })),
         feishuEnabled: Boolean(getFeishuCredOrEnv()),
+        notificationChannels: notificationChannels.list(),
       });
     } catch (e) {
       json(res, 200, { tools: [], error: String(e.message) });

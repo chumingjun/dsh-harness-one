@@ -126,6 +126,27 @@ await test('顺序执行 + 输出节点汇总', async () => {
   assert.ok(run.outputs.c.includes('[B] done'));
 });
 
+await test('消息通知节点在线透传，独立放置也正常收尾', async () => {
+  const { orch } = makeOrch();
+  const graph = {
+    nodes: [
+      { id: 'input', type: 'input', data: { label: '输入', text: 'hello' } },
+      { id: 'notify-inline', type: 'notify', data: { label: '在线通知', channel: 'feishu', mode: 'terminal', channelConfig: { targetId: 'oc_group' } } },
+      { id: 'output', type: 'output', data: { label: '输出' } },
+      { id: 'notify-alone', type: 'notify', data: { label: '独立通知', channel: 'feishu', mode: 'each_node', channelConfig: { targetId: 'oc_group' } } },
+    ],
+    edges: [
+      { id: 'e1', source: 'input', target: 'notify-inline' },
+      { id: 'e2', source: 'notify-inline', target: 'output' },
+    ],
+  };
+  const run = await orch.run(graph);
+  assert.match(run.outputs.output, /hello/);
+  assert.equal(run.nodeStates['notify-inline'].status, 'success');
+  assert.equal(run.nodeStates['notify-alone'].status, 'success');
+  assert.equal(lintGraph(graph).ok, true);
+});
+
 await test('条件分支：include 命中走 true，另一侧跳过', async () => {
   const { orch } = makeOrch(async (node) => ({ output: `[${node.data.label}]` }));
   const run = await orch.run({
