@@ -1844,6 +1844,14 @@ export function apply(ctx, config) {
     });
     return runId;
   };
+  // 计数唯一属主是 meta Map：调度器经 onFire/onSkip 回调增量、这里落盘。
+  // onMeta 只回传 nextAt（不含计数），手动「立即运行」也走 onFire，统计不会被覆盖回退。
+  const bumpScheduleStat = (key, field) => {
+    const prev = currentSchedulerMeta().get(key);
+    if (!prev) return;
+    currentSchedulerMeta().set(key, { ...prev, [field]: (prev[field] || 0) + 1 });
+    persistTriggers();
+  };
   const startSchedule = (key, meta) => {
     const entry = createScheduler({
       meta: { ...meta, key },
@@ -1852,22 +1860,22 @@ export function apply(ctx, config) {
       isBusy: () => scheduleBusy(meta.workflowId),
       logger: ctx.logger,
       onMeta: (live) => {
-        // 只更新统计/nextAt，创建时字段以 meta Map 为准（PATCH 可能已改 cron 等）
         const current = currentSchedulerMeta().get(key) || { ...meta, key };
-        currentSchedulerMeta().set(key, { ...current, ...live, key });
+        // 只取 nextAt，配置与计数以 Map 为准（PATCH 可能已改 cron，手动运行已改计数）
+        currentSchedulerMeta().set(key, { ...current, nextAt: live.nextAt ?? null, key });
       },
+      onFire: () => bumpScheduleStat(key, 'fireCount'),
+      onSkip: () => bumpScheduleStat(key, 'skippedCount'),
     });
     return entry;
   };
-  // 手动「立即运行」：不受 overlap/enabled 限制，不干扰调度链
+  // 手动「立即运行」：不受 overlap/enabled 限制，不干扰调度链；经 onFire 记账
   const runScheduleNow = (key) => {
     const prev = currentSchedulerMeta().get(key);
     if (!prev) return { ok: false, error: '任务不存在' };
     const runId = fireScheduleRun(prev);
     if (!runId) return { ok: false, error: '工作流已删除或启动失败' };
-    const nextMeta = { ...prev, fireCount: (prev.fireCount || 0) + 1 };
-    currentSchedulerMeta().set(key, nextMeta);
-    persistTriggers();
+    bumpScheduleStat(key, 'fireCount');
     return { ok: true, runId };
   };
   ensureTriggers = () => {

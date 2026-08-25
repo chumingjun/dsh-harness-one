@@ -86,30 +86,23 @@ export function persistableScheduleMeta(meta) {
 }
 
 // 链式调度器：到点按 overlap 策略决定真跑还是跳过；fireNow 供「立即运行」绕过策略。
-// onMeta 在统计/nextAt 变化时回调（index.js 借此同步 meta Map 并落盘）。
-export function createScheduler({ meta, fire, isBusy, logger, now = () => Date.now(), onMeta } = {}) {
+// 计数属主是调用方（meta Map）：onFire/onSkip 回调时由调用方增量并落盘，
+// onMeta 只回传 nextAt（不带 fireCount/skippedCount，避免覆盖调用方的手动计数）。
+export function createScheduler({ meta, fire, isBusy, logger, now = () => Date.now(), onMeta, onFire, onSkip } = {}) {
   const normalized = normalizeScheduleMeta(meta);
   const state = {
     stopped: false,
     rawTimer: null,
     nextAt: null,
-    fireCount: normalized.fireCount,
-    skippedCount: normalized.skippedCount,
   };
-  const liveMeta = () => ({
-    ...normalized,
-    key: normalized.key,
-    nextAt: state.nextAt,
-    fireCount: state.fireCount,
-    skippedCount: state.skippedCount,
-  });
+  // onMeta 只回传 { key, nextAt }：计数属主是调用方（回传计数会把它手动记的账覆盖回退）
+  const liveMeta = () => ({ key: normalized.key, nextAt: state.nextAt });
   const report = () => onMeta?.(liveMeta());
 
   const runFire = () => {
-    state.fireCount += 1;
-    report();
     try {
       fire?.();
+      onFire?.();
     } catch (error) {
       logger?.warn?.(`dsh-ccpg 定时运行失败（${normalized.key}）：${error?.message || error}`);
     }
@@ -132,13 +125,16 @@ export function createScheduler({ meta, fire, isBusy, logger, now = () => Date.n
     const onTime = () => {
       if (state.stopped) return;
       if (normalized.overlap === 'skip' && isBusy?.()) {
-        state.skippedCount += 1;
+        state.skipped = true;
         logger?.info?.(`dsh-ccpg 定时触发跳过（${normalized.key}）：上一轮运行尚未结束`);
+        onSkip?.();
         report();
         armNext();
         return;
       }
+      state.skipped = false;
       runFire();
+      report();
       armNext();
     };
     if (nextMs > MAX_WAIT) {
@@ -150,7 +146,8 @@ export function createScheduler({ meta, fire, isBusy, logger, now = () => Date.n
   armNext();
 
   return {
-    // 手动「立即运行」：不受 overlap/enabled 限制，不干扰既定调度链
+    // 手动「立即运行」：不受 overlap/enabled 限制，不干扰既定调度链。
+    // 计数同样经 onFire 回调由调用方记账。
     fireNow() {
       if (state.stopped) return false;
       runFire();

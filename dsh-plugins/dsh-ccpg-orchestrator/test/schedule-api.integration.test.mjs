@@ -143,6 +143,22 @@ await test('POST /schedule/run：立即触发返回 runId 并计入 fireCount；
   const row = list.body.schedules.find((s) => s.key === globalThis.__schKey);
   assert.equal(row.fireCount, 1);
   assert.deepEqual(row.runInputs, { env: 'prod' });
+  // 手动计数不能被调度链的 nextAt 上报冲掉（onMeta 只回传 nextAt）
+  const listAgain = await call('GET', '/wf1/api/schedule');
+  assert.equal(listAgain.body.schedules.find((s) => s.key === globalThis.__schKey).fireCount, 1);
+});
+
+await test('PATCH：改配置/启停不清零触发与跳过统计', async () => {
+  await call('PATCH', '/wf1/api/schedule', { key: globalThis.__schKey, cron: '0 7 * * *' });
+  const afterCron = await call('GET', '/wf1/api/schedule');
+  const rowCron = afterCron.body.schedules.find((s) => s.key === globalThis.__schKey);
+  assert.equal(rowCron.fireCount, 1, '改 cron 不应清零 fireCount');
+  await call('PATCH', '/wf1/api/schedule', { key: globalThis.__schKey, enabled: false });
+  await call('PATCH', '/wf1/api/schedule', { key: globalThis.__schKey, enabled: true });
+  const afterToggle = await call('GET', '/wf1/api/schedule');
+  const rowToggle = afterToggle.body.schedules.find((s) => s.key === globalThis.__schKey);
+  assert.equal(rowToggle.fireCount, 1, '停用/启用不应清零 fireCount');
+  await call('PATCH', '/wf1/api/schedule', { key: globalThis.__schKey, cron: '0 9 * * *' });
 });
 
 await test('PATCH /schedule：停用后 nextAt 置空、不再持有调度器；重新启用恢复', async () => {

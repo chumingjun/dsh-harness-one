@@ -93,39 +93,42 @@ await test('persistableScheduleMeta：落盘含全部统计与配置字段', () 
   });
 });
 
-await test('createScheduler：每秒 cron 到点触发 fire 并累计 fireCount', async () => {
+await test('createScheduler：每秒 cron 到点触发 fire 并回调 onFire', async () => {
   let fired = 0;
+  let onFire = 0;
   const metas = [];
   const scheduler = createScheduler({
     meta: { key: 'sch_t1', workflowId: 'wf', cron: '* * * * * *', overlap: 'skip' },
     fire: () => { fired += 1; },
+    onFire: () => { onFire += 1; },
     isBusy: () => false,
     onMeta: (m) => metas.push(m),
   });
   try {
     await sleep(2300);
     assert.ok(fired >= 2, `expect >=2 fires got ${fired}`);
+    assert.equal(onFire, fired, 'onFire 每次真跑都应回调');
     const last = metas[metas.length - 1];
-    assert.equal(last.fireCount, fired);
     assert.ok(last.nextAt, 'nextAt 应已上报');
+    assert.equal(last.fireCount, undefined, 'onMeta 不回传计数（计数属主是调用方）');
   } finally {
     scheduler.stop();
   }
 });
 
-await test('createScheduler：skip 策略下上一轮 live → 到点跳过并累计 skippedCount，不调 fire', async () => {
+await test('createScheduler：skip 策略下上一轮 live → onSkip 回调且不调 fire', async () => {
   let fired = 0;
   let skipped = 0;
   const scheduler = createScheduler({
     meta: { key: 'sch_t2', workflowId: 'wf', cron: '* * * * * *', overlap: 'skip' },
     fire: () => { fired += 1; },
+    onSkip: () => { skipped += 1; },
     isBusy: () => true,
-    onMeta: (m) => { skipped = m.skippedCount; },
   });
   try {
     await sleep(2300);
     assert.equal(fired, 0, 'skip + busy 不应真跑');
-    assert.ok(skipped >= 2, `expect skippedCount>=2 got ${skipped}`);
+    assert.ok(skipped >= 2, `expect onSkip>=2 got ${skipped}`);
   } finally {
     scheduler.stop();
   }
@@ -146,15 +149,18 @@ await test('createScheduler：parallel 策略无视 isBusy 直接触发', async 
   }
 });
 
-await test('createScheduler：fireNow 立即触发且不受 isBusy 影响；stop 后 fireNow 拒绝', () => {
+await test('createScheduler：fireNow 立即触发且走 onFire、不受 isBusy 影响；stop 后拒绝', () => {
   let fired = 0;
+  let onFire = 0;
   const scheduler = createScheduler({
     meta: { key: 'sch_t4', workflowId: 'wf', cron: '0 9 * * *', overlap: 'skip' },
     fire: () => { fired += 1; },
+    onFire: () => { onFire += 1; },
     isBusy: () => true,
   });
   assert.equal(scheduler.fireNow(), true);
   assert.equal(fired, 1);
+  assert.equal(onFire, 1, 'fireNow 也应经 onFire 记账');
   scheduler.stop();
   assert.equal(scheduler.fireNow(), false);
   assert.equal(fired, 1);
@@ -174,16 +180,16 @@ await test('createScheduler：无效 cron 起动即停（不触发 fire），nex
   scheduler.stop();
 });
 
-await test('createScheduler：统计从 meta 续算（重启恢复语义）', () => {
-  const metas = [];
+await test('createScheduler：fire 失败也照常链下一轮（不卡死调度）', async () => {
+  let fired = 0;
   const scheduler = createScheduler({
-    meta: { key: 'sch_t6', workflowId: 'wf', cron: '0 9 * * *', overlap: 'skip', fireCount: 7, skippedCount: 4 },
-    fire: () => {},
-    onMeta: (m) => metas.push(m),
+    meta: { key: 'sch_t6', workflowId: 'wf', cron: '* * * * * *', overlap: 'skip' },
+    fire: () => { fired += 1; throw new Error('boom'); },
+    logger: { warn() {} },
   });
   try {
-    assert.equal(metas[0].fireCount, 7);
-    assert.equal(metas[0].skippedCount, 4);
+    await sleep(2300);
+    assert.ok(fired >= 2, `异常后链式调度应继续 got ${fired}`);
   } finally {
     scheduler.stop();
   }
