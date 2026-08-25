@@ -1,16 +1,18 @@
 name: ci
 
-# PR 与 main push 的门禁：全量单测 + 前端双构建验证。
+# PR 门禁：全量单测 + 前端双构建验证。
 # 单测 = scripts/run-tests.sh（根 npm test 同源，零依赖 node:assert）；
 # 构建只验证能产出（产物不入库，release 打包仍走 release.yml 的 pack.sh）。
 
 on:
   pull_request:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   test-and-build:
