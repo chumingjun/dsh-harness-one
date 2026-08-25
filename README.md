@@ -34,7 +34,7 @@
 ## 安装
 
 > [!NOTE]
-> 需要 Node.js >= 22.13.0，并已安装 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)：`npm i -g @deepseek-ai/dsh`。
+> 需要 Node.js >= 22.15.0（dsh 本体用到 `node:zlib` 的 zstd API，22.15 起提供），并已安装 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)：`npm i -g @deepseek-ai/dsh`。
 
 ### npm
 

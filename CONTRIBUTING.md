@@ -4,7 +4,7 @@
 
 ## 开发环境
 
-- Node.js >= 22.13.0
+- Node.js >= 22.15.0
 - 全局安装 `@deepseek-ai/dsh`
 - macOS / Linux，Windows 使用 WSL 或 Git Bash
 

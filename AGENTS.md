@@ -8,7 +8,7 @@
 
 ## 环境前提
 
-- Node ≥ 22.13.0（Workflow One 使用内置 `node:sqlite`）。系统自带 Node 版本不够时，用 `DSH_NODE` 环境变量指向任意 ≥ 22.13.0 的 node 可执行文件（setup/start/pack 脚本都认它）
+- Node ≥ 22.15.0（Workflow One 用内置 `node:sqlite`；dsh 本体用 `node:zlib` 的 zstd API，22.15 起才有——文档口径 ≥22.15，但 engines/脚本最低校验暂为 ≥22.13，抬版本待后续统一）。系统自带 Node 版本不够时，用 `DSH_NODE` 环境变量指向任意 ≥ 22.15.0 的 node 可执行文件（setup/start/pack 脚本都认它）
 - dsh 全局安装：`npm i -g @deepseek-ai/dsh`
 - LLM key 一律经环境变量注入：变量名由 dsh profile 的 provider 配置（`cordis.patch.yml` 的 `apiKeyEnv`）声明，配什么 provider 就用什么变量，文档与代码里不要写死某个 key 名；插件与仓库**不存任何 key**
 - 构建脚本为 POSIX sh：macOS / Linux 原生可用，Windows 走 WSL 或 Git Bash
