@@ -1,0 +1,67 @@
+{
+  "kind": "workflow-one",
+  "version": 3,
+  "schemaVersion": 3,
+  "name": "多方汇总评审",
+  "exportedAt": "2026-08-25T00:00:00.000Z",
+  "graph": {
+    "nodes": [
+      {
+        "id": "in",
+        "type": "input",
+        "position": { "x": 60, "y": 220 },
+        "data": {
+          "label": "议题输入",
+          "text": "本季度小区绿化改造预算 8 万元，方案包括：更换草坪 2000㎡、补种树木 30 棵、增设灌溉系统。",
+          "attachments": []
+        }
+      },
+      {
+        "id": "cost",
+        "type": "agent",
+        "position": { "x": 360, "y": 100 },
+        "data": {
+          "label": "成本视角",
+          "prompt": "你是预算分析师。从成本角度评审该方案，输出 cost.md：单价合理性、超支风险、可削减项。",
+          "tools": []
+        }
+      },
+      {
+        "id": "quality",
+        "type": "agent",
+        "position": { "x": 360, "y": 340 },
+        "data": {
+          "label": "品质视角",
+          "prompt": "你是园区品质经理。从业主体验角度评审该方案，输出 quality.md：观赏性、维护成本、噪音扬尘影响。",
+          "tools": []
+        }
+      },
+      {
+        "id": "merge",
+        "type": "agent",
+        "position": { "x": 660, "y": 220 },
+        "data": {
+          "label": "汇总评审",
+          "prompt": "你是评审组长。综合两个视角的分析，写 conclusion.md：结论、分歧点、最终建议。",
+          "tools": []
+        }
+      },
+      {
+        "id": "out",
+        "type": "output",
+        "position": { "x": 950, "y": 220 },
+        "data": { "label": "评审结论" }
+      }
+    ],
+    "edges": [
+      { "id": "e1", "source": "in", "target": "cost" },
+      { "id": "e2", "source": "in", "target": "quality" },
+      { "id": "e3", "source": "cost", "target": "merge" },
+      { "id": "e4", "source": "quality", "target": "merge" },
+      { "id": "e5", "source": "merge", "target": "out" }
+    ]
+  },
+  "variables": [],
+  "inputSchema": { "fields": [] },
+  "dependencies": { "globalVariables": [], "credentials": [] }
+}
