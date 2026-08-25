@@ -22,7 +22,7 @@
 从 Desktop 托盘打开 **Open DSH Terminal**；该终端已绑定当前 profile：
 
 ```sh
-dsh plugin add dsh-ccpg-one@0.2.2
+dsh plugin add dsh-ccpg-one@0.3.0
 ```
 
 安装后重启 Desktop，让新 bundle 进入 Loader 组合。compatibility 与 advanced 模式都继续使用普通 DSH Web Client；画布、同源 `/wf1/api/*`、侧栏和预览无需 Desktop 专用注册。飞书账号页首次点击「自动安装」时，插件通过公开 `desktopPnpm` service 把固定版本 lark-cli 安装到当前 profile，并在 profile 切换或退出时取消仍在运行的操作。
@@ -135,7 +135,7 @@ npx dsh-ccpg-one myprofile        # 预写 pnpm 11 放行（node-pty/koffi 构�
 也可直接用官方命令：
 
 ```sh
-dsh plugin --profile myprofile add dsh-ccpg-one@0.2.2
+dsh plugin --profile myprofile add dsh-ccpg-one@0.3.0
 ```
 
 > **pnpm 11 注意（issue #24）**：`dsh plugin add` 是 profile 目录里裸跑 pnpm，聚合依赖链里的 `node-pty`（dsh-better-sidebar 传递依赖，原生模块）会被 strict-dep-builds 拦下：安装非零退出、且 pnpm 往 profile 的 `pnpm-workspace.yaml` 写非法占位符 `node-pty: set this to true or false`，把 `pnpm approve-builds` 与重跑 install 一起堵死——**重试无效**。0.2.2 起用 `npx dsh-ccpg-one` 安装即可（它先把放行写对再装，幂等，可反复重跑）；已中招的 profile 也能用它自愈。
