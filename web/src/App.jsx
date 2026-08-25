@@ -30,7 +30,6 @@ import { AddNodeMenu, CanvasAddMenu, MoreMenu } from './ToolbarMenus.jsx';
 import { NodePanel } from './NodePanel.jsx';
 import { WorkflowList } from './WorkflowList.jsx';
 import { RunHistory } from './RunHistory.jsx';
-import { RunSwitcher } from './RunSwitcher.jsx';
 import { ResultPanel } from './ResultPanel.jsx';
 import { FeishuCredModal } from './FeishuCredModal.jsx';
 import { TestRunModal } from './TestRunModal.jsx';
@@ -1609,19 +1608,12 @@ export default function App() {
         )}
 
         <div className={`result-panel-shell ${logOpen ? '' : 'panel-collapsed'}`}>
-          <button className="btn btn-sm panel-toggle" onClick={() => setLogOpen((v) => !v)}
-            aria-label={logOpen ? '收起成果面板' : '展开成果面板'}>
-            {logOpen ? '▶ 收起' : '◀ 展开'}
-          </button>
-          {logOpen && (
-            <>
-              <RunSwitcher
-                runs={runList.filter((r) => (r.workflowId || null) === (currentWfIdRef.current || null) || !currentWfIdRef.current)}
-                inspectedRunId={inspectedRunId}
-                onSelect={selectRunForView}
-                onOpenHistory={() => setHistoryOpen(true)}
-              />
-              <ResultPanel
+          {!logOpen && (
+            <button className="btn btn-sm panel-toggle" onClick={() => setLogOpen(true)} aria-label="展开成果面板">
+              ◀ 展开
+            </button>
+          )}
+          {logOpen && <ResultPanel
             runDetail={runDetails[inspectedRunId]}
             events={eventsByRunId[inspectedRunId] || []}
             status={inspectedRunId === runStatus.runId ? runStatus : runDetails[inspectedRunId]}
@@ -1634,9 +1626,7 @@ export default function App() {
             onClose={() => setLogOpen(false)}
             onFocusNode={focusNode}
             onOpenNodeDetail={(runId, nodeId) => setNodeDetail({ runId, nodeId })}
-          />
-            </>
-          )}
+          />}
         </div>
           </>
         )}
