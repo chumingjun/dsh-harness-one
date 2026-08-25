@@ -294,14 +294,17 @@ export default function App() {
       setRunList(data.runs || []);
     } catch { /* 列表拉不到维持现状 */ }
   }, []);
+  // live 标记经 ref 读（不能进依赖：runList 变化会重建 effect → 轮询变请求风暴）
+  const runListRef = useRef([]);
+  useEffect(() => { runListRef.current = runList; }, [runList]);
   useEffect(() => {
     if (!hostSession.id) return undefined;
     refreshRunList();
     const timer = setInterval(() => {
-      if (runList.some((r) => r.live)) refreshRunList();
+      if (runListRef.current.some((r) => r.live)) refreshRunList();
     }, 5000);
     return () => clearInterval(timer);
-  }, [hostSession.id, refreshRunList, runList]);
+  }, [hostSession.id, refreshRunList]);
 
   // SSE：事件 → 节点状态 + 进度 + 结构化日志
   useEffect(() => {
