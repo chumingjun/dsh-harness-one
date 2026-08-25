@@ -18,6 +18,7 @@ import {
   stripCanvasRuntimeNodeData,
 } from './workflow-serialization.js';
 import { eventBelongsToCanvas, eventBelongsToRun } from './run-event-routing.js';
+import { useThemePalette } from './theme.js';
 import { useToast, PromptModal, ConfirmModal, Modal } from './ui.jsx';
 
 const STATUS_CN = { running: '运行中', success: '成功', error: '失败', canceled: '已取消', interrupted: '异常中断', skipped: '跳过', waiting: '等待审批' };
@@ -38,6 +39,7 @@ import { TEMPLATES, TemplateModal } from './templates.jsx';
 
 export default function App() {
   const toast = useToast();
+  const palette = useThemePalette();
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -1110,12 +1112,16 @@ export default function App() {
   }, [setNodes, setEdges, snapshot, markDirty, toast, fitView, reportCanvasState]);
   assistantOpsRef.current = applyAssistantOps;
 
-  // 宿主 postMessage：wf1-session（官方 UI 会话绑定）→ 绑定 + 拿 persona
+  // 宿主 postMessage：wf1-session（官方 UI 会话绑定）→ 绑定 + 拿 persona；
+  // wf1-theme（官方 UI 主题切换）→ 画布跟随切换 data-theme
   useEffect(() => {
     const onMessage = (ev) => {
       if (ev.origin !== window.location.origin) return;
       const d = ev.data;
       if (!d || typeof d !== 'object') return;
+      if (d.type === 'wf1-theme' && (d.theme === 'light' || d.theme === 'dark')) {
+        document.documentElement.dataset.theme = d.theme;
+      }
       if (d.type === 'wf1-session' && d.sessionId) {
         hostSessionRef.current = d.sessionId;
         setApiSessionId(d.sessionId);
@@ -1207,10 +1213,10 @@ export default function App() {
       const [id, st] = part.split(':');
       statusOf.set(id, st);
     }
-    const EDGE_COLOR = { success: '#10b981', running: '#f59e0b', error: '#ef4444', skipped: '#9ca3af', canceled: '#94a3b8' };
+    const EDGE_COLOR = { success: palette.edge.success, running: palette.edge.running, error: palette.edge.error, skipped: palette.edge.skipped, canceled: palette.edge.canceled };
     return edges.map((e) => {
       const src = statusOf.get(e.source) || 'idle';
-      const color = EDGE_COLOR[src] || '#94a3b8';
+      const color = EDGE_COLOR[src] || palette.edge.idle;
       const active = src === 'success' || src === 'running';
       const branch = e.branch || e.data?.branch;
       return {
@@ -1219,14 +1225,14 @@ export default function App() {
         // onInsert 直接注入边 data：styledEdges 随 [edges,statusKey] 重建，insertNodeOnEdge 引用稳定
         data: { onInsert: insertNodeOnEdge, branch },
         label: branch ? (branch === 'true' ? '是' : '否') : undefined,
-        labelStyle: { fill: '#A8A29E', fontSize: 11 },
-        labelBgStyle: { fill: '#1D1A16' },
+        labelStyle: { fill: palette.labelFill, fontSize: 11 },
+        labelBgStyle: { fill: palette.labelBg },
         animated: src === 'running',
         style: { stroke: color, strokeWidth: active ? 2.5 : 1.5, strokeDasharray: branch === 'false' ? '6 3' : undefined },
         markerEnd: { type: MarkerType.ArrowClosed, color },
       };
     });
-  }, [edges, edgeStatusKey, insertNodeOnEdge]);
+  }, [edges, edgeStatusKey, insertNodeOnEdge, palette]);
 
   const upstreamNodes = useMemo(() => {
     if (!selectedNode) return [];
@@ -1367,15 +1373,15 @@ export default function App() {
             fitView
             minZoom={0.15}
             maxZoom={2.5}
-            connectionLineStyle={{ stroke: '#94a3b8', strokeWidth: 2 }}
+            connectionLineStyle={{ stroke: palette.edge.idle, strokeWidth: 2 }}
           >
-            <Background variant="dots" gap={22} size={1.4} color="#3A352E" />
+            <Background variant="dots" gap={22} size={1.4} color={palette.canvasDot} />
             <Controls />
             <MiniMap
               pannable
               zoomable
-              nodeColor={(n) => ({ agent: '#8B5CF6', input: '#38BDF8', script: '#F97316', condition: '#F59E0B', http: '#34D399', output: '#A3E635', note: '#78716C' })[n.data?.nodeType] || '#57534E'}
-              maskColor="rgba(20,18,15,0.7)"
+              nodeColor={(n) => palette.minimapNode[n.data?.nodeType] || palette.minimapNode.unknown}
+              maskColor={palette.minimapMask}
             />
           </ReactFlow>
           {lint?.issues?.length > 0 && (
