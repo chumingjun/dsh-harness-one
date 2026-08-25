@@ -341,7 +341,7 @@ body {
   border-color: transparent; color: var(--primary-fg); font-weight: 600;
 }
 .btn-primary:hover { filter: brightness(1.1); }
-.btn-danger { background: var(--danger); border-color: transparent; color: var(--danger-fg); }
+.btn-danger { background: var(--danger); border-color: transparent; color: var(--primary-fg); }
 .btn-danger:hover { filter: brightness(1.08); }
 .btn-sm { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
 
