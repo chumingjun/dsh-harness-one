@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
 import {
   WORKFLOW_EXPORT_VERSION,
   WORKFLOW_SCHEMA_VERSION,
@@ -173,6 +174,26 @@ await test('future document and export versions fail closed', () => {
     () => importWorkflowDocument({ kind: 'workflow-one', version: 3, schemaVersion: WORKFLOW_SCHEMA_VERSION + 1, graph: { nodes: [] } }),
     /不支持/,
   );
+});
+
+await test('repository workflow examples are valid import documents', () => {
+  const examples = new URL('../../../examples/workflows/', import.meta.url);
+  const files = readdirSync(examples).filter((file) => file.endsWith('.workflow-one.json')).sort();
+  assert.deepEqual(files, [
+    'parallel-review.workflow-one.json',
+    'repair-order.workflow-one.json',
+    'urgency-routing.workflow-one.json',
+  ]);
+  for (const file of files) {
+    const imported = importWorkflowDocument(JSON.parse(readFileSync(new URL(file, examples), 'utf8')));
+    assert.ok(imported.name);
+    assert.ok(imported.graph.nodes.length >= 3);
+    const nodeIds = new Set(imported.graph.nodes.map((node) => node.id));
+    for (const edge of imported.graph.edges) {
+      assert.ok(nodeIds.has(edge.source), `${file}: missing source ${edge.source}`);
+      assert.ok(nodeIds.has(edge.target), `${file}: missing target ${edge.target}`);
+    }
+  }
 });
 
 await test('workflow variables reject sensitive declarations and unsafe values before export', () => {
