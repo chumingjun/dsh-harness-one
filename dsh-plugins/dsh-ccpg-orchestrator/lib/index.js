@@ -7,7 +7,7 @@
 //     · maxRounds: 轮询 session events 的 turn 计数，超限 agent.cancel
 //     · 取消: 运行 cancel → agent.cancel({kind:'user'}) + handle.dispose()
 //     · 流式进度: agent-progress 事件（turn 序号 / assistant 文本预览）
-//   - 运行历史持久化 data/runs/<runId>.json + 刷新恢复（SSE 快照）
+//   - 工作区 SQLite 运行历史 + 刷新恢复（SSE 快照）
 //   - webhook 触发（/wf1/api/hooks/* prefix 路由）+ 定时触发（wf1:schedule.* 定时键）
 //   - 节点工作区 data/workspaces/<节点名>/；产物下载 /wf1/api/artifact
 //
@@ -54,6 +54,7 @@ import { Orchestrator, lintGraph, getKind } from './engine.js';
 import { createWorkflowExportManifest, importWorkflowDocument, normalizeWorkflowDocument } from './workflow-document.js';
 import { saveArtifactsToWorkspace } from './artifact-save.js';
 import { createStoragePaths } from './storage-paths.js';
+import { WorkflowSqliteStore } from './sqlite-store.js';
 import {
   canvasAssistantPersona, checkPatchResult, summarizeGraphForAI, validateGraphOps,
 } from './assistant.js';
@@ -130,17 +131,18 @@ export function apply(ctx, config) {
   const copyLegacyTree = (source, target) => {
     if (!existsSync(source)) return;
     mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-    cpSync(source, target, { recursive: true, force: true, errorOnExist: false });
+    cpSync(source, target, { recursive: true, force: false, errorOnExist: false });
   };
   const initializeStore = (workspaceRoot) => {
     const paths = createStoragePaths({ workspaceRoot, legacyRoot: legacyDataDir() });
-    const rootExisted = existsSync(paths.root);
     const marker = join(paths.state, 'legacy-import.json');
-    for (const dir of [paths.root, paths.state, paths.workflows, paths.attachments, paths.runs, paths.runtime, join(paths.state, 'tombstones', 'workflows')]) {
+    const workflowTombstoneDir = join(paths.state, 'tombstones', 'workflows');
+    for (const dir of [paths.root, paths.state, paths.workflows, paths.attachments, paths.runs, paths.runtime, workflowTombstoneDir]) {
       mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
-    if (!legacyClaimedWorkspace && !rootExisted) {
-      for (const legacy of [paths.packageLegacy, paths.pluginDataLegacy]) {
+    if (!legacyClaimedWorkspace && !existsSync(marker)) {
+      // 用户级 plugin-data 优先于包内种子；已有工作区文件两者都不得覆盖。
+      for (const legacy of [paths.pluginDataLegacy, paths.packageLegacy]) {
         copyLegacyTree(legacy.workflows, paths.workflows);
         copyLegacyTree(legacy.attachments, paths.attachments);
         copyLegacyTree(legacy.runs, paths.runs);
@@ -159,9 +161,15 @@ export function apply(ctx, config) {
       graphFile: join(paths.state, 'graph.json'),
       triggersFile: join(paths.state, 'triggers.json'),
       globalVariablesFile: join(paths.state, 'global-variables.json'),
-      workflowTombstoneDir: join(paths.state, 'tombstones', 'workflows'),
-      runHistory: [],
-      historyHydrated: false,
+      workflowTombstoneDir,
+      database: new WorkflowSqliteStore({
+        databaseFile: paths.database,
+        workflowsDir: paths.workflows,
+        runsDir: paths.runs,
+        workflowTombstoneDir,
+        migrationErrorFile: join(paths.state, 'sqlite-migration-errors.json'),
+        logger: ctx.logger,
+      }),
       globalVariableStore: new GlobalVariableStore(join(paths.state, 'global-variables.json')),
       hooks: new Map(),
       schedulers: new Map(),
@@ -182,14 +190,6 @@ export function apply(ctx, config) {
     return store;
   };
   const STORAGE = new Proxy({}, { get(_target, key) { return currentStore().paths[key]; } });
-  const runHistory = new Proxy([], {
-    get(_target, key) {
-      const rows = currentStore().runHistory;
-      const value = rows[key];
-      return typeof value === 'function' ? value.bind(rows) : value;
-    },
-    set(_target, key, value) { currentStore().runHistory[key] = value; return true; },
-  });
   const globalVariableStore = new Proxy({}, {
     get(_target, key) {
       const store = currentStore().globalVariableStore;
@@ -198,10 +198,14 @@ export function apply(ctx, config) {
     },
   });
   const currentPaths = () => currentStore().paths;
-  const currentRunHistory = () => currentStore().runHistory;
+  const currentDatabase = () => currentStore().database;
   const currentHooks = () => currentStore().hooks;
   const currentSchedulers = () => currentStore().schedulers;
   const currentSchedulerMeta = () => currentStore().schedulerMeta;
+  ctx.effect?.(() => () => {
+    for (const store of stores.values()) store.database.close();
+    stores.clear();
+  }, 'workflow-one sqlite stores');
   const registeredWorkspaceRoots = () => {
     try {
       const registry = ctx.workspaceRegistry || ctx.get?.('workspaceRegistry');
@@ -256,30 +260,38 @@ export function apply(ctx, config) {
     return sessionStore(sessionId);
   };
   let ensureTriggers = () => {};
+  const internalRouteError = (res, error) => {
+    if (res.writableEnded) return undefined;
+    if (error instanceof RequestBodyError) {
+      return json(res, Number(error.status) || 500, {
+        error: String(error.message || error),
+        code: error.code || 'request-failed',
+      });
+    }
+    ctx.logger?.error?.(`Workflow One 请求失败：${error.stack || error.message || error}`);
+    return json(res, 500, { error: 'Workflow One 内部错误', code: 'internal-error' });
+  };
   const register = (route, { scoped = true } = {}) => {
     const handler = route.handler;
     ctx.webServer.register({
       ...route,
       handler(req, res) {
         if (!scoped) return handler(req, res);
+        let store;
+        try { store = requestStore(req); }
+        catch (error) {
+          return json(res, 409, { error: String(error.message || error), code: 'workspace-session-required' });
+        }
         try {
-          const result = workspaceContext.run(requestStore(req), () => {
-            hydrateHistory();
+          const result = workspaceContext.run(store, () => {
             ensureTriggers();
             return handler(req, res);
           });
           return result && typeof result.catch === 'function'
-            ? result.catch((error) => {
-                if (!(error instanceof RequestBodyError)) throw error;
-                if (res.writableEnded) return undefined;
-                return json(res, Number(error?.status) || 500, {
-                  error: String(error?.message || error),
-                  code: error?.code || 'request-failed',
-                });
-              })
+            ? result.catch((error) => internalRouteError(res, error))
             : result;
         } catch (error) {
-          return json(res, 409, { error: String(error.message || error), code: 'workspace-session-required' });
+          return internalRouteError(res, error);
         }
       },
     });
@@ -428,7 +440,7 @@ export function apply(ctx, config) {
             outputs: summarizeOutputs(run.outputs, run.structuredOutputs),
           });
         }
-        const hist = runHistory.find((r) => r.runId === args.runId);
+        const hist = readRun(args.runId);
         if (!hist) return `运行 "${args.runId}" 不存在`;
         return JSON.stringify({
           status: hist.status,
@@ -463,10 +475,7 @@ export function apply(ctx, config) {
         const canvasId = resolveCanvasId(exec);
         if (!sid || !canvasId) return '此工具只在绑定了工作流画布的会话里可用（在画布「工作流」标签页发起对话）。';
         try {
-          return await workspaceContext.run(sessionStore(String(sid)), () => {
-            hydrateHistory();
-            return def.execute(args, { ...exec, canvasId });
-          });
+          return await workspaceContext.run(sessionStore(String(sid)), () => def.execute(args, { ...exec, canvasId }));
         } catch (error) {
           return `工作区不可用：${String(error.message || error)}`;
         }
@@ -497,30 +506,6 @@ export function apply(ctx, config) {
       ...(recoveredStatus === 'interrupted' ? { error: run.error || '运行进程异常终止' } : {}),
     });
   };
-  const hydrateHistory = () => {
-    const store = currentStore();
-    if (store.historyHydrated) return;
-    store.historyHydrated = true;
-    const byId = new Map();
-    for (const dir of [store.paths.runs]) {
-      try {
-        for (const file of readdirSync(dir).filter((name) => name.endsWith('.json'))) {
-          try {
-            const runFile = join(dir, file);
-            let run = normalizeRunDocument(JSON.parse(readFileSync(runFile, 'utf8')));
-            if (run.status === 'running') {
-              const interruptedAt = statSync(runFile).mtime.toISOString();
-              run = recoverInterruptedRun(run, interruptedAt);
-              atomicJson(runFile, run);
-            }
-            if (!byId.has(run.runId)) byId.set(run.runId, run);
-          } catch { /* 单条损坏不阻塞其他历史 */ }
-        }
-      } catch { /* 目录空 */ }
-    }
-    const rows = [...byId.values()].sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
-    store.runHistory.push(...rows.slice(0, 50));
-  };
   const persistRun = (run, graph, workflowName, workflowId) => {
     try {
       const light = { ...run, _resolved: true };
@@ -547,12 +532,7 @@ export function apply(ctx, config) {
         artifactIndex: snapshot.artifacts,
         issues: [...(Array.isArray(base.issues) ? base.issues : []), ...snapshot.issues],
       });
-      atomicJson(join(currentPaths().runs, `${safeFileId(run.runId, 'invalid')}.json`), document);
-      const historyRun = { ...document, graph: graphSnapshot };
-      const history = currentRunHistory();
-      const idx = history.findIndex((r) => r.runId === run.runId);
-      if (idx >= 0) history[idx] = historyRun;
-      else history.unshift(historyRun);
+      currentDatabase().putRun(document);
       pruneRuns();
       broadcast('run-results-ready', {
         runId: document.runId,
@@ -567,24 +547,19 @@ export function apply(ctx, config) {
       return null;
     }
   };
-  // 保留策略：超过 RUNS_KEEP 的旧运行文件删除（内存列表同步裁剪）
+  // 保留策略：SQLite 提交删除后，再清理对应运行产物目录。
   const pruneRuns = () => {
     try {
-      const runsDir = currentPaths().runs;
-      const history = currentRunHistory();
-      const files = readdirSync(runsDir)
-        .filter((f) => f.endsWith('.json'))
-        .map((f) => ({ f, t: statSync(join(runsDir, f)).mtimeMs }))
-        .sort((a, b) => b.t - a.t);
-      for (const { f } of files.slice(RUNS_KEEP)) {
+      for (const run of currentDatabase().pruneRuns(RUNS_KEEP)) {
         try {
-          const run = normalizeRunDocument(JSON.parse(readFileSync(join(runsDir, f), 'utf8')));
           rmSync(STORAGE.runRoot({ workflowId: run.workflowId || 'draft', runId: run.runId }), { recursive: true, force: true });
-        } catch { /* 单条记录损坏或并发删除 */ }
-        try { unlinkSync(join(runsDir, f)); } catch { /* 并发删除 */ }
+        } catch (error) {
+          ctx.logger?.warn?.(`运行 ${run.runId} 已过期，但 runtime 清理失败：${error.message}`);
+        }
       }
-      if (history.length > RUNS_KEEP) history.length = RUNS_KEEP;
-    } catch { /* 目录不可读 */ }
+    } catch (error) {
+      ctx.logger?.warn?.(`运行记录清理失败：${error.message}`);
+    }
   };
   let orch;
   const readRun = (runId) => {
@@ -597,29 +572,22 @@ export function apply(ctx, config) {
       };
       return normalizeRunDocument({ ...run, graph });
     }
-    const filename = `${safeFileId(runId, 'invalid')}.json`;
-    for (const dir of [currentPaths().runs]) {
-      try {
-        const runFile = join(dir, filename);
-        let run = normalizeRunDocument(JSON.parse(readFileSync(runFile, 'utf8')));
-        if (run.status === 'running' && !pendingRunIds.has(runId)) {
-          run = recoverInterruptedRun(run, statSync(runFile).mtime.toISOString());
-          writeRun(run);
-        }
-        return run;
-      } catch { /* 回退下一位置 */ }
+    const record = currentDatabase().getRunRecord(runId);
+    if (!record) return null;
+    let run = record.document;
+    if (run.status === 'running' && !pendingRunIds.has(runId)) {
+      run = recoverInterruptedRun(run, record.updatedAt || new Date().toISOString());
+      writeRun(run);
     }
-    return null;
+    return run;
   };
   const writeRun = (run) => {
     const document = normalizeRunDocument(run);
-    atomicJson(join(currentPaths().runs, `${safeFileId(document.runId, 'invalid')}.json`), document);
-    const history = currentRunHistory();
-    const idx = history.findIndex((row) => row.runId === document.runId);
-    if (idx >= 0) history[idx] = document;
-    else history.unshift(document);
-    return document;
+    return currentDatabase().putRun(document);
   };
+  const recentRuns = (limit = 50) => currentDatabase().listRuns(limit).map((run) => (
+    run.status === 'running' && !pendingRunIds.has(run.runId) ? (readRun(run.runId) || run) : run
+  ));
   const checkpointRun = (runId) => {
     const live = orch?.runs.get(runId);
     if (!live || live.run.workspaceRoot !== currentStore().workspaceRoot) return;
@@ -639,20 +607,17 @@ export function apply(ctx, config) {
   };
 
   // ---- 工作流库 ----
-  const wfFile = (id, dir = currentPaths().workflows) => join(dir, `${safeFileId(id, 'invalid')}.json`);
   const wfTombstone = (id) => join(currentStore().workflowTombstoneDir, safeFileId(id, 'invalid'));
-  const readWf = (id) => {
-    if (existsSync(wfTombstone(id))) return null;
-    for (const dir of [currentPaths().workflows]) {
-      try { return normalizeWorkflowDocument(JSON.parse(readFileSync(wfFile(id, dir), 'utf8'))); } catch { /* 回退下一位置 */ }
-    }
-    return null;
-  };
+  const readWf = (id) => currentDatabase().getWorkflow(id);
   const writeWf = (wf) => {
-    const document = normalizeWorkflowDocument(wf);
-    atomicJson(wfFile(document.id), document);
+    const document = currentDatabase().putWorkflow(wf);
     try { unlinkSync(wfTombstone(document.id)); } catch { /* 未删除过 */ }
     return document;
+  };
+  const deleteWf = (id) => {
+    if (!currentDatabase().deleteWorkflow(id)) return false;
+    atomicWrite(wfTombstone(id), new Date().toISOString());
+    return true;
   };
 
   const resolveAttachmentFile = (attachment) => {
@@ -1050,7 +1015,7 @@ export function apply(ctx, config) {
     let runInputs; try { runInputs = assertSafeContextObject(body?.runInputs ?? body?.inputs, 'runInputs'); } catch (error) { return routeError(res, error); }
     const url = new URL(req.url, 'http://x');
     const runId = url.searchParams.get('run') || body?.runId;
-    const selected = selectScopedRun({ runId, workflowId: body?.workflowId, graph: body?.graph }, { readRun, runs: runHistory });
+    const selected = selectScopedRun({ runId, workflowId: body?.workflowId, graph: body?.graph }, { readRun, runs: recentRuns(50) });
     const hasInlineValues = body?.outputs || body?.structuredOutputs || body?.triggerInput !== undefined;
     if (selected.error && !hasInlineValues) return json(res, selected.status || 404, { ok: false, error: selected.error });
     const selectedRun = selected.run || {};
@@ -1121,7 +1086,7 @@ export function apply(ctx, config) {
     let inlineRunInputs; try { inlineRunInputs = assertSafeContextObject(body?.runInputs ?? body?.inputs, 'runInputs'); } catch (error) { return routeError(res, error); }
     const graph = body?.graph || persistedWorkflow?.graph || { nodes: body?.nodes || [], edges: body?.edges || [] };
     const targetNodeId = body?.targetNodeId || body?.nodeId;
-    const selected = selectScopedRun({ runId: body?.runId, workflowId: body?.workflowId, graph: body?.graph }, { readRun, runs: runHistory });
+    const selected = selectScopedRun({ runId: body?.runId, workflowId: body?.workflowId, graph: body?.graph }, { readRun, runs: recentRuns(50) });
     const hasInlineValues = body?.outputs || body?.structuredOutputs || body?.triggerInput !== undefined;
     if (selected.error && !hasInlineValues) return json(res, selected.status || 404, { error: selected.error });
     const selectedRun = selected.run || {};
@@ -1159,21 +1124,7 @@ export function apply(ctx, config) {
   // ---- 工作流库 ----
   register({ kind: 'exact', path: '/wf1/api/workflows', async handler(req, res) {
     if (req.method === 'GET') {
-      const ids = new Set();
-      for (const dir of [currentPaths().workflows]) {
-        try { for (const file of readdirSync(dir).filter((name) => name.endsWith('.json'))) ids.add(file.replace(/\.json$/, '')); }
-        catch { /* 目录空 */ }
-      }
-      const list = [...ids].map((id) => {
-        const wf = readWf(id);
-        if (!wf) return null;
-        return {
-          id: wf.id, name: wf.name, updatedAt: wf.updatedAt,
-          nodeCount: wf.graph?.nodes?.length ?? 0,
-          agentCount: wf.graph?.nodes?.filter((n) => n.type === 'agent').length ?? 0,
-        };
-      }).filter(Boolean).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
-      return json(res, 200, { workflows: list });
+      return json(res, 200, { workflows: currentDatabase().listWorkflows() });
     }
     if (req.method === 'POST') {
       const body = await readBody(req);
@@ -1235,8 +1186,7 @@ export function apply(ctx, config) {
     }
     if (req.method === 'DELETE') {
       if (!readWf(id)) return json(res, 404, { error: '工作流不存在' });
-      try { unlinkSync(wfFile(id)); } catch { /* 可能仅存在旧目录 */ }
-      atomicWrite(wfTombstone(id), new Date().toISOString());
+      deleteWf(id);
       return json(res, 200, { ok: true });
     }
     if (req.method === 'PATCH') {
@@ -1460,9 +1410,7 @@ export function apply(ctx, config) {
       && Object.values(r.nodeStates || {}).some((st) => st?.status === 'success')
       && r.graph.nodes.some((node) => !['success', 'skipped'].includes(r.nodeStates?.[node.id]?.status));
     json(res, 200, {
-      runs: runHistory.slice(0, 20).map((row) => (
-        row.status === 'running' && !live.includes(row.runId) ? (readRun(row.runId) || row) : row
-      )).map((r) => {
+      runs: recentRuns(20).map((r) => {
         const { structuredOutputs, graph, ...summary } = r;
         const isLive = live.includes(r.runId);
         return {
@@ -1582,7 +1530,7 @@ export function apply(ctx, config) {
     const runId = url.searchParams.get('run') || '';
     const nodeId = url.searchParams.get('node') || '';
     if (!runId || !nodeId) return json(res, 400, { error: '缺少 run 和 node' });
-    const run = readRun(runId) || runHistory.find((r) => r.runId === runId);
+    const run = readRun(runId);
     if (!run) return json(res, 404, { error: '运行记录不存在' });
     const state = run.nodeStates?.[nodeId];
     const label = (run.graph?.nodes || []).find((n) => n.id === nodeId)?.data?.label || nodeId;
@@ -1736,7 +1684,7 @@ export function apply(ctx, config) {
   // 刷新恢复快照：进行中运行的最新状态（供页面加载时补齐 SSE 错过的事件）
   register({ kind: 'exact', path: '/wf1/api/state', handler(_req, res) {
     const runningIds = [...orch.runs.values()].filter((entry) => entry.run.workspaceRoot === currentStore().workspaceRoot).map((entry) => entry.run.runId);
-    const latest = runHistory[0];
+    const latest = recentRuns(1)[0];
     const lastRun = latest ? (() => {
       const { structuredOutputs, graph, ...summary } = latest;
       return { ...summary, outputs: summarizeOutputs(summary.outputs, structuredOutputs), nodeStates: summarizeNodeStates(summary.nodeStates), structuredOutputSummary: summarizeStructuredOutputs(structuredOutputs) };
@@ -2161,7 +2109,6 @@ export function apply(ctx, config) {
   for (const workspaceRoot of registeredWorkspaceRoots()) {
     const store = storeForWorkspace(workspaceRoot);
     workspaceContext.run(store, () => {
-      hydrateHistory();
       ensureTriggers();
     });
   }

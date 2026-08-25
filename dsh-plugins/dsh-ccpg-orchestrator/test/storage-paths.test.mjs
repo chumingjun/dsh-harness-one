@@ -38,6 +38,7 @@ test('uses the workspace hidden directory and exposes read-only legacy layouts',
     assert.equal(paths.attachments, join(pluginRoot, 'attachments'));
     assert.equal(paths.runs, join(pluginRoot, 'runs'));
     assert.equal(paths.runtime, join(pluginRoot, 'runtime'));
+    assert.equal(paths.database, join(pluginRoot, 'workflow-one.sqlite'));
     assert.equal(paths.pluginDataLegacy.root, join(dshHome, 'plugin-data', 'dsh-ccpg-orchestrator'));
     assert.equal(paths.packageLegacy.root, legacyRoot);
     assert.equal(existsSync(workspaceRoot), false);

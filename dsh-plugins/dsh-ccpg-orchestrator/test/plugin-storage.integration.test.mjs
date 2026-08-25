@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { apply } from '../lib/index.js';
 import { graphFingerprint } from '../lib/run-scope.js';
 
@@ -45,6 +46,34 @@ function request(method, url, body, splitAt) {
 }
 
 const withSession = (url, sessionId) => `${url}${url.includes('?') ? '&' : '?'}sessionId=${sessionId}`;
+const databaseFile = (workspace) => join(workspace, '.workflow-one', 'workflow-one.sqlite');
+const readStoredDocument = (workspace, table, key, id) => {
+  if (!existsSync(databaseFile(workspace))) return null;
+  const db = new DatabaseSync(databaseFile(workspace), { readOnly: true });
+  try {
+    const row = db.prepare(`SELECT document_json FROM ${table} WHERE ${key} = ?`).get(id);
+    return row ? JSON.parse(row.document_json) : null;
+  } finally {
+    db.close();
+  }
+};
+const readStoredRun = (workspace, runId) => readStoredDocument(workspace, 'runs', 'run_id', runId);
+const readStoredWorkflow = (workspace, workflowId) => readStoredDocument(workspace, 'workflows', 'id', workflowId);
+const seedStoredRun = (workspace, value, updatedAt = new Date().toISOString()) => {
+  const db = new DatabaseSync(databaseFile(workspace));
+  try {
+    db.prepare(`
+      INSERT INTO runs (run_id, workflow_id, status, started_at, finished_at, updated_at, document_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(run_id) DO UPDATE SET
+        workflow_id=excluded.workflow_id, status=excluded.status,
+        started_at=excluded.started_at, finished_at=excluded.finished_at,
+        updated_at=excluded.updated_at, document_json=excluded.document_json
+    `).run(value.runId, value.workflowId || null, value.status, value.startedAt || null, value.finishedAt || null, updatedAt, JSON.stringify(value));
+  } finally {
+    db.close();
+  }
+};
 const dshHome = mkdtempSync(join(tmpdir(), 'wf1-plugin-home-'));
 const workspacesRoot = mkdtempSync(join(tmpdir(), 'wf1-workspaces-'));
 const workspaceA = join(workspacesRoot, 'workspace-a');
@@ -94,6 +123,7 @@ const seedLegacy = () => {
   writeFileSync(join(legacyDataDir, 'state', 'graph.json'), JSON.stringify({ nodes: [], edges: [] }));
 };
 seedLegacy();
+const disposers = [];
 
 try {
   const routes = [];
@@ -114,6 +144,7 @@ try {
     llm: { listProviders() { return []; }, async listModels() { return []; } },
     agentPresets: { async mount() {} },
     logger: { info() {}, warn() {}, error() {} },
+    effect(setup) { const dispose = setup(); if (dispose) disposers.push(dispose); },
   };
   apply(ctx, {});
   const route = (path) => routes.find((entry) => entry.kind === 'exact' && entry.path === path)?.handler;
@@ -147,8 +178,9 @@ try {
     id: 'wf_only_a', name: '仅 A', graph: { nodes: [], edges: [] },
   }), createA);
   assert.equal(createA.status, 200);
-  assert.equal(existsSync(join(workspaceA, '.workflow-one', 'workflows', 'wf_only_a.json')), true);
-  assert.equal(existsSync(join(workspaceB, '.workflow-one', 'workflows', 'wf_only_a.json')), false);
+  assert.equal(readStoredWorkflow(workspaceA, 'wf_only_a')?.name, '仅 A');
+  assert.equal(readStoredWorkflow(workspaceB, 'wf_only_a'), null);
+  assert.equal(existsSync(join(workspaceA, '.workflow-one', 'workflows', 'wf_only_a.json')), false, '新工作流不得双写 JSON');
 
   const utf8Workflow = {
     id: 'wf_utf8', name: '中文分块',
@@ -159,8 +191,14 @@ try {
   const utf8Create = responseCapture();
   await route('/wf1/api/workflows')(request('POST', withSession('/wf1/api/workflows', 'session-b'), utf8Workflow, utf8Split), utf8Create);
   assert.equal(utf8Create.status, 200);
-  const utf8Saved = JSON.parse(readFileSync(join(workspaceB, '.workflow-one', 'workflows', 'wf_utf8.json'), 'utf8'));
+  const utf8Saved = readStoredWorkflow(workspaceB, 'wf_utf8');
   assert.equal(utf8Saved.graph.nodes[0].data.text, '审核对象');
+
+  const deleteUtf8 = responseCapture();
+  await route('/wf1/api/workflows/detail')(request('DELETE', withSession('/wf1/api/workflows/detail?id=wf_utf8', 'session-b')), deleteUtf8);
+  assert.equal(deleteUtf8.status, 200);
+  assert.equal(readStoredWorkflow(workspaceB, 'wf_utf8'), null);
+  assert.equal(existsSync(join(workspaceB, '.workflow-one', 'state', 'tombstones', 'workflows', 'wf_utf8')), true);
 
   const runRes = responseCapture();
   await route('/wf1/api/run')(request('POST', withSession('/wf1/api/run', 'session-b'), {
@@ -173,17 +211,16 @@ try {
   assert.equal(runRes.status, 200);
   const newRunId = runRes.json().runId;
   let storedRun;
-  const runsDirB = join(workspaceB, '.workflow-one', 'runs');
-  // startRun 即落盘 running 快照（成果面板运行中可读），这里等运行完结状态（success/error/canceled）
+  // startRun 即写入 running 快照（成果面板运行中可读），这里等运行完结状态（success/error/canceled）
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    const files = existsSync(runsDirB) ? readdirSync(runsDirB).filter((file) => file.endsWith('.json')) : [];
-    storedRun = files.map((file) => JSON.parse(readFileSync(join(runsDirB, file), 'utf8'))).find((run) => run.runId === newRunId);
+    storedRun = readStoredRun(workspaceB, newRunId);
     if (storedRun && storedRun.status !== 'running') break;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   assert.equal(storedRun?.status, 'success');
   assert.equal(storedRun?.workspaceRoot, undefined);
-  assert.equal(existsSync(join(workspaceA, '.workflow-one', 'runs', `${newRunId}.json`)), false);
+  assert.equal(readStoredRun(workspaceA, newRunId), null);
+  assert.equal(existsSync(join(workspaceB, '.workflow-one', 'runs', `${newRunId}.json`)), false, '新运行不得双写 JSON');
   assert.equal(existsSync(join(dshHome, 'plugin-data', 'dsh-ccpg-orchestrator', 'runs', `${newRunId}.json`)), false);
 
   const originalFetch = globalThis.fetch;
@@ -226,7 +263,7 @@ try {
     assert.equal(liveDetail.nodeStates.live_output, undefined);
     assert.equal(liveDetail.workspaceRoot, undefined);
 
-    const liveCheckpoint = JSON.parse(readFileSync(join(runsDirB, `${liveRunId}.json`), 'utf8'));
+    const liveCheckpoint = readStoredRun(workspaceB, liveRunId);
     assert.equal(liveCheckpoint.status, 'running');
     assert.equal(liveCheckpoint.nodeStates.live_input.status, 'success');
     assert.equal(liveCheckpoint.outputs.live_input, 'hello');
@@ -242,13 +279,13 @@ try {
 
   let finishedLiveRun;
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    finishedLiveRun = JSON.parse(readFileSync(join(runsDirB, `${liveRunId}.json`), 'utf8'));
+    finishedLiveRun = readStoredRun(workspaceB, liveRunId);
     if (finishedLiveRun.status !== 'running') break;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.equal(finishedLiveRun.status, 'success');
 
-  writeFileSync(join(runsDirB, 'run_late_orphan.json'), JSON.stringify({
+  seedStoredRun(workspaceB, {
     runId: 'run_late_orphan', schemaVersion: 3, status: 'running',
     startedAt: '2026-08-24T00:00:00.000Z', triggerInput: '', runInputs: {},
     graph: {
@@ -260,7 +297,7 @@ try {
     },
     nodeStates: { orphan_done: { status: 'success' } }, outputs: { orphan_done: 'done' },
     structuredOutputs: {}, nodeOrder: ['orphan_done'],
-  }));
+  });
   const orphanDetail = responseCapture();
   await route('/wf1/api/runs/detail')(request('GET', withSession('/wf1/api/runs/detail?id=run_late_orphan', 'session-b')), orphanDetail);
   assert.equal(orphanDetail.status, 200);
@@ -276,13 +313,13 @@ try {
     ],
     edges: [{ source: 'resume_input', target: 'resume_output' }],
   };
-  writeFileSync(join(runsDirB, 'run_resume_seed.json'), JSON.stringify({
+  seedStoredRun(workspaceB, {
     runId: 'run_resume_seed', schemaVersion: 3, status: 'error',
     startedAt: '2026-08-24T00:00:00.000Z', finishedAt: '2026-08-24T00:00:01.000Z', durationMs: 1000,
     triggerInput: '', runInputs: {}, graph: resumeGraph, graphFingerprint: 'legacy-fingerprint',
     nodeStates: { resume_input: { status: 'success' }, resume_output: { status: 'error', error: '模拟失败' } },
     outputs: { resume_input: 'hello' }, structuredOutputs: {}, nodeOrder: ['resume_input', 'resume_output'],
-  }));
+  });
 
   // 改的是未完成节点（resume_output）→ 不再拦截，success 节点照常复用
   const changedGraph = structuredClone(resumeGraph);
@@ -329,13 +366,13 @@ try {
     id: 'wf_resume_named', name: '命名续跑', graph: brokenGraph,
   }), namedCreate);
   assert.equal(namedCreate.status, 200);
-  writeFileSync(join(runsDirB, 'run_resume_named_seed.json'), JSON.stringify({
+  seedStoredRun(workspaceB, {
     runId: 'run_resume_named_seed', schemaVersion: 3, status: 'interrupted', workflowId: 'wf_resume_named',
     startedAt: '2026-08-24T00:00:00.000Z', finishedAt: '2026-08-24T00:00:01.000Z', durationMs: 1000,
     triggerInput: '', runInputs: {}, graph: resumeGraph, graphFingerprint: graphFingerprint(resumeGraph),
     nodeStates: { resume_input: { status: 'success' }, resume_output: { status: 'running' } },
     outputs: { resume_input: 'hello' }, structuredOutputs: {}, nodeOrder: ['resume_input', 'resume_output'],
-  }));
+  });
   const namedMismatch = responseCapture();
   await route('/wf1/api/runs/resume')(request('POST', withSession('/wf1/api/runs/resume', 'session-b'), {
     runId: 'run_resume_named_seed', graph: resumeGraph,
@@ -380,9 +417,7 @@ try {
   const artifactRunId = artifactRunRes.json().runId;
   let artifactRunDoc;
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    artifactRunDoc = readdirSync(runsDirB)
-      .map((file) => JSON.parse(readFileSync(join(runsDirB, file), 'utf8')))
-      .find((run) => run.runId === artifactRunId);
+    artifactRunDoc = readStoredRun(workspaceB, artifactRunId);
     if (artifactRunDoc && artifactRunDoc.status !== 'running') break;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
@@ -411,6 +446,7 @@ try {
 
   console.log('plugin storage integration tests: ALL PASS');
 } finally {
+  for (const dispose of disposers.reverse()) await dispose();
   if (original === undefined) delete process.env.DSH_HOME;
   else process.env.DSH_HOME = original;
   rmSync(dshHome, { recursive: true, force: true });
