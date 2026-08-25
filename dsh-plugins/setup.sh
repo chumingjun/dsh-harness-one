@@ -1,6 +1,6 @@
 #!/bin/sh
 # Workflow One 插件本地分发安装脚本（模拟别人拿到这个仓库后的完整安装）。
-# 前提：已 npm i -g @deepseek-ai/dsh，且 node >= 20
+# 前提：已 npm i -g @deepseek-ai/dsh，且 node >= 24.15（内置 node:sqlite）
 # 用法：
 #   sh setup.sh                  # 安装到默认 profile dsh-ccpg（端口 4021，七插件逐个挂载）
 #   sh setup.sh <profile> <端口> # 安装到自定义 profile
@@ -15,8 +15,11 @@ PROFILE="${1:-dsh-ccpg}"
 PORT="${2:-4021}"
 HERE=$(cd "$(dirname "$0")" && pwd)
 NODE_BIN="${DSH_NODE:-}"
-[ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "console.log(Number(process.versions.node.split('.')[0])>=20?process.execPath:'')" 2>/dev/null || true)
-[ -z "$NODE_BIN" ] && { echo "✗ 需要 node>=20（或设 DSH_NODE 指向）"; exit 1; }
+[ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "const [a,b]=process.versions.node.split('.').map(Number); console.log(a>24||(a===24&&b>=15)?process.execPath:'')" 2>/dev/null || true)
+if [ -z "$NODE_BIN" ] || ! "$NODE_BIN" -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>24||(a===24&&b>=15)?0:1)" 2>/dev/null; then
+  echo "✗ 需要 node>=24.15（或设 DSH_NODE 指向）"
+  exit 1
+fi
 PATH=$(dirname "$NODE_BIN"):$PATH
 export PATH
 export DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
@@ -62,7 +65,12 @@ import { pathToFileURL } from 'node:url';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 const root = process.argv[2];
+const database = new DatabaseSync(':memory:');
+database.exec('CREATE TABLE smoke (value INTEGER) STRICT; INSERT INTO smoke VALUES (1)');
+if (database.prepare('SELECT value FROM smoke').get().value !== 1) throw new Error('node:sqlite smoke 输出错误');
+database.close();
 const { runScript } = await import(pathToFileURL(join(root, 'lib', 'script-runner.js')));
 const workspaceDir = mkdtempSync(join(tmpdir(), 'wf1-setup-script-'));
 try {
@@ -97,7 +105,7 @@ DSH_BIN=$("$NODE_BIN" -e "console.log(require.resolve('@deepseek-ai/dsh/lib/bin.
 [ -z "$DSH_BIN" ] && for c in "$HOME/.local/npm-global/lib/node_modules/@deepseek-ai/dsh/lib/bin.js" "/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"; do
   [ -f "$c" ] && DSH_BIN="$c" && break
 done
-[ -z "$DSH_BIN" ] && { echo "✗ 未找到 dsh（先 npm i -g @deepseek-ai/dsh，需要 node>=20）"; exit 1; }
+[ -z "$DSH_BIN" ] && { echo "✗ 未找到 dsh（先 npm i -g @deepseek-ai/dsh，需要 node>=24.15）"; exit 1; }
 DSH_BIN=$("$NODE_BIN" -e "console.log(require('fs').realpathSync(process.argv[1]))" "$DSH_BIN")
 
 # 1. 建_profile（已存在则跳过）

@@ -7,7 +7,7 @@
 #
 # 用法：sh boot-smoke.sh <tarball> [端口]
 # 环境隔离：DSH_HOME / HOME 之外的全局态不触碰；profile 与临时目录用完即删。
-# 依赖：node>=20、npm i -g @deepseek-ai/dsh、curl；模型不需要 key
+# 依赖：node>=24.15、npm i -g @deepseek-ai/dsh、curl；模型不需要 key
 #（smoke 只验证插件挂载与页面可服务，不发真实 LLM 请求）。
 set -e
 

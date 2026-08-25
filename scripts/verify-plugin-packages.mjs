@@ -32,7 +32,7 @@ for (const name of packages) {
   assert.equal(pkg.private, false, `${name} must be publishable`);
   assert.equal(pkg.license, 'MIT');
   assert.equal(pkg.repository?.directory, `dsh-plugins/${name}`);
-  assert.equal(pkg.engines?.node, '>=20');
+  assert.equal(pkg.engines?.node, ['dsh-ccpg-orchestrator', 'dsh-ccpg-one'].includes(name) ? '>=24.15' : '>=20');
   assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml');
 
   // 聚合包的最终 bundle 由 publish-npm.sh 在干净 staging 中逐项校验；
