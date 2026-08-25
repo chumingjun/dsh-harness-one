@@ -8,7 +8,7 @@
 
 ## 环境前提
 
-- Node ≥ 20。系统自带 Node 版本不够时，用 `DSH_NODE` 环境变量指向任意 ≥ 20 的 node 可执行文件（setup/start/pack 脚本都认它）
+- Node ≥ 24.15（Workflow One 使用内置 `node:sqlite`）。系统自带 Node 版本不够时，用 `DSH_NODE` 环境变量指向任意 ≥ 24.15 的 node 可执行文件（setup/start/pack 脚本都认它）
 - dsh 全局安装：`npm i -g @deepseek-ai/dsh`
 - LLM key 一律经环境变量注入：变量名由 dsh profile 的 provider 配置（`cordis.patch.yml` 的 `apiKeyEnv`）声明，配什么 provider 就用什么变量，文档与代码里不要写死某个 key 名；插件与仓库**不存任何 key**
 - 构建脚本为 POSIX sh：macOS / Linux 原生可用，Windows 走 WSL 或 Git Bash
@@ -55,7 +55,7 @@
 ### 常用命令
 
 ```sh
-npm test                                   # 全量单测聚合（scripts/run-tests.sh：web 10 套 + orchestrator 13 套 + llm-guard + canvasui + document-preview）
+npm test                                   # 全量单测聚合（scripts/run-tests.sh：web 10 套 + orchestrator 14 套 + llm-guard + canvasui + document-preview）
 sh dsh-plugins/build-web.sh                 # 画布双构建（/wf1/ base + 根 base），改前端后必跑（产物不入库，仅落工作区）
 sh dsh-plugins/setup.sh [profile] [端口]    # 安装（默认 dsh-ccpg / 4021）
 sh dsh-plugins/start.sh <profile>           # 启动
@@ -63,7 +63,7 @@ sh dsh-plugins/pack.sh <tag>                # 打包 release（CI 同源）
 
 # 分套运行（改哪跑哪）
 cd web && npm test                          # 前端 10 套
-cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # 引擎 13 套
+cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # 引擎 14 套
 node dsh-plugins/dsh-ccpg-canvasui/test/client.test.mjs         # canvasui 客户端
 node dsh-plugins/dsh-ccpg-document-preview/test/index.test.mjs  # 4 例
 ```
@@ -75,7 +75,7 @@ CI：`.github/workflows/ci.yml` 在 PR 与 main push 上跑 `npm test` + `build-
 1. **双端节点注册表**：新增节点类型必须两处注册——引擎 `orchestrator/lib/engine.js` 的 `registerKind({execute, lint, edgeTaken, wantsSink})` + 前端 `web/src/registry.jsx`（icon/色/preset/summary/badges）。AI 助手侧同步 `lib/assistant.js`（NODE_TYPES + persona 契约）与 `lib/variable-schema.js`（变量树）。两处注册即得调度/审批/超时/重试/UI 全部能力，不要另起旁路。
 2. **canvasui bundle 是构建产物**：`lib/client.js` 由 `src/client.js` 生成（gitignore 不入库），直接改会被覆盖；改后重跑 `build-canvasui.sh`（`--check` 逐字比对防漂移）。
 3. **4020 Express 回退能力冻结**：新功能只做插件路径（`/wf1/api/*`）；`server/` 仅修 bug。同语义端点双入口实现时以插件端为准。
-4. **工作区本地存储**：每实体一 JSON 文件，统一位于当前 dsh 会话工作目录的 `.workflow-one/`（state/workflows/runs/attachments/runtime），节点 agent 以工作区根为 cwd、成果只收集各节点 runtime 输出目录；`.workflow-one/` 必须 gitignore，**绝不提交**。飞书凭据仍是 dsh 用户级数据，不迁入工作区。
+4. **工作区本地存储**：工作流与运行记录位于当前 dsh 会话工作目录的 `.workflow-one/workflow-one.sqlite`；state/attachments/runtime 继续使用同目录下文件。节点 agent 以工作区根为 cwd、成果只收集各节点 runtime 输出目录；`.workflow-one/` 必须 gitignore，**绝不提交**。飞书凭据仍是 dsh 用户级数据，不迁入工作区。
 5. **构建产物一律不入库**（`web-dist/`、`canvasui lib/client.js`、`document-preview/dist/`、`web/dist/` 全部 gitignore）：分发包「拿到即装」由 `pack.sh` 现场重跑构建保证；源码安装先 `build-web.sh` 再 `setup.sh`（setup 已前置校验）。绝不为省一步构建把产物提交进仓库。
 
 ### 前端坑
@@ -88,5 +88,5 @@ CI：`.github/workflows/ci.yml` 在 PR 与 main push 上跑 `npm test` + `build-
 ### 测试与验证
 
 - 单测全部是零依赖 node 断言脚本（`node:assert` + 自写 runner），直接 `node <file>` 运行；新插件照此约定写测试
-- 改引擎跑 orchestrator 13 套；改前端跑 web 10 套；改 canvasui 跑其 client 测试并重建 bundle；改预览跑 document-preview 4 例
+- 改引擎跑 orchestrator 14 套；改前端跑 web 10 套；改 canvasui 跑其 client 测试并重建 bundle；改预览跑 document-preview 4 例
 - E2E 用 CDP（chrome-devtools）跑真实浏览器验证；dsh 官方 UI 首载慢，等待时间放宽（画布就绪 3.5s→6s），wait text 偶超时先多等几秒再判失败
