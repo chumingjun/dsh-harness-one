@@ -1,40 +1,85 @@
+<p align="right">
+  <strong>简体中文</strong> · <a href="./README.en.md">English</a>
+</p>
+
 # Workflow One
 
-简体中文 | [English](README.en.md)
+<p align="center">
+  <img src="./images/cover.png" width="100%" alt="Workflow One 多智能体工作流，节点输出全透明">
+</p>
 
-**运行在 [DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) 中的可视化 AI 工作流编排器。** 用拖拽 DAG 组合真实 dsh agent、脚本、条件分支和 HTTP 节点，实时查看运行进度，异常后从中断节点恢复，并将成果与运行进度推送到飞书。
+<p align="center">
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/DeepSeek-Harness-4D6BFE?labelColor=0F0F1A" alt="DeepSeek Harness 插件"></a>
+  <a href="https://www.npmjs.com/package/dsh-ccpg-one"><img src="https://img.shields.io/npm/v/dsh-ccpg-one" alt="npm 版本"></a>
+  <a href="https://github.com/chumingjun/harness-one/actions/workflows/ci.yml"><img src="https://github.com/chumingjun/harness-one/actions/workflows/ci.yml/badge.svg" alt="CI 状态"></a>
+  <a href="https://github.com/chumingjun/harness-one/releases/latest"><img src="https://img.shields.io/github/v/release/chumingjun/harness-one" alt="最新版本"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/chumingjun/harness-one" alt="MIT 许可证"></a>
+</p>
 
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek-Harness-4D6BFE?labelColor=0F0F1A&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3hCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSI+PHBhdGggZD0iTTEyIDJMMjIgMTJMMTIgMjJMMiAxMloiIGZpbGw9IiM0RDZCRkUiLz48L3N2Zz4)](https://github.com/deepseek-ai/deepseek-harness)
-[![npm](https://img.shields.io/npm/v/dsh-ccpg-one)](https://www.npmjs.com/package/dsh-ccpg-one)
-[![CI](https://github.com/chumingjun/harness-one/actions/workflows/ci.yml/badge.svg)](https://github.com/chumingjun/harness-one/actions/workflows/ci.yml)
-[![GitHub Release](https://img.shields.io/github/v/release/chumingjun/harness-one)](https://github.com/chumingjun/harness-one/releases/latest)
-[![MIT License](https://img.shields.io/github/license/chumingjun/harness-one)](LICENSE)
+## 一句话，把真实 Agent 变成可观察的工作流
 
-![Workflow One 封面——多智能体工作流，节点输出全透明](images/cover.png)
+`Workflow One` 是运行在 [DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) 中的可视化 AI 工作流编排器。用拖拽 DAG 组合真实 dsh agent、脚本、条件分支和 HTTP 节点，在画布或对话中启动流程，实时查看每个节点的输入、输出和产物，失败后从中断处恢复。
 
-## 立即安装
+## 为什么需要 Workflow One？
 
-Node.js >= 24.15 且已安装 `@deepseek-ai/dsh`：
+| 能力 | 带来的变化 |
+| --- | --- |
+| **可视化编排** | 用节点和连线表达串行、并行与条件分支，复杂流程不再藏在提示词里。 |
+| **真实 dsh Agent** | 每个智能体节点直接使用 dsh 的模型、工具和 Skill，同一张图可组合不同模型与职责。 |
+| **运行全透明** | 实时查看节点状态、实际输入、输出、token、trace 和产物，多次运行可并发且互不干扰。 |
+| **可恢复执行** | 节点支持超时、重试、失败继续和断点续跑，不必因单点异常从头执行。 |
+| **多入口触发** | 可从画布、对话、Webhook 或 cron 定时启动；AI 助手也能查询、修改和运行工作流。 |
+| **结果可交付** | 结果与文档产物可预览、下载，也可通过飞书群聊或私聊推送进度和最终结果。 |
+
+## 安装
+
+> [!NOTE]
+> 需要 Node.js >= 22.13.0，并已安装 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)：`npm i -g @deepseek-ai/dsh`。
+
+### npm
 
 ```sh
-dsh plugin --profile web add dsh-ccpg-one@0.3.0
+dsh plugin --profile web add dsh-ccpg-one@latest
 dsh web
 ```
 
-Harness Desktop 用户在 **Open DSH Terminal** 中执行 `dsh plugin add dsh-ccpg-one@0.3.0`，然后重启 Desktop。也可以从 [GitHub Releases](https://github.com/chumingjun/harness-one/releases/latest) 下载离线聚合包。
+Harness Desktop 用户从托盘打开 **Open DSH Terminal**，执行 `dsh plugin add dsh-ccpg-one@latest` 后重启 Desktop。不要在 Desktop 中运行 `setup.sh`，Desktop 会自行管理 profile、Node/pnpm 和随机 loopback 端口。详见 [Desktop 安装与排障](dsh-plugins/DESKTOP.md)。
+
+### 离线包
+
+从 [GitHub Releases](https://github.com/chumingjun/harness-one/releases/latest) 下载聚合包，无需仓库源码：
+
+```sh
+curl -LO https://github.com/chumingjun/harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
+tar -xzf dsh-ccpg-plugins-<tag>.tar.gz && cd dsh-plugins
+sh setup.sh --one wf1 4021
+sh start.sh wf1                         # http://127.0.0.1:4021/
+```
+
+### 从源码构建
+
+```sh
+git clone https://github.com/chumingjun/harness-one.git
+cd harness-one
+npm install
+npm --prefix web install
+sh dsh-plugins/build-web.sh             # 源码安装必跑，构建产物不入库
+sh dsh-plugins/setup.sh --one dev 4021
+sh dsh-plugins/start.sh dev
+```
+
+模型和密钥完全由 dsh profile 管理。插件使用 dsh 默认模型栈，也支持在 `cordis.patch.yml` 或 `~/.dsh/settings.yaml` 中追加 provider；本仓库和插件不写死、不存储任何 key。完整安装、配置与开发循环见 [`dsh-plugins/README.md`](dsh-plugins/README.md)。
+
+> 普通 dsh 的 lark-cli 由 `setup.sh` 或插件自举安装；Desktop 仅在用户明确点击后通过受管 pnpm 安装。
 
 ## 界面与使用方式
 
-Workflow One 嵌在 dsh 官方界面中：左侧保留与智能体的对话，中间是可缩放的工作流画布。节点按连线组成 DAG，可以串行执行，也可以并行分组、条件分支和失败打回。紫色节点是智能体，橙色节点负责条件判定；运行时节点会直接显示排队、执行、成功或失败状态。
-
-典型使用流程：
+Workflow One 嵌在 dsh 官方界面中：左侧保留与智能体的对话，中间是可缩放的工作流画布。节点按连线组成 DAG，可以串行执行，也可以并行分组、条件分支和失败打回；运行时节点会直接显示排队、执行、成功或失败状态。
 
 1. 在 dsh 对话输入框旁打开「工作流」，新建工作流或载入已有流程。
-2. 从工具栏添加输入、智能体、脚本、条件、HTTP、输出、消息通知等节点，连线后在节点面板配置提示词、变量、工具和模型。
+2. 从工具栏添加输入、智能体、脚本、条件、HTTP、输出、消息通知等节点，连线后配置提示词、变量、工具和模型。
 3. 保存并从画布启动，也可以在左侧对话中让 AI 助手检查、修改和运行当前工作流。
-4. 运行卡实时显示已完成节点数和当前节点；点击节点查看实际输入与执行详情，在右侧「过程 / 成果 / 问题」中查看时间线、最终结果和产物。
-
-下面是画布与节点运行详情的完整演示（从全图缩放到节点详情）：
+4. 点击运行中的节点查看实际输入与执行详情，在右侧「过程 / 成果 / 问题」中查看时间线、最终结果和产物。
 
 ![Workflow One 从完整画布切换到节点运行详情](images/workflow-one-demo.gif)
 
@@ -47,42 +92,6 @@ Workflow One 嵌在 dsh 官方界面中：左侧保留与智能体的对话，�
 ## 可导入模板
 
 [`examples/workflows/`](examples/workflows/) 提供三套可直接导入的工作流：报修工单整理、紧急度分流和多方并行评审。打开「工作流」列表，点击「导入」并选择 `.workflow-one.json` 文件即可使用。
-
-## 快速开始
-
-**Harness Desktop（npm 包发布后）**：从 Desktop 托盘打开 **Open DSH Terminal**，对当前 profile 安装并重启 Desktop：
-
-```sh
-dsh plugin add dsh-ccpg-one@0.3.0
-```
-
-Desktop 使用官方 DSH/Cordis 插件组合，不需要另一套插件。不要在 Desktop 里运行 `setup.sh`：Desktop 自己管理 profile、Node/pnpm 和随机 loopback 端口；飞书账号页首次点击「自动安装」时，lark-cli 会通过 Desktop 的受管 pnpm 安装到当前 profile。安装使用细节、环境差异与常见问题排查见 [`dsh-plugins/DESKTOP.md`](dsh-plugins/DESKTOP.md)；Desktop 开发兼容契约（`desktopProfiles`/`desktopPnpm` 动态探测、跨环境插件写法）也在该文档第 2 节。
-
-**普通用户（release 包，无需本仓库源码）**：
-
-```sh
-# 前提：node>=24.15、npm i -g @deepseek-ai/dsh
-curl -LO https://github.com/chumingjun/harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
-tar -xzf dsh-ccpg-plugins-<tag>.tar.gz && cd dsh-plugins
-sh setup.sh --one wf1 4021               # 一键安装（自带全部构建产物）
-sh start.sh wf1                          # 启动 → http://127.0.0.1:4021/
-```
-
-**开发者（源码）**：
-
-```sh
-git clone https://github.com/chumingjun/harness-one.git && cd harness-one/dsh-plugins
-npm test                                 # （可选）全量单测
-sh build-web.sh                          # 构建画布（含 document-preview）——产物不入库，源码安装必跑
-sh setup.sh --one dev 4021               # 安装（或逐插件：sh setup.sh dev 4021）
-sh start.sh dev
-```
-
-详细安装/使用/开发循环见 [`dsh-plugins/README.md`](dsh-plugins/README.md)。
-
-**模型完全交给 dsh 自带配置**：插件里的 agent 走 dsh 默认模型栈（`deepseek-official`，默认模型在官方 UI「模型」页选择、key 保存进 dsh 用户级 credentials），也可以像 dsh 原生那样在 profile 的 `cordis.patch.yml` / `~/.dsh/settings.yaml` 里自行追加 provider。`setup.sh` 只写端口覆盖，不写任何模型 provider——本仓库与插件不写死、不存任何 key。
-
-> 普通 dsh 的 lark-cli 由 setup.sh/插件自举安装；Desktop 只在用户明确点击后通过受管 pnpm 安装。
 
 ## 画布能力
 
@@ -198,10 +207,10 @@ dsh-plugins/
 ## 测试
 
 ```sh
-cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # 14 套
-node dsh-plugins/dsh-ccpg-canvasui/test/client.test.mjs                               # canvasui 客户端
-node dsh-plugins/dsh-ccpg-document-preview/test/index.test.mjs                        # 4/4
-cd web && npm test                                                                    # 10 套
+cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done
+node dsh-plugins/dsh-ccpg-canvasui/test/client.test.mjs
+node dsh-plugins/dsh-ccpg-document-preview/test/index.test.mjs
+cd web && npm test
 ```
 
 ## 已知限制
