@@ -30,6 +30,10 @@
 - **PR 流程**（主题分支专用）：
   - push 后开 PR，标题即 Conventional Commit 格式（squash merge 后 commit 历史天然规范）
   - PR 描述写背景/方案/验证结果（截图、测试数字），这是决策记录的档案
+  - **合并门槛（缺一不可，合并前自查）**：
+    1. **代码审核已做且问题已修**：对完整 diff 自审（可叫 AI 复审），发现的缺陷修完并复测
+    2. **本地真实跑通**：改动面相关的真实环境验证——引擎/插件改动要起真 dsh 实测，前端改动要在真实浏览器里点到（E2E 配方见「测试与验证」），不是单测绿就完
+    3. 全量回归 + `build-web.sh` 双构建通过；CI 绿
   - **Squash and merge** 合并：WIP 细分提交压成 1 个干净提交；确需保留细分时用 Rebase merge；不用 merge commit
   - 自查：开 PR 后隔 10 分钟过一遍完整 diff 再合
 - **多主题并行用 worktree**：`git worktree add ../harness-one-<topic> -b feat/<topic>` 开独立工作目录，各主题互不干扰、随时可弃；同一分支不能检出两个 worktree；新 worktree 要重装 node_modules（多 package 仓库）；用完 `git worktree remove` + 定期 `git worktree prune`
@@ -79,6 +83,7 @@ CI：`.github/workflows/ci.yml` 在 PR 与 main push 上跑 `npm test` + `build-
 5. **构建产物一律不入库**（`web-dist/`、`canvasui lib/client.js`、`document-preview/dist/`、`web/dist/` 全部 gitignore）：分发包「拿到即装」由 `pack.sh` 现场重跑构建保证；源码安装先 `build-web.sh` 再 `setup.sh`（setup 已前置校验）。绝不为省一步构建把产物提交进仓库。
 6. **消息通知走渠道抽象**：运行级事件、去重、模式判断、摘要脱敏与失败隔离统一放在 `orchestrator/lib/notifications.js`；渠道实现只放 `notification-<channel>.js`，负责配置校验、消息渲染和发送。新增钉钉/企业微信时注册 provider 到 `NotificationChannelRegistry`，并通过 `/wf1/api/tools` 的 `notificationChannels` 暴露给前端；禁止复制运行监听器或在前端写死完整渠道清单。通知失败只能写节点 `notification` 元数据，不能改变业务运行状态。
 7. **多运行并发 + 定时任务**：引擎天然多运行（`Orchestrator.runs` Map，runId 全链路隔离），前端查看态以 `inspectedRunId` 为单一事实源（RunSwitcher 胶囊切换），不要回退到单活跃 run 模型；run-start 只跟随本画布发起的运行，schedule/webhook 触发不抢占视图。定时调度核心在 `orchestrator/lib/schedule.js`（cron/overlap/统计），meta 持久化在 `state/triggers.json`（不迁 SQLite）；前端面板 `web/src/ScheduleCenter.jsx` + `describeCron`。
+8. **助手工具两家族分工**：`canvas_*` 锚定当前绑定画布/草稿（须 `/assistant/bind` 绑定会话）；`workflow_*` 按工作流 id/name 管库，任意会话可用（按会话 cwd 经 `sessionStore` 定工作区，解析失败不回退默认工作区）。两家族共享 `startWorkflowRun`（启动已保存工作流：组装全局/工作流变量+runInputs 校验）与 `runProgressOf/resumableRun` 整形；改库后若画布正打开该工作流必须同步 cv 并广播 `assistant-patch`，`workflow_open` 广播 `assistant-open-workflow`（前端复用 openWorkflow 路径，脏草稿先静默保存）。节点 agent 工具白名单不含 workflow_*/canvas_*，不会递归发起运行。
 
 ### 消息通知节点约束
 

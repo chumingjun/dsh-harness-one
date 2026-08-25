@@ -345,6 +345,27 @@ export function apply(ctx, config) {
     return { applied: true };
   };
 
+  // 按已保存工作流启动运行（/run API 的 workflowId 分支与 canvas_run_workflow / workflow_run 工具同源）：
+  // 组装全局/工作流变量、校验 runInputs，统一走 startRun。
+  const startWorkflowRun = (wf, { triggerInput = '', runInputs = {}, canvasId = null, source = 'manual' } = {}) => {
+    const lint = lintWorkflowGraph(wf.graph);
+    if (!lint.ok) {
+      const err = lint.issues.find((i) => i.level === 'error')?.message || '图存在错误';
+      return { ok: false, error: `图有错误不能运行：${err}` };
+    }
+    let globals; try { globals = globalContext(); } catch (error) { return { ok: false, error: String(error.message || error) }; }
+    let inputs; try { inputs = assertSafeContextObject(runInputs, 'runInputs'); } catch (error) { return { ok: false, error: String(error.message || error) }; }
+    const { runId } = startRun(wf.graph, {
+      triggerInput, workflowName: wf.name, workflowId: wf.id,
+      canvasId,
+      globalVariables: globals.globalVariables,
+      workflowVariables: variableDefinitionsToValues(wf.variables),
+      runInputs: inputs,
+      source,
+    });
+    return { ok: true, runId };
+  };
+
   const canvasTools = {
     canvas_get_graph: {
       description: '获取当前工作流画布的完整图 JSON（节点+边）。',
@@ -427,12 +448,18 @@ export function apply(ctx, config) {
       async execute(args, exec) {
         const cv = canvasOf(exec.canvasId);
         if (!cv.graph) return '画布尚未打开或未上报图。';
-        const graph = cv.workflowId ? (() => { try { return readWf(cv.workflowId)?.graph || cv.graph; } catch { return cv.graph; } })() : cv.graph;
-        const lint = lintWorkflowGraph(graph);
+        if (cv.workflowId) {
+          const wf = readWf(cv.workflowId);
+          if (!wf) return '画布绑定的工作流已不存在（可能已删除），请重新打开或保存。';
+          const r = startWorkflowRun(wf, { triggerInput: args.triggerInput ?? '', canvasId: exec.canvasId, source: 'assistant' });
+          if (!r.ok) return r.error;
+          return JSON.stringify({ started: true, runId: r.runId });
+        }
+        const lint = lintWorkflowGraph(cv.graph);
         if (!lint.ok) return `图有错误不能运行：\n${lint.issues.filter((x) => x.level === 'error').map((x) => x.message).join('\n')}`;
         const globals = (() => { try { return globalContext(); } catch { return { globalVariables: {} }; } })();
-        const { runId } = startRun(graph, {
-          triggerInput: args.triggerInput ?? '', workflowName: null, workflowId: cv.workflowId,
+        const { runId } = startRun(cv.graph, {
+          triggerInput: args.triggerInput ?? '', workflowName: null, workflowId: null,
           canvasId: exec.canvasId,
           globalVariables: globals.globalVariables,
           source: 'assistant',
@@ -496,6 +523,304 @@ export function apply(ctx, config) {
     });
     try { ctx.tools.register(wrapped); } catch (e) { ctx.logger?.warn?.(`assistant tool ${name} 注册失败: ${e.message}`); }
   }
+
+  // ---- workflow_* 工具家族：按工作流 ID/name 操作，不依赖画布绑定 ----
+  // 与 canvas_*（锚定当前绑定画布/草稿）分工：workflow_* 管库（查询/运行/终止/改/删/切换），
+  // 任意官方聊天会话可用；执行按该会话自己的 cwd 定工作区（sessionStore），解析失败不回退默认工作区。
+  // 注意：节点 agent 的工具白名单不含这些名字，不会出现节点递归发起工作流运行。
+  // 画布同步：改库后若目标工作流正被某画布打开，同步服务端 cv 并广播 assistant-patch（复用版本跳变兜底）。
+  const syncCanvasForWorkflow = (workflowId, nextGraph, patch) => {
+    for (const [key, cv] of canvases) {
+      if (cv.workflowId !== workflowId || key.split('\0')[0] !== currentStore().workspaceRoot) continue;
+      cv.graph = nextGraph;
+      cv.version += 1;
+      broadcast('assistant-patch', {
+        canvasId: key.split('\0')[1], version: cv.version,
+        patch: patch || [], graph: nextGraph, workflowId,
+      });
+    }
+  };
+  const resolveWorkflowArg = (args) => {
+    if (args.workflowId) {
+      const wf = readWf(String(args.workflowId));
+      return wf ? { wf } : { error: `工作流 "${args.workflowId}" 不存在（可用 workflow_list 查看）` };
+    }
+    if (args.name) {
+      const hit = currentDatabase().listWorkflows().find((w) => w.name === args.name);
+      if (!hit) return { error: `未找到名为「${args.name}」的工作流（可用 workflow_list 查看）` };
+      return { wf: readWf(hit.id) };
+    }
+    return { error: '需要 workflowId 或 name 参数' };
+  };
+  const liveRunSummaries = () => runSummaries(100).filter((r) => r.live);
+
+  const workflowTools = {
+    workflow_list: {
+      description: '列出当前工作区全部工作流（id/名称/节点数/更新时间/各自运行中数量）。用户问「有哪些工作流」「什么在跑」先用这个。',
+      parameters: {},
+      async execute() {
+        const live = liveRunSummaries();
+        const rows = currentDatabase().listWorkflows().map((w) => ({
+          id: w.id, name: w.name, nodes: w.nodeCount, agents: w.agentCount,
+          updatedAt: w.updatedAt, liveRuns: live.filter((r) => r.workflowId === w.id).length,
+        }));
+        if (!rows.length) return '工作区还没有已保存的工作流。';
+        return JSON.stringify(rows, null, 2);
+      },
+    },
+    workflow_get: {
+      description: '读取单个工作流详情。默认返回省 token 的图概要 + 变量定义 + 输入 Schema（AI 据此构造 runInputs）；summary:false 返回完整图 JSON。',
+      parameters: {
+        workflowId: { type: 'string', description: '工作流 id（与 name 二选一）' },
+        name: { type: 'string', description: '工作流名称（与 workflowId 二选一）' },
+        summary: { type: 'boolean', description: '默认 true；false 返回完整图' },
+      },
+      async execute(args) {
+        const r = resolveWorkflowArg(args);
+        if (r.error) return r.error;
+        const { wf } = r;
+        const base = {
+          id: wf.id, name: wf.name, updatedAt: wf.updatedAt,
+          variables: wf.variables, inputSchema: wf.inputSchema,
+        };
+        if (args.summary === false) return JSON.stringify({ ...base, graph: wf.graph }, null, 2);
+        return JSON.stringify({ ...base, graph: summarizeGraphForAI(wf.graph) }, null, 2);
+      },
+    },
+    workflow_run: {
+      description: '运行一个已保存的工作流（异步：返回 runId，用 workflow_run_status 或 workflow_runs 轮询）。支持触发输入与结构化运行参数。',
+      parameters: {
+        workflowId: { type: 'string', description: '工作流 id（与 name 二选一）' },
+        name: { type: 'string', description: '工作流名称（与 workflowId 二选一）' },
+        triggerInput: { type: 'string', description: '触发输入文本（输入节点模板的 $trigger）' },
+        runInputs: { type: 'json', description: '结构化运行参数对象，键需匹配工作流 inputSchema 字段' },
+      },
+      async execute(args, exec) {
+        const r = resolveWorkflowArg(args);
+        if (r.error) return r.error;
+        const cv = exec.canvasId ? canvasOf(exec.canvasId) : null;
+        const canvasId = cv && cv.workflowId === r.wf.id ? exec.canvasId : null;
+        const started = startWorkflowRun(r.wf, {
+          triggerInput: args.triggerInput ?? '',
+          runInputs: args.runInputs || {},
+          canvasId,
+          source: 'assistant',
+        });
+        if (!started.ok) return started.error;
+        return JSON.stringify({ started: true, runId: started.runId });
+      },
+    },
+    workflow_runs: {
+      description: '查询运行列表（默认运行中优先 + 最近 20 条；可按工作流过滤）。回答「现在在跑什么、什么状态」用它。',
+      parameters: {
+        workflowId: { type: 'string', description: '按工作流过滤（可选）' },
+        limit: { type: 'number', description: '返回条数，默认 20，最大 100' },
+        onlyLive: { type: 'boolean', description: '只看运行中的' },
+      },
+      async execute(args) {
+        const limit = Math.min(Number(args.limit) || 20, 100);
+        let rows = runSummaries(limit);
+        if (args.onlyLive) rows = rows.filter((x) => x.live);
+        if (args.workflowId) rows = rows.filter((x) => x.workflowId === args.workflowId);
+        if (!rows.length) return args.onlyLive ? '当前没有运行中的工作流。' : '暂无运行记录。';
+        const order = (a, b) => (Number(b.live) - Number(a.live)) || String(b.startedAt || '').localeCompare(String(a.startedAt || ''));
+        return JSON.stringify(rows.sort(order).map((x) => ({
+          runId: x.runId, status: x.status, workflowName: x.workflowName, workflowId: x.workflowId,
+          source: x.source, startedAt: x.startedAt, durationMs: x.durationMs,
+          live: x.live, progress: `${x.progress.done}/${x.progress.total}`,
+        })), null, 2);
+      },
+    },
+    workflow_run_status: {
+      description: '查询一次运行的详情（节点状态/错误/输出摘要）。运行完成或失败后返回终态。',
+      parameters: { runId: { type: 'string', required: true, description: '运行 id（workflow_run / workflow_runs 获得）' } },
+      async execute(args) {
+        const entry = orch.runs.get(args.runId);
+        if (entry?.run?.workspaceRoot === currentStore().workspaceRoot) {
+          const run = entry.run;
+          return JSON.stringify({
+            status: run.status || 'running',
+            workflowName: run.workflowName, source: run.source, startedAt: run.startedAt,
+            durationMs: run.durationMs ?? null,
+            nodeStates: summarizeNodeStates(run.nodeStates),
+            outputs: summarizeOutputs(run.outputs, run.structuredOutputs),
+          });
+        }
+        const hist = readRun(args.runId);
+        if (!hist) return `运行 "${args.runId}" 不存在`;
+        return JSON.stringify({
+          status: hist.status,
+          workflowName: hist.workflowName, source: hist.source, startedAt: hist.startedAt,
+          durationMs: hist.durationMs ?? null,
+          nodeStates: summarizeNodeStates(hist.nodeStates),
+          outputs: summarizeOutputs(hist.outputs, hist.structuredOutputs),
+        });
+      },
+    },
+    workflow_run_cancel: {
+      description: '终止/取消运行。传 runId 取消单个；传 workflowId（或 all:true）取消该工作流/全部运行中的 run。已结束的运行不受影响。',
+      parameters: {
+        runId: { type: 'string', description: '要取消的运行 id（与 workflowId/all 二选一）' },
+        workflowId: { type: 'string', description: '取消该工作流全部运行中的 run' },
+        all: { type: 'boolean', description: 'true 取消全部运行中的 run' },
+      },
+      async execute(args) {
+        const targets = args.runId
+          ? [String(args.runId)]
+          : liveRunSummaries()
+            .filter((x) => (args.all ? true : x.workflowId === args.workflowId))
+            .map((x) => x.runId);
+        if (!targets.length) return '没有匹配的运行中 run。';
+        const results = [];
+        for (const id of targets) {
+          const entry = orch.runs.get(id);
+          const ok = entry?.run?.workspaceRoot === currentStore().workspaceRoot ? orch.cancel(id, '助手取消') : false;
+          results.push({ runId: id, canceled: ok });
+        }
+        return JSON.stringify({ canceled: results.filter((x) => x.canceled).length, results });
+      },
+    },
+    workflow_patch: {
+      description: '修改已保存工作流的图（批量 ops 原子生效，语义与 canvas_graph_patch 完全一致）。若目标工作流正被画布打开，画布实时同步。可选 name 字段改名。',
+      parameters: {
+        workflowId: { type: 'string', required: true, description: '目标工作流 id' },
+        ops: {
+          type: 'array', required: true,
+          items: {
+            type: 'object', additionalProperties: true,
+            properties: {
+              op: { type: 'string' }, type: { type: 'string' }, label: { type: 'string' },
+              data: { type: 'json' }, after: { type: 'string' }, connect: { type: 'boolean' },
+              branch: { type: 'string' }, id: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' },
+              position: { type: 'json' },
+            },
+          },
+        },
+        name: { type: 'string', description: '新名称（可选，不改名不传）' },
+      },
+      async execute(args) {
+        const wf = readWf(String(args.workflowId));
+        if (!wf) return `工作流 "${args.workflowId}" 不存在（可用 workflow_list 查看）`;
+        const r = validateGraphOps(wf.graph, args.ops);
+        if (!r.ok) return `整批拒绝（未做任何修改）：\n${r.errors.join('\n')}\n请修正后重发整批 ops。`;
+        const saved = writeWf({
+          ...wf,
+          ...(args.name ? { name: String(args.name).slice(0, 60) } : {}),
+          graph: r.graph,
+          updatedAt: new Date().toISOString(),
+        });
+        syncCanvasForWorkflow(saved.id, r.graph, r.patch);
+        const check = checkPatchResult(r.graph);
+        return `已应用 ${r.patch.length} 个操作到「${saved.name}」。\nlint: ${check.lintOk ? '通过' : '有告警'}\n${check.issues.slice(0, 20).join('\n')}`;
+      },
+    },
+    workflow_create: {
+      description: '新建工作流。name 必填；可选 graph（{nodes,edges} 初始图）或 copyFrom（复制既有工作流 id）。草稿请让用户在画布保存，这里只建已命名工作流。',
+      parameters: {
+        name: { type: 'string', required: true, description: '工作流名称' },
+        graph: { type: 'json', description: '初始图 {nodes, edges}（可选）' },
+        copyFrom: { type: 'string', description: '复制来源工作流 id（可选）' },
+      },
+      async execute(args) {
+        const name = String(args.name || '').trim().slice(0, 60);
+        if (!name) return 'name 不能为空';
+        let graph = { nodes: [], edges: [] };
+        if (args.copyFrom) {
+          const src = readWf(String(args.copyFrom));
+          if (!src) return `复制来源 "${args.copyFrom}" 不存在`;
+          graph = src.graph;
+        } else if (args.graph && Array.isArray(args.graph.nodes)) {
+          graph = args.graph;
+        } else if (args.graph) {
+          return 'graph 必须是 {nodes, edges} 对象';
+        }
+        // 与 POST /workflows 同语义：不做 lint（空画布起步合法），运行时会再校验
+        const id = `wf_${Date.now().toString(36)}${randomUUID().slice(0, 4)}`;
+        const saved = writeWf(normalizeWorkflowDocument({ id, name, graph, updatedAt: new Date().toISOString() }));
+        return JSON.stringify({ created: true, id: saved.id, name: saved.name, nodes: saved.graph?.nodes?.length || 0 });
+      },
+    },
+    workflow_delete: {
+      description: '删除工作流（不可恢复）。必须传 confirm:true 才执行。有运行中 run、定时任务或 webhook 关联时拒绝并列出关联，引导先清理。',
+      parameters: {
+        workflowId: { type: 'string', required: true, description: '目标工作流 id' },
+        confirm: { type: 'boolean', description: '确认真删传 true' },
+      },
+      async execute(args) {
+        const wf = readWf(String(args.workflowId));
+        if (!wf) return `工作流 "${args.workflowId}" 不存在`;
+        if (args.confirm !== true) return `确认删除「${wf.name}」？此操作不可恢复。确认请带 confirm:true 重新调用。`;
+        const live = liveRunSummaries().filter((x) => x.workflowId === wf.id);
+        if (live.length) return `有 ${live.length} 个运行中的 run（${live.map((x) => x.runId).join(', ')}），请先等待完成或用 workflow_run_cancel 取消。`;
+        const hooks = [...currentHooks().values()].filter((h) => h.workflowId === wf.id);
+        if (hooks.length) return `有 ${hooks.length} 个 webhook 关联（${hooks.map((h) => h.id).join(', ')}），请先在画布删除 webhook。`;
+        const schedules = [...currentSchedulerMeta().values()].filter((m) => m.workflowId === wf.id);
+        if (schedules.length) return `有 ${schedules.length} 个定时任务关联（${schedules.map((m) => m.key).join(', ')}），请先在定时任务中心删除。`;
+        // 画布若正打开该工作流：退回草稿态（前端收到事件后回「未保存」空画布）
+        for (const [key, cv] of canvases) {
+          if (cv.workflowId !== wf.id || key.split('\0')[0] !== currentStore().workspaceRoot) continue;
+          cv.workflowId = null;
+          cv.graph = { nodes: [], edges: [] };
+          cv.version += 1;
+          broadcast('assistant-patch', {
+            canvasId: key.split('\0')[1], version: cv.version,
+            patch: [], graph: cv.graph, workflowId: null,
+          });
+        }
+        deleteWf(wf.id);
+        return JSON.stringify({ deleted: true, id: wf.id, name: wf.name });
+      },
+    },
+    workflow_open: {
+      description: '把绑定的画布切换到指定工作流（用户屏幕上打开它）。仅在绑定画布的会话里可用；画布有未保存修改时用户会收到确认弹窗。',
+      parameters: {
+        workflowId: { type: 'string', description: '目标工作流 id（与 name 二选一）' },
+        name: { type: 'string', description: '目标工作流名称（与 workflowId 二选一）' },
+      },
+      async execute(args, exec) {
+        const r = resolveWorkflowArg(args);
+        if (r.error) return r.error;
+        const cv = canvasOf(exec.canvasId);
+        cv.workflowId = r.wf.id;
+        // 浅拷贝防别名：库里的图对象与画布态解耦，后续任一侧替换互不影响
+        cv.graph = { nodes: r.wf.graph.nodes.map((n) => ({ ...n, data: { ...n.data } })), edges: r.wf.graph.edges.map((e) => ({ ...e })) };
+        cv.version += 1;
+        broadcast('assistant-open-workflow', {
+          canvasId: exec.canvasId, workflowId: r.wf.id,
+        });
+        return `画布已切换到「${r.wf.name}」（若画布有未保存修改，用户确认后生效）。`;
+      },
+    },
+  };
+
+  // workflow_* 注册：与 canvas_* 相同的 defineTool 包装（spec→Schema 编译 + 工作区绑定运行），
+  // 但不做画布绑定门槛——按会话自己的 cwd 定工作区；workflow_open 例外，由 execute 内自行处理。
+  const registerAssistantTools = (tools, { requireCanvas = true } = {}) => {
+    for (const [name, def] of Object.entries(tools)) {
+      const needCanvas = requireCanvas && name !== 'workflow_open' ? true : (name === 'workflow_open');
+      const wrapped = defineTool({
+        name,
+        description: def.description,
+        parameters: def.parameters,
+        output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: String(v) }] },
+        async execute(args, exec) {
+          const sid = exec?.agent?.session?.id || exec?.sessionId || exec?.session?.id;
+          const canvasId = resolveCanvasId(exec);
+          if (needCanvas && (!sid || !canvasId)) {
+            return '此工具只在绑定了工作流画布的会话里可用（在画布「工作流」标签页发起对话）。';
+          }
+          if (!sid) return '当前会话无法定位工作区，请在聊天绑定工作目录后重试。';
+          try {
+            return await workspaceContext.run(sessionStore(String(sid)), () => def.execute(args, { ...exec, canvasId }));
+          } catch (error) {
+            return `工作区不可用：${String(error.message || error)}`;
+          }
+        },
+      });
+      try { ctx.tools.register(wrapped); } catch (e) { ctx.logger?.warn?.(`assistant tool ${name} 注册失败: ${e.message}`); }
+    }
+  };
+  registerAssistantTools(workflowTools, { requireCanvas: false });
 
 
   // ---- 运行历史（按工作区持久化 + 内存缓存）----
@@ -1416,34 +1741,61 @@ export function apply(ctx, config) {
   } });
 
   // ---- 运行历史 ----
-  register({ kind: 'exact', path: '/wf1/api/runs', handler(_req, res) {
+  // ---- 运行列表共享整形（/runs API 与 workflow_runs 助手工具同源，不双写）----
+  const runProgressOf = (r) => {
+    const nodeIds = r.graph?.nodes?.filter((node) => node.type !== 'notify').map((node) => node.id)
+      || Object.keys(r.nodeStates || {});
+    const states = nodeIds.map((nodeId) => r.nodeStates?.[nodeId]);
+    const total = nodeIds.length;
+    const done = states.filter((st) => ['success', 'error', 'canceled', 'skipped'].includes(st?.status)).length;
+    const succeeded = states.filter((st) => st?.status === 'success').length;
+    return { done, total, succeeded };
+  };
+  const resumableRun = (r, isLive) => !isLive
+    && ['error', 'canceled', 'interrupted'].includes(r.status)
+    && Boolean(r.graph?.nodes?.length)
+    && Object.values(r.nodeStates || {}).some((st) => st?.status === 'success')
+    && r.graph.nodes.some((node) => !['success', 'skipped'].includes(r.nodeStates?.[node.id]?.status));
+  const runSummaries = (limit = 20) => {
     const live = [...orch.runs.values()].filter((entry) => entry.run.workspaceRoot === currentStore().workspaceRoot).map((entry) => entry.run.runId);
-    const runProgress = (r) => {
-      const nodeIds = r.graph?.nodes?.filter((node) => node.type !== 'notify').map((node) => node.id)
-        || Object.keys(r.nodeStates || {});
-      const states = nodeIds.map((nodeId) => r.nodeStates?.[nodeId]);
-      const total = nodeIds.length;
-      const done = states.filter((st) => ['success', 'error', 'canceled', 'skipped'].includes(st?.status)).length;
-      const succeeded = states.filter((st) => st?.status === 'success').length;
-      return { done, total, succeeded };
-    };
-    const resumable = (r, isLive) => !isLive
-      && ['error', 'canceled', 'interrupted'].includes(r.status)
-      && Boolean(r.graph?.nodes?.length)
-      && Object.values(r.nodeStates || {}).some((st) => st?.status === 'success')
-      && r.graph.nodes.some((node) => !['success', 'skipped'].includes(r.nodeStates?.[node.id]?.status));
+    return recentRuns(limit).map((r) => {
+      const { structuredOutputs, graph, ...summary } = r;
+      const isLive = live.includes(r.runId);
+      return {
+        runId: summary.runId,
+        status: summary.status,
+        workflowId: summary.workflowId ?? null,
+        workflowName: summary.workflowName ?? null,
+        source: summary.source ?? null,
+        startedAt: summary.startedAt ?? null,
+        durationMs: summary.durationMs ?? null,
+        live: isLive,
+        progress: runProgressOf(r),
+        resumable: resumableRun(r, isLive),
+        outputs: summarizeOutputs(summary.outputs, structuredOutputs),
+        nodeStates: summarizeNodeStates(summary.nodeStates),
+        structuredOutputSummary: summarizeStructuredOutputs(structuredOutputs),
+      };
+    });
+  };
+
+  register({ kind: 'exact', path: '/wf1/api/runs', handler(req, res) {
+    const url = new URL(req.url, 'http://x');
+    const limit = Math.min(Number(url.searchParams.get('limit')) || 20, 100);
+    const liveIds = new Set([...orch.runs.values()].filter((entry) => entry.run.workspaceRoot === currentStore().workspaceRoot).map((entry) => entry.run.runId));
     json(res, 200, {
-      runs: recentRuns(20).map((r) => {
+      // 保持既有字段面（triggerInput/canvasId 等平铺），整形逻辑与 workflow_runs 工具同源
+      runs: recentRuns(limit).map((r) => {
         const { structuredOutputs, graph, ...summary } = r;
-        const isLive = live.includes(r.runId);
+        const isLive = liveIds.has(r.runId);
         return {
           ...summary,
           outputs: summarizeOutputs(summary.outputs, structuredOutputs),
           nodeStates: summarizeNodeStates(summary.nodeStates),
           structuredOutputSummary: summarizeStructuredOutputs(structuredOutputs),
           live: isLive,
-          progress: runProgress(r),
-          resumable: resumable(r, isLive),
+          progress: runProgressOf(r),
+          resumable: resumableRun(r, isLive),
         };
       }),
     });
