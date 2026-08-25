@@ -30,6 +30,10 @@
 - **PR 流程**（主题分支专用）：
   - push 后开 PR，标题即 Conventional Commit 格式（squash merge 后 commit 历史天然规范）
   - PR 描述写背景/方案/验证结果（截图、测试数字），这是决策记录的档案
+  - **合并门槛（缺一不可，合并前自查）**：
+    1. **代码审核已做且问题已修**：对完整 diff 自审（可叫 AI 复审），发现的缺陷修完并复测
+    2. **本地真实跑通**：改动面相关的真实环境验证——引擎/插件改动要起真 dsh 实测，前端改动要在真实浏览器里点到（E2E 配方见「测试与验证」），不是单测绿就完
+    3. 全量回归 + `build-web.sh` 双构建通过；CI 绿
   - **Squash and merge** 合并：WIP 细分提交压成 1 个干净提交；确需保留细分时用 Rebase merge；不用 merge commit
   - 自查：开 PR 后隔 10 分钟过一遍完整 diff 再合
 - **多主题并行用 worktree**：`git worktree add ../harness-one-<topic> -b feat/<topic>` 开独立工作目录，各主题互不干扰、随时可弃；同一分支不能检出两个 worktree；新 worktree 要重装 node_modules（多 package 仓库）；用完 `git worktree remove` + 定期 `git worktree prune`
