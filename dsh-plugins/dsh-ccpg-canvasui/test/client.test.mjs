@@ -436,4 +436,70 @@ cardClient.__test.WorkflowRunCard({
   assert.ok(!String(metaText).startsWith("{"), "run_status 卡不应把结果 JSON 塞进 meta");
 }
 
+// ---- 主题桥：宿主 dark/light 检测 + wf1-theme 推送 ----
+// 在自定义 vm 上下文里重载 bundle，逐例换 document.body 断言 currentHostTheme
+function loadClientInContext(overrides) {
+  let scoped;
+  const ctx = {
+    document: {
+      createElement: () => ({}),
+      getElementById: () => null,
+      head: { appendChild() {} },
+      ...overrides.document,
+    },
+    window: {
+      location: { origin: "https://dsh.local" },
+      localStorage: { getItem: () => null },
+      __ModuleLoader__: {
+        load({ factory }) {
+          scoped = factory(() => ({ createElement() {}, useRef() {}, useState() {}, useEffect() {} }));
+        },
+      },
+    },
+    console,
+    ...overrides.globals,
+  };
+  vm.runInNewContext(bundle, ctx, { filename: "canvasui-scoped.js" });
+  return scoped;
+}
+
+for (const [body, expected] of [
+  [{ hasAttribute: (k) => k === "data-ds-dark-theme", className: "" }, "dark"],
+  [{ hasAttribute: () => false, className: "" }, "light"],
+  [{ hasAttribute: () => false, className: "theme-light other" }, "light"],
+  [{ hasAttribute: () => false, className: "xyz dark" }, "dark"],
+]) {
+  const scoped = loadClientInContext({ document: { body } });
+  assert.equal(scoped.__test.currentHostTheme(), expected);
+}
+
+// startThemeBridge：主题变化 → 向画布 iframe 发 wf1-theme
+{
+  const observers = [];
+  const body = { hasAttribute: () => true, className: "" };
+  const scoped = loadClientInContext({
+    document: { body },
+    globals: {
+      MutationObserver: class {
+        constructor(cb) { observers.push(cb); }
+        observe() {}
+        disconnect() {}
+      },
+    },
+  });
+  const sent = [];
+  const frame = { contentWindow: { postMessage: (msg, origin) => sent.push({ msg, origin }) } };
+  const stop = scoped.__test.startThemeBridge(() => frame);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].msg.type, "wf1-theme");
+  assert.equal(sent[0].msg.theme, "dark");
+  assert.equal(sent[0].origin, "https://dsh.local");
+  // 切浅色（属性移除）→ observer 回调 → 重发 light
+  body.hasAttribute = () => false;
+  observers.forEach((cb) => cb());
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].msg.theme, "light");
+  stop();
+}
+
 console.log("canvasui client tests: passed");

@@ -5,6 +5,7 @@
 //（ctx.inject(['betterSidebar'],…)）：未安装 better-sidebar 时按钮保持不可用。
 // 画布 ↔ 宿主经 postMessage 桥接：
 //   宿主 → 画布：{type:'wf1-session', sessionId}（画布据此绑 AI 助手工具作用域）
+//               {type:'wf1-theme', theme:'dark'|'light'}（画布跟随主界面主题）
 //   画布 → 宿主：{type:'wf1-ready'}
 //
 // ⚠ 本文件是源文件（src/client.js），真正的插件 bundle 是构建产物 lib/client.js；
@@ -22,6 +23,51 @@ window.__ModuleLoader__.load({
     var WORKFLOW_TAB_TYPE = "ccpg:workflow";
     var LEGACY_CHAT_TAB_TYPE = "ccpg:chat";
     var WORKFLOW_TAB_ORDER = 5; // better-sidebar + 菜单升序，内置最小 explorer=10 → 排第一
+
+    // ---- 主题桥：官方 UI 的 dark/light → 画布 data-theme ----
+    // 官方 UI 把当前主题记在 body[data-ds-dark-theme]（brand 插件同款锚点）；
+    // MutationObserver 监听该属性 + body class 变化，变化即向画布 iframe 发
+    // wf1-theme。独立标签页打开画布（无宿主）时画布保持自身默认主题。
+    function currentHostTheme() {
+      var body = document.body;
+      if (!body) return "dark";
+      if (body.hasAttribute("data-ds-dark-theme")) return "dark";
+      // 官方浅色：属性移除。历史版本曾用 class 携带主题名，一并识别。
+      var m = /(?:^|\s)(dark|light)(?:\s|$)/.exec(body.className || "");
+      return m ? m[1] : "light";
+    }
+    var themeBridge = { notifyReload: null };
+    function notifyThemeReload() {
+      if (themeBridge.notifyReload) themeBridge.notifyReload();
+    }
+    function startThemeBridge(getFrame) {
+      var lastTheme = null;
+      var send = function () {
+        var theme = currentHostTheme();
+        if (theme === lastTheme) return;
+        lastTheme = theme;
+        var frame = getFrame();
+        if (!frame) return;
+        try {
+          frame.contentWindow.postMessage(
+            { type: "wf1-theme", theme: theme },
+            window.location.origin,
+          );
+        } catch (e) { /* 画布未就绪 */ }
+      };
+      send();
+      // 画布 reload 后 lastTheme 仍等于旧值 → 重置让 send() 立即重发
+      themeBridge.notifyReload = function () { lastTheme = null; send(); };
+      var observer = new MutationObserver(send);
+      observer.observe(document.body, {
+        attributes: true,
+        attributeFilter: ["data-ds-dark-theme", "class"],
+      });
+      return function () {
+        themeBridge.notifyReload = null;
+        observer.disconnect();
+      };
+    }
 
     function currentDshSessionId(fallback) {
       try {
@@ -713,9 +759,24 @@ window.__ModuleLoader__.load({
         if (mountRef.current) mountRef.current.appendChild(host);
         frameRef.current = host.querySelector("iframe");
         setReady(canvasReady);
+        var stopThemeBridge = startThemeBridge(function () { return frameRef.current; });
         return function () {
+          stopThemeBridge();
           // 移回 detached 状态，React 不碰它，切 tab 再回来内容原样
           if (host.parentNode) host.parentNode.removeChild(host);
+        };
+      }, []);
+
+      // 画布 reload（wf1-ready）后主题桥的 lastTheme 防重标记仍指旧实例，
+      // 重置它让下一次 wf1-ready 时立即重发当前主题（与 sessionId 同款处理）。
+      react.useEffect(function () {
+        function resetThemeOnReady(ev) {
+          if (ev.source !== frameRef.current?.contentWindow) return;
+          if (ev.data && ev.data.type === "wf1-ready") notifyThemeReload();
+        }
+        window.addEventListener("message", resetThemeOnReady);
+        return function () {
+          window.removeEventListener("message", resetThemeOnReady);
         };
       }, []);
 
@@ -959,6 +1020,8 @@ window.__ModuleLoader__.load({
       setBetterSidebarService: setBetterSidebarService,
       sidebarAllTabs: sidebarAllTabs,
       subscribeSidebarService: subscribeSidebarService,
+      currentHostTheme: currentHostTheme,
+      startThemeBridge: startThemeBridge,
       toolText: toolText,
       runIdFromText: runIdFromText,
       runIdFromArgs: runIdFromArgs,
