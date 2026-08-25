@@ -177,7 +177,8 @@ export class Orchestrator {
 
     this.emit('run-start', {
       runId: id, nodeIds: graph.nodes.map((n) => n.id),
-      workflowId: run.workflowId, canvasId: run.canvasId, source: run.source,
+      workflowId: run.workflowId, workflowName: run.workflowName,
+      canvasId: run.canvasId, source: run.source,
     });
     s._done = new Promise((resolve) => { s.resolve = resolve; });
     this._pump(s);
