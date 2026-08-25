@@ -21,7 +21,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.13.0
+          # 发版 runner 用 24：boot-smoke 要真起最新 @deepseek-ai/dsh，
+          # 其依赖 dsh-session-persistence-jsonl 用 node:zlib 的 zstd API（22.15+ 才有），
+          # 22.13 下 boot 即 SyntaxError。仓库 engines 最低支持仍为 >=22.13。
+          node-version: 24.15
           registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: |
