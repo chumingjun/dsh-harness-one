@@ -124,6 +124,10 @@ export class WorkflowSqliteStore {
       }
     }
 
+    if (migrationErrorFile && errors.length) {
+      atomicJson(migrationErrorFile, { version: 1, migratedAt: new Date().toISOString(), errors });
+    }
+
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db.exec(SCHEMA);
@@ -151,12 +155,11 @@ export class WorkflowSqliteStore {
       throw error;
     }
 
-    if (migrationErrorFile) {
+    if (migrationErrorFile && !errors.length) {
       try {
-        if (errors.length) atomicJson(migrationErrorFile, { version: 1, migratedAt: new Date().toISOString(), errors });
-        else unlinkSync(migrationErrorFile);
+        unlinkSync(migrationErrorFile);
       } catch (error) {
-        if (errors.length || error?.code !== 'ENOENT') this.logger?.warn?.(`SQLite 迁移报告写入失败：${error.message}`);
+        if (error?.code !== 'ENOENT') this.logger?.warn?.(`SQLite 迁移报告清理失败：${error.message}`);
       }
     }
     for (const error of errors) this.logger?.warn?.(`SQLite 跳过损坏的 ${error.kind} JSON：${error.file}（${error.error}）`);

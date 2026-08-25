@@ -142,4 +142,28 @@ test('rolls back schema migration when the database is incompatible', () => {
   }
 });
 
+test('does not complete migration when the bad-file report cannot be written', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wf1-sqlite-report-'));
+  try {
+    const databaseFile = join(root, 'workflow-one.sqlite');
+    const workflowsDir = join(root, 'workflows');
+    const reportPath = join(root, 'state');
+    mkdirSync(workflowsDir, { recursive: true });
+    mkdirSync(reportPath);
+    writeFileSync(join(workflowsDir, 'wf_bad.json'), '{');
+
+    assert.throws(() => new WorkflowSqliteStore({
+      databaseFile,
+      workflowsDir,
+      runsDir: join(root, 'runs'),
+      migrationErrorFile: reportPath,
+    }));
+    const check = new DatabaseSync(databaseFile);
+    assert.equal(check.prepare('PRAGMA user_version').get().user_version, 0);
+    check.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 console.log(`\n${passed} tests passed`);
