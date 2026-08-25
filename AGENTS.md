@@ -78,6 +78,7 @@ CI：`.github/workflows/ci.yml` 在 PR 与 main push 上跑 `npm test` + `build-
 4. **工作区本地存储**：工作流与运行记录位于当前 dsh 会话工作目录的 `.workflow-one/workflow-one.sqlite`；state/attachments/runtime 继续使用同目录下文件。节点 agent 以工作区根为 cwd、成果只收集各节点 runtime 输出目录；`.workflow-one/` 必须 gitignore，**绝不提交**。飞书凭据仍是 dsh 用户级数据，不迁入工作区。
 5. **构建产物一律不入库**（`web-dist/`、`canvasui lib/client.js`、`document-preview/dist/`、`web/dist/` 全部 gitignore）：分发包「拿到即装」由 `pack.sh` 现场重跑构建保证；源码安装先 `build-web.sh` 再 `setup.sh`（setup 已前置校验）。绝不为省一步构建把产物提交进仓库。
 6. **消息通知走渠道抽象**：运行级事件、去重、模式判断、摘要脱敏与失败隔离统一放在 `orchestrator/lib/notifications.js`；渠道实现只放 `notification-<channel>.js`，负责配置校验、消息渲染和发送。新增钉钉/企业微信时注册 provider 到 `NotificationChannelRegistry`，并通过 `/wf1/api/tools` 的 `notificationChannels` 暴露给前端；禁止复制运行监听器或在前端写死完整渠道清单。通知失败只能写节点 `notification` 元数据，不能改变业务运行状态。
+7. **多运行并发 + 定时任务**：引擎天然多运行（`Orchestrator.runs` Map，runId 全链路隔离），前端查看态以 `inspectedRunId` 为单一事实源（RunSwitcher 胶囊切换），不要回退到单活跃 run 模型；run-start 只跟随本画布发起的运行，schedule/webhook 触发不抢占视图。定时调度核心在 `orchestrator/lib/schedule.js`（cron/overlap/统计），meta 持久化在 `state/triggers.json`（不迁 SQLite）；前端面板 `web/src/ScheduleCenter.jsx` + `describeCron`。
 
 ### 消息通知节点约束
 
