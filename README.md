@@ -18,11 +18,11 @@
 Node.js >= 24.15 且已安装 `@deepseek-ai/dsh`：
 
 ```sh
-dsh plugin --profile web add dsh-ccpg-one@0.2.1
+dsh plugin --profile web add dsh-ccpg-one@0.2.2
 dsh web
 ```
 
-Harness Desktop 用户在 **Open DSH Terminal** 中执行 `dsh plugin add dsh-ccpg-one@0.2.1`，然后重启 Desktop。也可以从 [GitHub Releases](https://github.com/chumingjun/harness-one/releases/latest) 下载离线聚合包。
+Harness Desktop 用户在 **Open DSH Terminal** 中执行 `dsh plugin add dsh-ccpg-one@0.2.2`，然后重启 Desktop。也可以从 [GitHub Releases](https://github.com/chumingjun/harness-one/releases/latest) 下载离线聚合包。
 
 ## 界面与使用方式
 
@@ -48,7 +48,7 @@ Workflow One 嵌在 dsh 官方界面中：左侧保留与智能体的对话，�
 **Harness Desktop（npm 包发布后）**：从 Desktop 托盘打开 **Open DSH Terminal**，对当前 profile 安装并重启 Desktop：
 
 ```sh
-dsh plugin add dsh-ccpg-one@0.2.1
+dsh plugin add dsh-ccpg-one@0.2.2
 ```
 
 Desktop 使用官方 DSH/Cordis 插件组合，不需要另一套插件。不要在 Desktop 里运行 `setup.sh`：Desktop 自己管理 profile、Node/pnpm 和随机 loopback 端口；飞书账号页首次点击「自动安装」时，lark-cli 会通过 Desktop 的受管 pnpm 安装到当前 profile。安装使用细节、环境差异与常见问题排查见 [`dsh-plugins/DESKTOP.md`](dsh-plugins/DESKTOP.md)；Desktop 开发兼容契约（`desktopProfiles`/`desktopPnpm` 动态探测、跨环境插件写法）也在该文档第 2 节。

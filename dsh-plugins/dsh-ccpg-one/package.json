@@ -1,6 +1,6 @@
 {
   "name": "dsh-ccpg-one",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Workflow One - Visual AI workflow orchestrator for DeepSeek Harness (dsh), with multi-agent DAGs, live execution, recovery, and Feishu integration",
   "license": "MIT",
   "repository": {
@@ -33,22 +33,27 @@
   "type": "module",
   "private": false,
   "main": "lib/index.js",
+  "bin": {
+    "dsh-ccpg-one": "./bin/install.js"
+  },
   "exports": {
-    ".": "./lib/index.js"
+    ".": "./lib/index.js",
+    "./install": "./bin/install.js"
   },
   "files": [
     "lib",
+    "bin",
     "cordis.patch.yml"
   ],
   "dependencies": {
-    "dsh-better-sidebar": "0.15.2",
-    "dsh-ccpg-canvasui": "0.2.1",
-    "dsh-ccpg-document-preview": "0.2.1",
-    "dsh-ccpg-larkauth": "0.2.1",
-    "dsh-ccpg-llm-guard": "0.2.1",
-    "dsh-ccpg-orchestrator": "0.2.1",
-    "dsh-ccpg-tools": "0.2.1",
-    "dsh-ccpg-web": "0.2.1"
+    "dsh-better-sidebar": "0.16.1",
+    "dsh-ccpg-canvasui": "0.2.2",
+    "dsh-ccpg-document-preview": "0.2.2",
+    "dsh-ccpg-larkauth": "0.2.2",
+    "dsh-ccpg-llm-guard": "0.2.2",
+    "dsh-ccpg-orchestrator": "0.2.2",
+    "dsh-ccpg-tools": "0.2.2",
+    "dsh-ccpg-web": "0.2.2"
   },
   "publishConfig": {
     "access": "public",
