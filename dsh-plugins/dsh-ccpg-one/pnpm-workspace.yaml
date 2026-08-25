@@ -4,6 +4,9 @@ packages:
 allowBuilds:
   node-pty: true
 
+minimumReleaseAgeExclude:
+  - dsh-better-sidebar@0.16.1
+
 # SDK peer（@deepseek-ai/dsh-*）的 registry latest 停在 0.0.1-rc.1，0.1.x 只在 next tag：
 # pnpm 解析 peer 时按 latest 语义找不到 >=0.1.0 <0.2.0，直接 ERR_NO_MATCHING_VERSION。
 # 运行时这些包由 dsh 启动时的扁平兜底（~/.dsh/profiles/node_modules）提供，

@@ -10,9 +10,11 @@
 # 可选件门控（disabled: !!js 在 loader ctx eval，读进程环境变量）：
 #   export CCPG_NO_LARK=1     → 不加载 larkauth（飞书扫码登录/技能种子）
 #   export CCPG_NO_PREVIEW=1  → 不加载 document-preview（文档预览退化为下载）
-#   export CCPG_NO_SIDEBAR=1  → 不加载 better-sidebar（官方 UI 工作流侧栏不可用）
 #   export CCPG_NO_GUARD=1    → 不加载 llm-guard（空工具调用防护，不建议关）
-#   export CCPG_ONLY_CORE=1   → 只留核心五件（tools/orchestrator/web/canvasui 之上的全关）
+#   export CCPG_ONLY_CORE=1   → 只留核心四件（tools/orchestrator/web/canvasui，其余全关）
+# 注意 CCPG_NO_SIDEBAR 已不在本层：better-sidebar 挂载由它自己的 bundle 层提供
+# （见下方 better-sidebar 注释）。npm 安装渠道用 npx dsh-ccpg-one 且带
+# CCPG_NO_SIDEBAR/CCPG_ONLY_CORE 时由 bin/install.js 移除该依赖实现关闭。
 # 以下变量可写进工作区 .env（DSH_ 前缀被禁止，CCPG_ 前缀合法）。
 # 挂载名说明：loader 与 client-modules 都从 profile 根按包名解析 entry——
 # 子插件必须作为 registry 依赖装在 profile node_modules（publish-npm.sh 已发布为公共包）。
@@ -36,8 +38,10 @@
     - id: dsh-ccpg-llm-guard
       name: 'dsh-ccpg-llm-guard'
       disabled: !!js "Boolean(process.env.CCPG_NO_GUARD || process.env.CCPG_ONLY_CORE)"
-    # id 不能用 better-sidebar：用户单独 add 过 dsh-better-sidebar 时其 bundle 层已 insert 同 id 行，
-    # 两层同 id insert 会 duplicate 报错。用独立 id + 防双挂载 disable（检测到别层已挂 sidebar 就关自己）。
-    - id: one-better-sidebar
-      name: 'dsh-better-sidebar'
-      disabled: !!js "Boolean(process.env.CCPG_NO_SIDEBAR || process.env.CCPG_ONLY_CORE) || [...ctx.loader.entries()].some((e) => e.options.name === 'dsh-better-sidebar' && e.options.id !== 'one-better-sidebar' && !e.disabled)"
+    # better-sidebar 不在此 insert：聚合包把 dsh-better-sidebar 声明为依赖，dsh plugin add
+    # 会依据其自带 dsh.bundle.patch 自动注册进 bundles 层挂载——聚和层再 insert 一行就是
+    # 双挂载（duplicate prefix route "/sidebar/api"，boot 失败）。此前版本的防双挂载
+    # disabled: !!js 表达式在双注册现场会经 loader evaluate 无限递归（栈溢出），且上游
+    # 包 0.16.1 自带的同款表达式也有同样缺陷，双向退让都不可靠——唯一稳态是单点挂载。
+    # CCPG_NO_SIDEBAR / CCPG_ONLY_CORE 开关改由 bin/install.js 在安装层处理
+    # （检测到开关时不把 better-sidebar 装进 profile）。
