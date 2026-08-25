@@ -42,13 +42,14 @@ CCPG_NO_SIDEBAR=1 / CCPG_ONLY_CORE=1：装完后 dsh plugin remove dsh-better-si
   process.exit(0);
 }
 
-// --- 1. 定位 dsh：优先 PATH，其次已安装 profile 的扁平兜底目录 ---
+// --- 1. 定位 dsh：优先 PATH，其次已安装 profile 的扁平兜底目录（--prewrite 不需要 dsh）---
+const prewriteOnly = process.argv.includes('--prewrite');
 const dshCandidates = ['dsh', join(DSH_HOME, 'profiles/node_modules/@deepseek-ai/dsh/lib/bin.js')];
-const dsh = dshCandidates.find((c) => spawnSync(c, ['--version']).status === 0);
-if (!dsh) die('未找到 dsh（先 npm i -g @deepseek-ai/dsh）');
+const dsh = prewriteOnly ? null : dshCandidates.find((c) => spawnSync(c, ['--version']).status === 0);
+if (!prewriteOnly && !dsh) die('未找到 dsh（先 npm i -g @deepseek-ai/dsh）');
 
 // --- 2. 让 dsh 先初始化 profile（其模板含 pnpm-workspace.yaml），再预写放行 ---
-if (!existsSync(join(DSH_HOME, 'profiles', PROFILE, 'package.json'))) {
+if (!prewriteOnly && !existsSync(join(DSH_HOME, 'profiles', PROFILE, 'package.json'))) {
   const ls = spawnSync(dsh, ['plugin', '--profile', PROFILE, 'ls'], { encoding: 'utf8' });
   // initProfile 在首次 plugin 调用时完成；ls 本身可能因 pnpm 环境差异非零，目录在即可
   if (!existsSync(join(DSH_HOME, 'profiles', PROFILE, 'package.json'))) {
