@@ -538,7 +538,6 @@ body {
 
 /* ============ 成果面板 ============ */
 .result-panel-shell { position: relative; display: flex; min-width: 0; transition: width var(--dur) var(--ease); }
-.result-panel-shell > .panel-toggle { position: absolute; z-index: 3; top: 8px; left: -62px; }
 .result-panel-shell.panel-collapsed { width: 38px; flex: 0 0 38px; border-left: 1px solid var(--border); background: var(--bg-panel); }
 .result-panel-shell.panel-collapsed > .panel-toggle { position: static; margin: 10px 4px; writing-mode: vertical-rl; letter-spacing: 3px; padding: 8px 2px; }
 .panel-toggle { white-space: nowrap; }

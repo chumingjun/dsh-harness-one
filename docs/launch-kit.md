@@ -17,7 +17,7 @@ Workflow One 是运行在 DeepSeek Harness（dsh）里的可视化工作流编�
 安装：
 
 ```sh
-dsh plugin --profile web add dsh-ccpg-one@0.2.1
+dsh plugin --profile web add dsh-ccpg-one
 dsh web
 ```
 
@@ -34,7 +34,7 @@ Workflow One is a visual workflow orchestrator that runs inside DeepSeek Harness
 It supports parallel scheduling, retries, cancellation, replay, restart recovery, webhook and cron triggers, and optional Feishu writeback. Workflows and run history are stored in a workspace-local SQLite database.
 
 ```sh
-dsh plugin --profile web add dsh-ccpg-one@0.2.1
+dsh plugin --profile web add dsh-ccpg-one
 dsh web
 ```
 
@@ -44,9 +44,9 @@ Three importable examples are included for ticket normalization, urgency routing
 
 ## Short Versions
 
-**中文：** Workflow One 把 dsh 智能体、脚本、条件和 HTTP 节点连成可视化 DAG，支持并行执行、实时状态、失败恢复和工作区 SQLite 存储。安装：`dsh plugin --profile web add dsh-ccpg-one@0.2.1`。https://github.com/chumingjun/harness-one
+**中文：** Workflow One 把 dsh 智能体、脚本、条件和 HTTP 节点连成可视化 DAG，支持并行执行、实时状态、失败恢复和工作区 SQLite 存储。安装：`dsh plugin --profile web add dsh-ccpg-one`。https://github.com/chumingjun/harness-one
 
-**English:** Workflow One adds visual, recoverable multi-agent DAGs to DeepSeek Harness: parallel execution, live node details, replay, and workspace-local SQLite storage. Install with `dsh plugin --profile web add dsh-ccpg-one@0.2.1`. https://github.com/chumingjun/harness-one
+**English:** Workflow One adds visual, recoverable multi-agent DAGs to DeepSeek Harness: parallel execution, live node details, replay, and workspace-local SQLite storage. Install with `dsh plugin --profile web add dsh-ccpg-one`. https://github.com/chumingjun/harness-one
 
 ## Suggested Media Order
 
