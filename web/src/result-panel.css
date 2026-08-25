@@ -194,3 +194,43 @@
 .result-expand-modal .modal-box { width: min(880px, 94vw); max-width: 94vw; max-height: 88vh; }
 .result-expand-modal .modal-body { padding: 20px 24px; }
 .result-expand-body { font-size: 14px; line-height: 1.75; }
+
+/* 运行切换器：成果面板顶部胶囊条（多运行并发时切换查看目标） */
+.run-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 0 14px;
+}
+.run-switcher:empty { display: none; }
+.run-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.run-pill:hover { border-color: var(--accent, #6d8cff); color: var(--fg); }
+.run-pill-on { border-color: var(--accent, #6d8cff); color: var(--fg); box-shadow: 0 0 0 1px var(--accent, #6d8cff) inset; }
+.rs-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.rs-dot-run { background: #f59e0b; }
+.rs-dot-live { animation: rs-pulse 1.2s ease-in-out infinite; }
+.rs-dot-ok { background: #10b981; }
+.rs-dot-err { background: #ef4444; }
+.rs-dot-cancel { background: #94a3b8; }
+.rs-dot-idle { background: #cbd5e1; }
+.rs-icon { font-size: 10px; line-height: 1; }
+.rs-time { font-variant-numeric: tabular-nums; }
+.rs-progress { color: var(--warn-fg, #f59e0b); font-variant-numeric: tabular-nums; }
+.run-pill-more { color: var(--fg-faint); }
+@keyframes rs-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
