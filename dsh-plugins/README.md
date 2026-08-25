@@ -15,7 +15,7 @@
 
 ## 安装与使用
 
-普通 dsh 有 release/源码两种路径，前提是 **Node ≥ 22.13.0**、`npm i -g @deepseek-ai/dsh`。Harness Desktop 自带运行时，走下面的原生插件命令。
+普通 dsh 有 release/源码两种路径，前提是 **Node ≥ 22.15.0**（dsh 本体需要 `node:zlib` 的 zstd API）、`npm i -g @deepseek-ai/dsh`。Harness Desktop 自带运行时，走下面的原生插件命令。
 
 ### Harness Desktop
 

@@ -34,7 +34,7 @@
 ## Install
 
 > [!NOTE]
-> Requires Node.js >= 22.13.0 and [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): `npm i -g @deepseek-ai/dsh`.
+> Requires Node.js >= 22.15.0 (dsh itself uses the zstd API from `node:zlib`, available since 22.15) and [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): `npm i -g @deepseek-ai/dsh`.
 
 ### npm
 
