@@ -168,3 +168,9 @@ cd web && npm test                                                              
 
 - 飞书写回为追加段落块，不保留富文本格式
 - 存储 = 每实体一 JSON 文件（多人编辑需求出现再迁 SQLite）
+
+## 反馈
+
+- 🐛 安装失败 / 运行报错：[提 Issue](https://github.com/chumingjun/harness-one/issues/new?template=bug_report.md)
+- 💡 功能建议：[提 Issue](https://github.com/chumingjun/harness-one/issues/new?template=feature_request.md)
+- 💬 使用提问、工作流配置求助、展示你搭的流程：[Discussions](https://github.com/chumingjun/harness-one/discussions)

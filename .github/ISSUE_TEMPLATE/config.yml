@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 提问与用例讨论
+    url: https://github.com/chumingjun/harness-one/discussions
+    about: 安装/使用问题、工作流配置求助、想展示自己搭的工作流，请到 Discussions。
