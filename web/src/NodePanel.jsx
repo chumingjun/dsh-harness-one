@@ -28,7 +28,7 @@ const TOOL_LABELS = {
   feishu_doc_write: '写飞书文档',
 };
 
-const TYPE_TEXT = { input: '输入', agent: '智能体', output: '输出', condition: '条件', http: 'HTTP', script: '脚本', note: '注释' };
+const TYPE_TEXT = { input: '输入', agent: '智能体', output: '输出', condition: '条件', http: 'HTTP', script: '脚本', notify: '消息通知', note: '注释' };
 
 /** 面板实时活动区的跳秒计时：每秒重渲染（仅运行中挂载） */
 function useElapsedTick(active) {
@@ -131,12 +131,13 @@ function ScriptParameterRow({ input, index, error, templateProps, onChange, onRe
   );
 }
 
-export function NodePanel({ node, onChange, onDelete, onTest, onClose, availableTools = [], skills = [], feishuEnabled = false, feishuCreds = [], llmConfig = {}, upstreamNodes = [], upstreamPreviews = {}, graph, workflowId, runId, workflowVariables, inputSchema, runInputs, triggerInput, globalVariableEpoch, progress }) {
+export function NodePanel({ node, onChange, onDelete, onTest, onClose, availableTools = [], skills = [], feishuEnabled = false, feishuCreds = [], notificationChannels = [], llmConfig = {}, upstreamNodes = [], upstreamPreviews = {}, graph, workflowId, runId, workflowVariables, inputSchema, runInputs, triggerInput, globalVariableEpoch, progress }) {
   if (!node) return null;
   const [copied, setCopied] = useState(false);
   const [testing, setTesting] = useState(false);
   const d = node.data || {};
   const nodeType = d.nodeType || node.type;
+  const notifyTargetType = d.channelConfig?.targetType || 'chat_id';
   useElapsedTick(d.runStatus === 'running');
   const set = (patch) => onChange(node.id, patch);
   const selectedTools = Array.isArray(d.tools) ? d.tools : [];
@@ -295,7 +296,7 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
       <header className="node-panel-head">
         <span className={`type-chip type-${nodeType}`}>{TYPE_TEXT[nodeType] || nodeType}</span>
         <input className="title-input" value={d.label || ''} onChange={(e) => set({ label: e.target.value })} placeholder="节点名称" />
-        <button className="btn-icon" title="试运行此节点" aria-label="试运行此节点" onClick={runTest} disabled={testing}><FlaskConical size={15} className={testing ? 'icon-working' : ''} /></button>
+        {nodeType !== 'notify' && <button className="btn-icon" title="试运行此节点" aria-label="试运行此节点" onClick={runTest} disabled={testing}><FlaskConical size={15} className={testing ? 'icon-working' : ''} /></button>}
         <button className="btn-icon" title="删除节点" aria-label="删除节点" onClick={() => onDelete(node.id)}><Trash2 size={15} /></button>
         <button className="btn-icon" title="关闭面板" aria-label="关闭面板" onClick={onClose}><X size={16} /></button>
       </header>
@@ -646,6 +647,62 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
         </>
       )}
 
+      {nodeType === 'notify' && (
+        <>
+          <Section title="消息渠道" hint="运行观察器，连线与否均生效">
+            <div className="field-grid">
+              <Field label="渠道">
+                <select value={d.channel || 'feishu'} onChange={(e) => set({ channel: e.target.value, channelConfig: {} })}>
+                  {(notificationChannels.length ? notificationChannels : [{ id: 'feishu', label: '飞书' }]).map((channel) => (
+                    <option key={channel.id} value={channel.id}>{channel.label}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="通知模式">
+                <select value={d.mode || 'terminal'} onChange={(e) => set({ mode: e.target.value })}>
+                  <option value="terminal">仅运行结束</option>
+                  <option value="each_node">每个节点完成</option>
+                </select>
+              </Field>
+            </div>
+            {(d.channel || 'feishu') === 'feishu' && (
+              <>
+                <Field label="接收方式">
+                  <select
+                    value={notifyTargetType}
+                    onChange={(e) => set({ channelConfig: { ...d.channelConfig, targetType: e.target.value, targetId: '' } })}>
+                    <option value="chat_id">群聊</option>
+                    <option value="open_id">私聊</option>
+                  </select>
+                </Field>
+                <Field
+                  label={notifyTargetType === 'open_id' ? '用户 open_id' : '群聊 chat_id'}
+                  hint={notifyTargetType === 'open_id' ? '机器人应用可用范围需包含该用户' : '机器人需已加入目标群'}
+                  wide>
+                  <input
+                    value={d.channelConfig?.targetId || ''}
+                    onChange={(e) => set({ channelConfig: { ...d.channelConfig, targetType: notifyTargetType, targetId: e.target.value.trim() } })}
+                    placeholder={notifyTargetType === 'open_id' ? 'ou_xxxxxxxxxxxxxxxx' : 'oc_xxxxxxxxxxxxxxxx'} />
+                </Field>
+                {feishuCreds.length > 0 && (
+                  <Field label="使用凭据">
+                    <select
+                      value={d.channelConfig?.credentialId || ''}
+                      onChange={(e) => set({ channelConfig: { ...d.channelConfig, credentialId: e.target.value || undefined } })}>
+                      <option value="">默认凭据</option>
+                      {feishuCreds.map((credential) => (
+                        <option key={credential.id} value={credential.id}>{credential.name}{credential.isDefault ? '（默认）' : ''}</option>
+                      ))}
+                    </select>
+                  </Field>
+                )}
+                {!feishuEnabled && <p className="panel-note note-warn">飞书未配置（右上“设置”添加应用凭据）</p>}
+              </>
+            )}
+          </Section>
+        </>
+      )}
+
       {nodeType === 'note' && (
         <Section title="说明内容" hint="画布便签，不参与运行">
           <Field label="内容" wide>
@@ -655,7 +712,7 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
         </Section>
       )}
 
-      {nodeType !== 'note' && (
+      {nodeType !== 'note' && nodeType !== 'notify' && (
         <Section title="执行容错" hint="重试 / 失败继续 / 超时" defaultOpen={false}>
           <div className={nodeType === 'script' ? '' : 'field-grid'}>
             <Field label="失败重试">
