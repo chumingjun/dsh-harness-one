@@ -94,6 +94,10 @@ export default function App() {
   const assistantOpsRef = useRef(null); // SSE assistant-patch → applyAssistantOps 桥（定义在后段）
   const assistantGraphRef = useRef(null); // 漏失 patch 时用服务端权威完整图恢复
   const assistantVersionRef = useRef(0);
+  const openWorkflowRef = useRef(null); // SSE assistant-open-workflow → openWorkflow 桥（定义在后段）
+  const dirtyRef = useRef(dirty); // 脏草稿守卫：AI 请求切换前先静默保存，避免丢未存改动
+  const saveRef = useRef(null); // 同上：脏草稿先 save({silent}) 再切换
+  dirtyRef.current = dirty;
   // 画布 AI 助手：本画布实例标识（localStorage 持久；宿主 dsh-ccpg-canvasui 经 postMessage 绑定）
   const canvasIdRef = useRef(localStorage.getItem('wf1:canvasId') || '');
   if (!canvasIdRef.current) {
@@ -399,6 +403,23 @@ export default function App() {
       }
       assistantOpsRef.current?.(p.patch || [], version);
     });
+    es.addEventListener('assistant-open-workflow', (e) => {
+      // AI 请求把本画布切到指定工作流（workflow_open）：复用 openWorkflow 既有加载路径。
+      // 脏草稿先静默保存（自动保存 2.5s 间歇可能未触发），不丢用户未存改动。
+      const p = JSON.parse(e.data);
+      if (p.canvasId && p.canvasId !== canvasIdRef.current) return;
+      const targetId = String(p.workflowId || '');
+      if (!targetId || targetId === currentWfIdRef.current) return;
+      const open = async () => {
+        const res = await fetch(apiUrl(`/workflows/detail?id=${encodeURIComponent(targetId)}`));
+        if (!res.ok) { toast('AI 切换工作流：目标不存在或已删除', 'error'); return; }
+        const wf = await res.json();
+        await openWorkflowRef.current?.(wf);
+      };
+      if (dirtyRef.current) {
+        saveRef.current?.({ silent: true }).then(open).catch(() => open());
+      } else open();
+    });
     es.addEventListener('run-start', (e) => {
       const p = JSON.parse(e.data);
       // 任何运行起停都刷新切换器列表（不过画布闸门：定时/webhook 运行无 canvasId）
@@ -700,6 +721,8 @@ export default function App() {
     syncRunPanelToWorkflow(data.id);
     toast(`已打开「${data.name}」`);
   }, [setNodes, setEdges, toast, syncRunPanelToWorkflow, inspectRun]);
+  openWorkflowRef.current = openWorkflow; // SSE assistant-open-workflow 桥（effect 依赖不含它，经 ref 取最新）
+  saveRef.current = save;
 
   const newWorkflow = useCallback((created) => {
     const document = normalizeWorkflowDocument(created);
