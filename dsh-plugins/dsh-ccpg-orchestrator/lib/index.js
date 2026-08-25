@@ -64,10 +64,10 @@ import {
   assertNonSensitiveVariableDefinitions, assertSafeContextObject, GlobalVariableStore, VariableStoreError,
   variableDefinitionsToValues,
 } from './variable-store.js';
-import cronParser from 'cron-parser';
-// cron-parser@4：默认导出是命名空间对象（CJS interop），parseExpression 是其方法
-const parseCronExpression = cronParser.parseExpression?.bind(cronParser)
-  ?? cronParser.default?.parseExpression?.bind(cronParser.default);
+import {
+  createScheduler, hasLiveRunForWorkflow, isValidCron, normalizeScheduleMeta,
+  persistableScheduleMeta, upcomingFireTimes,
+} from './schedule.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // 测试可用 WF1_LEGACY_DATA_DIR 指向隔离目录，避免把开发机真实 data/ 当 legacy 导入。
@@ -209,6 +209,13 @@ export function apply(ctx, config) {
   const currentSchedulers = () => currentStore().schedulers;
   const currentSchedulerMeta = () => currentStore().schedulerMeta;
   ctx.effect?.(() => () => {
+    // 先摘调度定时器（链式 setTimeout 不随插件停机自灭），再关 sqlite
+    for (const store of stores.values()) {
+      for (const scheduler of store.schedulers.values()) {
+        try { scheduler.stop(); } catch { /* 单个失败不阻塞清理 */ }
+      }
+      store.schedulers.clear();
+    }
     for (const store of stores.values()) store.database.close();
     stores.clear();
   }, 'workflow-one sqlite stores');
@@ -1711,9 +1718,9 @@ export function apply(ctx, config) {
     });
   } });
 
-  // ---- webhook + 定时触发（落盘 data/triggers.json，重启自动恢复）----
+  // ---- webhook + 定时触发（落盘 state/triggers.json，重启自动恢复）----
   // hooks: [{ id, token, workflowId, workflowName, createdAt }]
-  // schedules: [{ key, workflowId, workflowName, cron, input, createdAt }]
+  // schedules meta 字段见 lib/schedule.js normalizeScheduleMeta
   const loadTriggers = () => {
     const store = currentStore();
     if (store.triggersLoaded) return { hooks: [...store.hooks.values()], schedules: [...store.schedulerMeta.values()] };
@@ -1724,6 +1731,10 @@ export function apply(ctx, config) {
         store.hooks.set(h.id, h);
         publicHooks.set(h.id, { store, hook: h });
       }
+      for (const s of t.schedules || []) {
+        const meta = normalizeScheduleMeta(s);
+        if (meta.key) currentSchedulerMeta().set(meta.key, { ...meta, ...s });
+      }
       return t;
     } catch { return { hooks: [], schedules: [] }; }
   };
@@ -1733,9 +1744,7 @@ export function apply(ctx, config) {
       const store = currentStore();
       atomicJson(store.triggersFile, {
         hooks: [...currentHooks().values()].map(({ id, token, workflowId, workflowName, createdAt }) => ({ id, token, workflowId, workflowName, createdAt })),
-        schedules: [...currentSchedulerMeta().entries()].map(([key, m]) => ({
-          key, workflowId: m.workflowId, workflowName: m.workflowName, cron: m.cron, input: m.input, createdAt: m.createdAt,
-        })),
+        schedules: [...currentSchedulerMeta().entries()].map(([key, m]) => persistableScheduleMeta({ ...m, key })),
       });
     } catch { /* 落盘失败不影响运行 */ }
   };
@@ -1814,92 +1823,158 @@ export function apply(ctx, config) {
   } }, { scoped: false });
 
   // ---- 定时触发 ----
-  // POST /wf1/api/schedule { workflowId, cron, input? } —— cron-parser 算下次触发，ctx.timer.timeout 链式调度
+  // POST /wf1/api/schedule { workflowId, cron, input?, runInputs?, overlap? }
+  // 调度核心在 lib/schedule.js（computeNextDelay + 链式 setTimeout + overlap 策略）
+  const scheduleStoreRoot = () => currentStore().workspaceRoot;
+  const scheduleBusy = (workflowId) => hasLiveRunForWorkflow(orch.runs, scheduleStoreRoot(), workflowId);
+  // 触发一次定时运行（fire 与手动「立即运行」共用）：读最新图 + 实例变量，返回 runId 或 null
+  const fireScheduleRun = (meta) => {
+    const wf = readWf(meta.workflowId);
+    if (!wf) return null;
+    let globals;
+    try { globals = globalContext(); } catch (error) {
+      ctx.logger?.warn?.(`dsh-ccpg 定时运行变量加载失败（${meta.key}）：${error.message}`);
+      globals = { globalVariables: {} };
+    }
+    const { runId } = startRun(wf.graph, {
+      triggerInput: meta.input || '', workflowName: wf.name, workflowId: wf.id, source: 'schedule',
+      globalVariables: globals.globalVariables,
+      workflowVariables: variableDefinitionsToValues(wf.variables),
+      runInputs: meta.runInputs && typeof meta.runInputs === 'object' ? meta.runInputs : {},
+    });
+    return runId;
+  };
   const startSchedule = (key, meta) => {
-    const state = { stopped: false, timer: null, rawTimer: null, nextAt: null, fireCount: 0 };
-    const armNext = () => {
-      if (state.stopped) return;
-      let nextMs = 1;
-      try {
-        nextMs = Math.max(1, parseCronExpression(meta.cron, { currentDate: new Date() }).next().getTime() - Date.now());
-      } catch (e) {
-        state.stopped = true;
-        ctx.logger?.warn?.(`dsh-ccpg 定时表达式无效（${key}）：${e.message}`);
-        return;
-      }
-      state.nextAt = new Date(Date.now() + nextMs).toISOString();
-      currentSchedulerMeta().set(key, { ...meta, nextAt: state.nextAt, fireCount: state.fireCount });
-      const fire = () => {
-        if (state.stopped) return;
-        state.fireCount += 1;
-        const wf = readWf(meta.workflowId);
-        if (wf) {
-          try {
-            const globals = globalContext();
-            startRun(wf.graph, {
-              triggerInput: meta.input || '', workflowName: wf.name, workflowId: wf.id, source: 'schedule',
-              globalVariables: globals.globalVariables,
-              workflowVariables: variableDefinitionsToValues(wf.variables),
-              runInputs: {},
-            });
-          } catch (error) { ctx.logger?.warn?.(`dsh-ccpg 定时运行变量加载失败（${key}）：${error.message}`); }
-        }
-        armNext();
-      };
-      // setTimeout 上限 2^31-1 ms（约 24.8 天）：远期任务链式分段等待，避免溢出成 1ms 风暴
-      const MAX_WAIT = 2 ** 31 - 1;
-      if (nextMs > MAX_WAIT) {
-        state.rawTimer = setTimeout(armNext, Math.floor(MAX_WAIT / 2));
-        return;
-      }
-      state.rawTimer = setTimeout(fire, nextMs);
-    };
-    armNext();
-    return {
-      stop() {
-        state.stopped = true;
-        if (state.rawTimer) clearTimeout(state.rawTimer);
-        try { state.timer?.(); } catch { /* disposer 已失效 */ }
+    const entry = createScheduler({
+      meta: { ...meta, key },
+      now: () => Date.now(),
+      fire: () => fireScheduleRun(meta),
+      isBusy: () => scheduleBusy(meta.workflowId),
+      logger: ctx.logger,
+      onMeta: (live) => {
+        // 只更新统计/nextAt，创建时字段以 meta Map 为准（PATCH 可能已改 cron 等）
+        const current = currentSchedulerMeta().get(key) || { ...meta, key };
+        currentSchedulerMeta().set(key, { ...current, ...live, key });
       },
-    };
+    });
+    return entry;
+  };
+  // 手动「立即运行」：不受 overlap/enabled 限制，不干扰调度链
+  const runScheduleNow = (key) => {
+    const prev = currentSchedulerMeta().get(key);
+    if (!prev) return { ok: false, error: '任务不存在' };
+    const runId = fireScheduleRun(prev);
+    if (!runId) return { ok: false, error: '工作流已删除或启动失败' };
+    const nextMeta = { ...prev, fireCount: (prev.fireCount || 0) + 1 };
+    currentSchedulerMeta().set(key, nextMeta);
+    persistTriggers();
+    return { ok: true, runId };
   };
   ensureTriggers = () => {
     const store = currentStore();
     const saved = loadTriggers();
     if (store.triggersRestored) return;
     store.triggersRestored = true;
-    for (const meta of saved.schedules || []) {
+    for (const raw of saved.schedules || []) {
+      const meta = normalizeScheduleMeta(raw);
+      if (!meta.key) continue;
       if (!readWf(meta.workflowId)) continue;
+      const persisted = { ...meta, ...raw };
+      currentSchedulerMeta().set(meta.key, persisted);
+      // 停用任务只入 meta 不起定时器：启用时（PATCH）再挂
+      if (persisted.enabled === false) continue;
       try {
-        currentSchedulers().set(meta.key, startSchedule(meta.key, meta));
-        currentSchedulerMeta().set(meta.key, meta);
+        currentSchedulers().set(meta.key, startSchedule(meta.key, persisted));
       } catch { /* 单条失败不阻塞 */ }
     }
   };
 
+  // 列表行：实时 join 工作流现名（meta 里的名字是创建时快照，改名后仅作 fallback）。
+  // 统计以 meta Map 为准（fireNow 等手动路径直接改 Map），调度器仅补 nextAt。
+  const scheduleRows = () => {
+    const rows = [];
+    for (const [key, meta] of currentSchedulerMeta()) {
+      const wf = readWf(meta.workflowId);
+      const live = currentSchedulers().get(key)?.getMeta?.() || {};
+      rows.push({
+        ...meta,
+        nextAt: live.nextAt ?? meta.nextAt ?? null,
+        key,
+        workflowName: wf?.name || meta.workflowName || '(已删除)',
+        workflowMissing: !wf,
+        enabled: meta.enabled !== false,
+      });
+    }
+    rows.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+    return rows;
+  };
+
   register({ kind: 'exact', path: '/wf1/api/schedule', async handler(req, res) {
     if (req.method === 'GET') {
-      const rows = [];
-      for (const [key, meta] of currentSchedulerMeta()) rows.push({ ...meta, key });
-      return json(res, 200, { schedules: rows });
+      ensureTriggers();
+      return json(res, 200, { schedules: scheduleRows() });
     }
     if (req.method === 'POST') {
       const body = await readBody(req);
       const wf = readWf(body?.workflowId);
       if (!wf) return json(res, 404, { error: '工作流不存在' });
       if (!body?.cron) return json(res, 400, { error: '需要 cron 表达式（5 段）' });
-      try {
-        parseCronExpression(body.cron, { currentDate: new Date() });
-      } catch (e) {
-        return json(res, 400, { error: `cron 表达式无效：${e.message}` });
+      if (!isValidCron(body.cron)) return json(res, 400, { error: 'cron 表达式无效' });
+      let runInputs = {};
+      try { runInputs = assertSafeContextObject(body?.runInputs, 'runInputs'); } catch (error) { return routeError(res, error); }
+      if (body?.overlap && !['skip', 'parallel'].includes(body.overlap)) {
+        return json(res, 400, { error: 'overlap 仅支持 skip / parallel' });
       }
       const key = `sch_${randomUUID().slice(0, 8)}`;
-      const meta = { workflowId: wf.id, workflowName: wf.name, cron: body.cron, input: body.input || '', createdAt: new Date().toISOString() };
-      const entry = startSchedule(key, meta);
-      currentSchedulers().set(key, entry);
+      const meta = normalizeScheduleMeta({
+        key,
+        workflowId: wf.id,
+        workflowName: wf.name,
+        cron: body.cron,
+        input: body.input || '',
+        runInputs,
+        overlap: body.overlap || 'skip',
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      });
       currentSchedulerMeta().set(key, meta);
+      // 先入 meta 再启动：createScheduler 的 onMeta 会同步补 nextAt/统计
+      currentSchedulers().set(key, startSchedule(key, meta));
       persistTriggers();
-      return json(res, 200, { ok: true, key, cron: body.cron });
+      return json(res, 200, { ok: true, key, cron: body.cron, overlap: meta.overlap });
+    }
+    if (req.method === 'PATCH') {
+      const body = await readBody(req);
+      const key = body?.key || '';
+      const prev = currentSchedulerMeta().get(key);
+      if (!prev) return json(res, 404, { error: '任务不存在' });
+      const patch = {};
+      if (hasOwn(body, 'cron')) {
+        if (!isValidCron(body.cron)) return json(res, 400, { error: 'cron 表达式无效' });
+        patch.cron = body.cron;
+      }
+      if (hasOwn(body, 'input')) patch.input = body.input || '';
+      if (hasOwn(body, 'overlap')) {
+        if (!['skip', 'parallel'].includes(body.overlap)) return json(res, 400, { error: 'overlap 仅支持 skip / parallel' });
+        patch.overlap = body.overlap;
+      }
+      if (hasOwn(body, 'runInputs')) {
+        try { patch.runInputs = assertSafeContextObject(body?.runInputs, 'runInputs'); } catch (error) { return routeError(res, error); }
+      }
+      if (hasOwn(body, 'enabled')) patch.enabled = body.enabled !== false;
+      const next = { ...prev, ...patch };
+      // 配置或启用状态变化 → 重挂调度链（停用则摘掉定时器、nextAt 置空，meta 保留）
+      const scheduler = currentSchedulers().get(key);
+      if (scheduler) scheduler.stop();
+      currentSchedulers().delete(key);
+      currentSchedulerMeta().set(key, next);
+      if (next.enabled !== false) {
+        currentSchedulers().set(key, startSchedule(key, next));
+      } else {
+        next.nextAt = null;
+      }
+      persistTriggers();
+      return json(res, 200, { ok: true, key });
     }
     if (req.method === 'DELETE') {
       const url = new URL(req.url, 'http://x');
@@ -1912,6 +1987,28 @@ export function apply(ctx, config) {
       return json(res, 200, { ok: true });
     }
     json(res, 405, { error: 'method' });
+  } });
+
+  // cron 预览：创建/编辑表单实时显示接下来几次触发时间
+  register({ kind: 'exact', path: '/wf1/api/schedule/preview', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    const body = await readBody(req);
+    if (!body?.cron) return json(res, 400, { error: '需要 cron 表达式' });
+    try {
+      return json(res, 200, { ok: true, times: upcomingFireTimes(body.cron, 3) });
+    } catch (e) {
+      return json(res, 400, { error: `cron 表达式无效：${e.message}` });
+    }
+  } });
+
+  // 立即运行一次（手动语义，不受 overlap/enabled 限制）
+  register({ kind: 'exact', path: '/wf1/api/schedule/run', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    const body = await readBody(req);
+    const key = body?.key || '';
+    if (!currentSchedulerMeta().has(key)) return json(res, 404, { error: '任务不存在' });
+    const result = runScheduleNow(key);
+    return json(res, result.ok ? 200 : 400, result);
   } });
 
   // ---- 附件 ----
