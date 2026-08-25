@@ -17,7 +17,7 @@ import {
   serializeWorkflowDocument,
   stripCanvasRuntimeNodeData,
 } from './workflow-serialization.js';
-import { eventBelongsToCanvas, eventBelongsToRun } from './run-event-routing.js';
+import { eventBelongsToCanvas, eventBelongsToRun, shouldFollowRunStart } from './run-event-routing.js';
 import { useThemePalette } from './theme.js';
 import { useToast, PromptModal, ConfirmModal, Modal } from './ui.jsx';
 
@@ -30,11 +30,13 @@ import { AddNodeMenu, CanvasAddMenu, MoreMenu } from './ToolbarMenus.jsx';
 import { NodePanel } from './NodePanel.jsx';
 import { WorkflowList } from './WorkflowList.jsx';
 import { RunHistory } from './RunHistory.jsx';
+import { RunSwitcher } from './RunSwitcher.jsx';
 import { ResultPanel } from './ResultPanel.jsx';
 import { FeishuCredModal } from './FeishuCredModal.jsx';
 import { TestRunModal } from './TestRunModal.jsx';
 import { NodeDetailModal } from './NodeDetailModal.jsx';
 import { VariableCenter } from './VariableCenter.jsx';
+import { ScheduleCenter } from './ScheduleCenter.jsx';
 import { TEMPLATES, TemplateModal } from './templates.jsx';
 
 export default function App() {
@@ -60,6 +62,8 @@ export default function App() {
   const [runInputs] = useState({});
   const [eventsByRunId, setEventsByRunId] = useState({});
   const [runDetails, setRunDetails] = useState({});
+  const runDetailsRef = useRef({});
+  useEffect(() => { runDetailsRef.current = runDetails; }, [runDetails]);
   const [inspectedRunId, setInspectedRunId] = useState(null);
   const [resultsReadyByRunId, setResultsReadyByRunId] = useState({});
   const [hostSession, setHostSession] = useState({ id: null, canSaveToWorkspace: false });
@@ -75,6 +79,7 @@ export default function App() {
   const [progress, setProgress] = useState({}); // nodeId → { turns, preview }
   const [credOpen, setCredOpen] = useState(false);
   const [variableCenterOpen, setVariableCenterOpen] = useState(false);
+  const [scheduleCenterOpen, setScheduleCenterOpen] = useState(false);
   const [globalVariableEpoch, setGlobalVariableEpoch] = useState(0);
   const [larkStatus, setLarkStatus] = useState(null); // lark-cli 登录状态（⋯ 菜单入口数据源）
   const [focusLark, setFocusLark] = useState(false); // 从 ⋯ 打开设置时聚焦授权区
@@ -114,7 +119,57 @@ export default function App() {
   edgesRef.current = edges;
   const runningRef = useRef(false);
   const activeRunIdRef = useRef(null);
+  // 多运行模型：查看哪个运行（inspectedRunId）就实时跟踪哪个；runList 供切换器渲染
+  const inspectedRunIdRef = useRef(null);
+  const [runList, setRunList] = useState([]);
   const workflowScopeEpochRef = useRef(0);
+  // 切换查看的运行：单一事实源。清 progress、同步 ref；投影由调用方按需拉详情。
+  const inspectRun = useCallback((runId) => {
+    inspectedRunIdRef.current = runId;
+    setInspectedRunId(runId);
+    setProgress({});
+  }, []);
+
+  // 切换器点击：切查看目标 + 把该运行的节点状态投影回画布（live 走服务端内存快照，实时）
+  const selectRunForView = useCallback((runId) => {
+    if (!runId || runId === inspectedRunIdRef.current) return;
+    inspectRun(runId);
+    const applyDetail = (detail) => {
+      for (const [nodeId, st] of Object.entries(detail.nodeStates || {})) {
+        setNodes((nds) => nds.map((n) => {
+          if (n.id !== nodeId) return n;
+          const data = { ...n.data, runStatus: st.status };
+          if (st.startedAt) data.runStartedAt = st.startedAt;
+          if (st.chars != null) data.runChars = st.chars;
+          if (st.turns != null) data.runTurns = st.turns;
+          if (st.error) data.runError = st.error; else data.runError = null;
+          if (st.durationMs != null) data.durationMs = st.durationMs;
+          if (st.model) data.runtimeModel = st.model;
+          if (st.artifacts) { data.artifacts = st.artifacts; data.artifactsRunId = runId; }
+          const out = (detail.outputs || {})[nodeId];
+          if (out != null) data.runOutput = String(out).slice(0, 4000);
+          return { ...n, data };
+        }));
+      }
+      setRunStatus((current) => ({
+        ...current,
+        running: detail.status === 'running',
+        runId,
+        last: detail.status,
+        done: Object.values(detail.nodeStates || {}).filter((st) => ['success', 'error', 'canceled', 'skipped'].includes(st.status)).length,
+        total: (detail.graph?.nodes || []).filter((n) => n.type !== 'notify').length || current.total,
+      }));
+    };
+    const cached = runDetailsRef.current[runId];
+    if (cached) applyDetail(cached);
+    fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(runId)}`))
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error('运行记录不存在'))))
+      .then((detail) => {
+        setRunDetails((current) => ({ ...current, [runId]: detail }));
+        applyDetail(detail);
+      })
+      .catch(() => { /* 缓存兜底已投影 */ });
+  }, [inspectRun, setNodes]);
   const markDirty = useCallback(() => setDirty(true), []);
   // 撤销/重做栈：结构变更前快照 {nodes, edges}（引用当前不可变数组即可）
   const undoStack = useRef([]);
@@ -212,7 +267,8 @@ export default function App() {
           if (response.ok) {
             const detail = await response.json();
             setRunDetails((current) => ({ ...current, [aligned.runId]: detail }));
-            if (!activeRunIdRef.current) {
+            if (!inspectedRunIdRef.current) {
+              inspectedRunIdRef.current = aligned.runId;
               setInspectedRunId(aligned.runId);
               setRunStatus((current) => ({
                 ...current,
@@ -224,8 +280,31 @@ export default function App() {
           }
         } catch { /* 详情拉取失败不阻塞首屏 */ }
       }
+      if (runsData?.runs?.length) setRunList(runsData.runs);
     })();
   }, [hostSession.id, setNodes, setEdges]);
+
+  // 切换器数据源：拉本工作区运行列表（不限当前画布——定时/webhook 运行也要出胶囊）。
+  // SSE run-start/run-end 触发即时刷新；存在 live 运行时 5s 轮询兜底刷新进度。
+  const refreshRunList = useCallback(async () => {
+    try {
+      const res = await fetch(apiUrl('/runs'));
+      if (!res.ok) return;
+      const data = await res.json();
+      setRunList(data.runs || []);
+    } catch { /* 列表拉不到维持现状 */ }
+  }, []);
+  // live 标记经 ref 读（不能进依赖：runList 变化会重建 effect → 轮询变请求风暴）
+  const runListRef = useRef([]);
+  useEffect(() => { runListRef.current = runList; }, [runList]);
+  useEffect(() => {
+    if (!hostSession.id) return undefined;
+    refreshRunList();
+    const timer = setInterval(() => {
+      if (runListRef.current.some((r) => r.live)) refreshRunList();
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [hostSession.id, refreshRunList]);
 
   // SSE：事件 → 节点状态 + 进度 + 结构化日志
   useEffect(() => {
@@ -240,7 +319,7 @@ export default function App() {
         [runId]: [...(current[runId] || []).slice(-299), timed],
       }));
     };
-    const appliesToActiveRun = (payload) => eventBelongsToRun(payload, activeRunIdRef.current);
+    const appliesToActiveRun = (payload) => eventBelongsToRun(payload, inspectedRunIdRef.current);
     const belongsToCurrentCanvas = (payload) => eventBelongsToCanvas(payload, {
       canvasId: canvasIdRef.current,
       workflowId: currentWfIdRef.current,
@@ -305,16 +384,26 @@ export default function App() {
     });
     es.addEventListener('run-start', (e) => {
       const p = JSON.parse(e.data);
-      if (!belongsToCurrentCanvas(p)) return;
+      // 任何运行起停都刷新切换器列表（不过画布闸门：定时/webhook 运行无 canvasId）
+      refreshRunList();
+      // 只跟随本画布发起的运行（手动/续跑/助手）；定时/webhook 触发不抢占视图
+      if (!shouldFollowRunStart(p, { canvasId: canvasIdRef.current, workflowId: currentWfIdRef.current })) {
+        if (belongsToCurrentCanvas(p) && p.workflowId === currentWfIdRef.current) {
+          const label = p.source === 'schedule' ? '⏰ 定时任务已触发' : '🪝 Webhook 已触发';
+          toast(`${label}「${p.workflowName || '当前工作流'}」，可在底部切换查看`, 'info', 3600);
+        }
+        return;
+      }
       activeRunIdRef.current = p.runId;
       runningRef.current = true;
       terminalNodesByRunRef.current.set(p.runId, new Set());
-      setInspectedRunId(p.runId);
+      inspectRun(p.runId);
       setRunStatus((s) => ({ ...s, running: true, runId: p.runId, done: 0, total: p.nodeIds.length }));
       pushEntry({ kind: 'run', runId: p.runId, status: 'start', text: `运行开始 · ${p.nodeIds.length} 个节点` });
     });
     es.addEventListener('run-end', (e) => {
       const p = JSON.parse(e.data);
+      refreshRunList();
       if (!appliesToActiveRun(p)) return;
       runningRef.current = false;
       setRunStatus((s) => (s.runId === p.runId ? { ...s, running: false, last: p.status } : s));
@@ -376,10 +465,20 @@ export default function App() {
       pushEntry({ kind: 'sys', runId: p.runId, status: 'error', text: p.error });
     });
     es.addEventListener('snapshot', (e) => {
-      // 刷新恢复：节点状态 + 一组可点击的运行日志（否则刷新后日志面板会错误显示“尚未运行”）
+      // 刷新恢复：服务端为每个 live run 各发一条 snapshot。全部入详情分桶；
+      // 节点投影只采纳「当前画布最近的 live run」一条，其余运行经切换器查看。
       const p = JSON.parse(e.data);
+      if (!p.runId) return;
+      setRunDetails((current) => ({ ...current, [p.runId]: { ...p, runId: p.runId } }));
       if (!belongsToCurrentCanvas(p)) return;
-      activeRunIdRef.current = p.runId;
+      const adopted = p.status === 'running'
+        || !inspectedRunIdRef.current
+        || (runDetailsRef.current[inspectedRunIdRef.current]?.status === 'running' ? false : !runDetailsRef.current[inspectedRunIdRef.current]);
+      if (p.status !== 'running' && !adopted) return;
+      if (p.status === 'running' || !inspectedRunIdRef.current) {
+        activeRunIdRef.current = p.runId;
+        inspectRun(p.runId);
+      }
       setRunStatus((s) => ({
         ...s,
         runId: p.runId || s.runId,
@@ -417,7 +516,6 @@ export default function App() {
       }
       if (p.runId) {
         setInspectedRunId((current) => current || p.runId);
-        setRunDetails((current) => ({ ...current, [p.runId]: { ...p, runId: p.runId } }));
       }
       if (restored.length && p.runId) {
         setEventsByRunId((current) => current[p.runId]?.length ? current : ({
@@ -430,7 +528,7 @@ export default function App() {
       }
     });
     return () => es.close();
-  }, [canvasScopeReady, setNodes, toast]);
+  }, [canvasScopeReady, setNodes, toast, inspectRun, refreshRunList]);
 
   // Esc 关闭面板；Cmd+S 保存；Cmd+Z 撤销 / Shift 重做；Delete 删除选中；Cmd+D 复制选中；F 定位错误
   const isTypingTarget = (e) => {
@@ -544,9 +642,10 @@ export default function App() {
     fetch(apiUrl('/runs')).then((r) => r.json()).then((d) => {
       if ((currentWfIdRef.current || null) !== (workflowId || null)) return;
       const rows = d.runs || [];
+      setRunList(rows);
       const latest = rows.find((row) => row.workflowId === workflowId);
-      if (!latest) { setInspectedRunId(null); return; }
-      setInspectedRunId(latest.runId);
+      if (!latest) { inspectRun(null); return; }
+      inspectRun(latest.runId);
       if (!latest.live) {
         fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(latest.runId)}`))
           .then((r) => (r.ok ? r.json() : Promise.reject(new Error('运行记录不存在'))))
@@ -557,7 +656,7 @@ export default function App() {
           .catch(() => { /* 面板显示列表摘要兜底 */ });
       }
     }).catch(() => { /* 列表拉不到就维持现状 */ });
-  }, []);
+  }, [inspectRun]);
 
   const openWorkflow = useCallback(async (wf) => {
     const res = await fetch(apiUrl(`/workflows/detail?id=${encodeURIComponent(wf.id)}`));
@@ -566,6 +665,7 @@ export default function App() {
     workflowScopeEpochRef.current += 1;
     activeRunIdRef.current = null;
     runningRef.current = false;
+    inspectRun(null);
     setNodes(data.graph.nodes.map(toFlowNode));
     setEdges(data.graph.edges.map(toFlowEdge));
     setCurrentWf(data);
@@ -582,13 +682,14 @@ export default function App() {
     // 运行面板跟随：切到哪条工作流就显示哪条的最近一次运行；没跑过则清空面板
     syncRunPanelToWorkflow(data.id);
     toast(`已打开「${data.name}」`);
-  }, [setNodes, setEdges, toast, syncRunPanelToWorkflow]);
+  }, [setNodes, setEdges, toast, syncRunPanelToWorkflow, inspectRun]);
 
   const newWorkflow = useCallback((created) => {
     const document = normalizeWorkflowDocument(created);
     workflowScopeEpochRef.current += 1;
     activeRunIdRef.current = null;
     runningRef.current = false;
+    inspectRun(null);
     setNodes(document.graph.nodes.map(toFlowNode));
     setEdges(document.graph.edges.map(toFlowEdge));
     setCurrentWf(document);
@@ -604,7 +705,7 @@ export default function App() {
     }).catch(() => {});
     syncRunPanelToWorkflow(document.id);
     setTemplateOpen(true); // 空画布 → 弹模板库引导
-  }, [setNodes, setEdges, syncRunPanelToWorkflow]);
+  }, [setNodes, setEdges, syncRunPanelToWorkflow, inspectRun]);
 
   const applyTemplate = useCallback((tpl) => {
     snapshot();
@@ -642,8 +743,9 @@ export default function App() {
     });
   }, [setNodes, setEdges, currentWf, toast, snapshot]);
 
-  const run = useCallback(async () => {
-    if (runningRef.current) return;
+  // 启动运行全流程（lint → 保存 → 续跑决策 → 启动 → 跟随）。
+  // 并发运行：不因「已有运行在跑」而拒绝，每次调用都会新开一个 run。
+  const startRunFlow = useCallback(async () => {
     const runScopeEpoch = workflowScopeEpochRef.current;
     const runWorkflowId = currentWfIdRef.current;
     const graph = toGraph();
@@ -755,13 +857,27 @@ export default function App() {
     if (runId && stillCurrentScope) {
       activeRunIdRef.current = runId;
       runningRef.current = true;
-      setInspectedRunId(runId);
+      inspectRun(runId);
       setRunStatus((current) => ({ ...current, running: true, runId, done: 0, total: graph.nodes.filter((node) => node.type !== 'notify').length }));
     }
-  }, [save, setNodes, toGraph, triggerInput, runInputs, currentWf, toast, doLint]);
+    refreshRunList();
+  }, [save, setNodes, toGraph, triggerInput, runInputs, currentWf, toast, doLint, inspectRun, refreshRunList]);
+
+  // 启动请求 in-flight 门：请求发出→返回 runId 期间忽略重复点击（防双击开两个相同运行）。
+  // 不按「是否有运行在跑」互斥——多运行并发是本版本的核心能力。
+  const runStartInFlightRef = useRef(false);
+  const run = useCallback(async () => {
+    if (runStartInFlightRef.current) return;
+    runStartInFlightRef.current = true;
+    try {
+      await startRunFlow();
+    } finally {
+      runStartInFlightRef.current = false;
+    }
+  }, [startRunFlow]);
 
   const cancelRun = useCallback(async () => {
-    const runId = activeRunIdRef.current;
+    const runId = inspectedRunIdRef.current;
     if (!runId) return;
     const res = await fetch(apiUrl('/run/cancel'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1318,14 +1434,15 @@ export default function App() {
               { key: 'redo', icon: '↪', label: '重做', hint: 'Cmd+Shift+Z', compactOnly: true, disabled: !undoInfo.canRedo, onClick: redo },
               larkStatus?.installed ? { key: 'lark', icon: '◈', label: larkStatus.user?.tokenStatus === 'valid' ? `飞书已登录：${larkStatus.user.userName}` : '飞书登录 / 设置', onClick: () => { setFocusLark(true); setCredOpen(true); } } : null,
               { key: 'variables', icon: '⌘', label: '变量与输入', hint: '实例变量 / 工作流变量 / 运行输入', onClick: () => setVariableCenterOpen(true) },
+              { key: 'schedules', icon: '⏰', label: '定时任务', hint: '按周期自动运行工作流', onClick: () => setScheduleCenterOpen(true) },
               { key: 'settings', icon: '⚙', label: '设置', hint: '凭据 / 飞书', onClick: () => setCredOpen(true) },
               { key: 'templates', icon: '▤', label: '模板库', onClick: () => setTemplateOpen(true) },
               { key: 'reset', icon: '⟲', label: '重置为示例', danger: true, onClick: resetGraph },
             ]} />
-            {runStatus.running ? (
-              <button className="btn btn-danger tb-run-btn" onClick={cancelRun} aria-label="取消运行"><span aria-hidden="true">■</span><span className="tb-run-label">取消</span></button>
-            ) : (
-              <button className="btn btn-primary tb-run-btn" onClick={run} aria-label="运行工作流"><span aria-hidden="true">▶</span><span className="tb-run-label">运行</span></button>
+            {/* 多运行并发：常驻「运行」随时可再开一轮；「取消」只作用于当前查看的运行 */}
+            <button className="btn btn-primary tb-run-btn" onClick={run} aria-label="运行工作流"><span aria-hidden="true">▶</span><span className="tb-run-label">运行</span></button>
+            {runStatus.running && (
+              <button className="btn btn-danger tb-run-btn" onClick={cancelRun} aria-label="取消当前查看的运行" title="取消当前查看的运行（不影响其他并行运行）"><span aria-hidden="true">■</span><span className="tb-run-label">取消</span></button>
             )}
           </>
         )}
@@ -1456,7 +1573,15 @@ export default function App() {
             aria-label={logOpen ? '收起成果面板' : '展开成果面板'}>
             {logOpen ? '▶ 收起' : '◀ 展开'}
           </button>
-          {logOpen && <ResultPanel
+          {logOpen && (
+            <>
+              <RunSwitcher
+                runs={runList.filter((r) => (r.workflowId || null) === (currentWfIdRef.current || null) || !currentWfIdRef.current)}
+                inspectedRunId={inspectedRunId}
+                onSelect={selectRunForView}
+                onOpenHistory={() => setHistoryOpen(true)}
+              />
+              <ResultPanel
             runDetail={runDetails[inspectedRunId]}
             events={eventsByRunId[inspectedRunId] || []}
             status={inspectedRunId === runStatus.runId ? runStatus : runDetails[inspectedRunId]}
@@ -1469,7 +1594,9 @@ export default function App() {
             onClose={() => setLogOpen(false)}
             onFocusNode={focusNode}
             onOpenNodeDetail={(runId, nodeId) => setNodeDetail({ runId, nodeId })}
-          />}
+          />
+            </>
+          )}
         </div>
           </>
         )}
@@ -1524,15 +1651,16 @@ export default function App() {
         onResume={(runId, resumedNodes, rerunNodes) => {
           activeRunIdRef.current = runId;
           runningRef.current = true;
-          setInspectedRunId(runId);
+          inspectRun(runId);
           setRunStatus((current) => ({ ...current, running: true, runId }));
+          refreshRunList();
           const rerunCount = rerunNodes?.length ?? 0;
           toast(rerunCount > 0
             ? `已从上次运行续跑（复用 ${resumedNodes} 个节点，${rerunCount} 个因画布修改重跑）`
             : `已从上次运行续跑（复用 ${resumedNodes} 个已完成节点）`, 'success');
         }}
         onSelect={(runId) => {
-        setInspectedRunId(runId);
+        inspectRun(runId);
         const applyDetail = (detail) => {
           // 历史恢复：把该次运行的节点状态/输出投影回画布（与 SSE snapshot 同形）
           for (const [nodeId, st] of Object.entries(detail.nodeStates || {})) {
@@ -1602,6 +1730,14 @@ export default function App() {
           inputSchema={inputSchema}
           onClose={() => setVariableCenterOpen(false)}
           onGlobalChanged={(revision) => setGlobalVariableEpoch(revision)}
+        />
+      )}
+      {scheduleCenterOpen && (
+        <ScheduleCenter
+          currentWorkflowId={currentWf?.id || null}
+          onRan={refreshRunList}
+          onClose={() => setScheduleCenterOpen(false)}
+          toast={toast}
         />
       )}
       {templateOpen && <TemplateModal onClose={() => setTemplateOpen(false)} onApply={applyTemplate} />}
