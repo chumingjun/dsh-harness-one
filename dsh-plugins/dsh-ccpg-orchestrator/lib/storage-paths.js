@@ -55,6 +55,7 @@ export function createStoragePaths({
   const attachments = join(root, 'attachments');
   const runs = join(root, 'runs');
   const runtime = join(root, 'runtime');
+  const database = join(root, 'workflow-one.sqlite');
   const resolvedDshHome = absoluteDirectory(dshHome, 'dshHome');
   const pluginDataLegacy = legacyLayout(join(resolvedDshHome, 'plugin-data', PLUGIN_NAME), 'plugin-data');
   const packageLegacy = legacyLayout(absoluteDirectory(legacyRoot, 'legacyRoot'), 'package-data');
@@ -81,6 +82,8 @@ export function createStoragePaths({
     attachmentsDir: attachments,
     runs,
     runsDir: runs,
+    database,
+    databaseFile: database,
     runtime,
     runtimeDir: runtime,
     artifactRoot: runtime,

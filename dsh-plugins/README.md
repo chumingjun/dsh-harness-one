@@ -15,7 +15,7 @@
 
 ## 安装与使用
 
-普通 dsh 有 release/源码两种路径，前提是 **Node ≥ 20**、`npm i -g @deepseek-ai/dsh`。Harness Desktop 自带运行时，走下面的原生插件命令。
+普通 dsh 有 release/源码两种路径，前提是 **Node ≥ 24.15**、`npm i -g @deepseek-ai/dsh`。Harness Desktop 自带运行时，走下面的原生插件命令。
 
 ### Harness Desktop
 
@@ -123,7 +123,7 @@ dsh plugin --profile myprofile add dsh-ccpg-brand
 ## 数据位置
 
 - 技能目录：dsh 原生 `~/.dsh/skills` / `~/.agents/skills`（`ctx.skills` 发现；feishu-cli 技能由 larkauth 启动时自动种子到 `~/.dsh/skills`）
-- Workflow One 数据：当前 dsh 会话工作目录下的 `.workflow-one/`（state/workflows/attachments/runs/runtime，gitignore）
+- Workflow One 数据：当前 dsh 会话工作目录下的 `.workflow-one/`；工作流与运行记录存于 `workflow-one.sqlite`，state/attachments/runtime 继续使用文件系统（整体 gitignore）
 - 节点执行：agent 以真实工作区根为 cwd，可读取项目文件；交付物写入 `.workflow-one/runtime/<workflow>/<run>/nodes/<node>/workspace/`，成果快照只扫描该节点目录
 - 旧版 `~/.dsh/plugin-data/dsh-ccpg-orchestrator` 与插件包 `data/`：首次进入工作区时只导入一次，之后不再写入
 - agent 会话：`~/.dsh/sessions/`（dsh 持久化，zstd JSONL）

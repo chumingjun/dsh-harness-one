@@ -14,7 +14,7 @@
 #   sh pack.sh [tag]     # tag 默认取最近 git tag（无则 0.0.0）
 # 环境变量：
 #   PACK_DIR   打包根目录（默认 /tmp/dsh-ccpg-pack），结束后可删
-#   DSH_NODE   构建画布用的 node（默认自动探测，要求 >=20；兼容旧名 WF1_NODE）
+#   DSH_NODE   构建与打包用的 node（默认自动探测，要求 >=24.15；兼容旧名 WF1_NODE）
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$HERE/.." && pwd)
@@ -29,10 +29,13 @@ OPTIONAL_PLUGINS="dsh-ccpg-brand"
 # 聚合壳（bundle patch 挂载七插件 + better-sidebar，可选件 env 门控）；其 node_modules 是本地安装产物，不打包
 AGG="dsh-ccpg-one"
 
-# ---- 0. node（>=20）----
+# ---- 0. node（>=24.15，内置 node:sqlite）----
 NODE_BIN="${DSH_NODE:-${WF1_NODE:-}}"
-[ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "console.log(Number(process.versions.node.split('.')[0])>=20?process.execPath:'')" 2>/dev/null || true)
-[ -z "$NODE_BIN" ] && { echo "✗ 需要 node>=20（或设 DSH_NODE 指向）"; exit 1; }
+[ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "const [a,b]=process.versions.node.split('.').map(Number); console.log(a>24||(a===24&&b>=15)?process.execPath:'')" 2>/dev/null || true)
+if [ -z "$NODE_BIN" ] || ! "$NODE_BIN" -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>24||(a===24&&b>=15)?0:1)" 2>/dev/null; then
+  echo "✗ 需要 node>=24.15（或设 DSH_NODE 指向）"
+  exit 1
+fi
 echo "✓ node: $("$NODE_BIN" -v)"
 PATH=$(dirname "$NODE_BIN"):$PATH
 export PATH
@@ -152,7 +155,12 @@ import { pathToFileURL } from 'node:url';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 const root = process.argv[2];
+const database = new DatabaseSync(':memory:');
+database.exec('CREATE TABLE smoke (value INTEGER) STRICT; INSERT INTO smoke VALUES (1)');
+if (database.prepare('SELECT value FROM smoke').get().value !== 1) throw new Error('node:sqlite smoke 输出错误');
+database.close();
 const { runScript } = await import(pathToFileURL(join(root, 'lib', 'script-runner.js')));
 const workspaceDir = mkdtempSync(join(tmpdir(), 'wf1-pack-script-'));
 try {

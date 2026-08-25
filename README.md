@@ -11,7 +11,7 @@
 
 ## 立即安装
 
-Node.js >= 20 且已安装 `@deepseek-ai/dsh`：
+Node.js >= 24.15 且已安装 `@deepseek-ai/dsh`：
 
 ```sh
 dsh plugin --profile web add dsh-ccpg-one@0.2.1
@@ -48,7 +48,7 @@ Desktop 使用官方 DSH/Cordis 插件组合，不需要另一套插件。不要
 **普通用户（release 包，无需本仓库源码）**：
 
 ```sh
-# 前提：node>=20、npm i -g @deepseek-ai/dsh
+# 前提：node>=24.15、npm i -g @deepseek-ai/dsh
 curl -LO https://github.com/chumingjun/harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
 tar -xzf dsh-ccpg-plugins-<tag>.tar.gz && cd dsh-plugins
 sh setup.sh --one wf1 4021               # 一键安装（自带全部构建产物）
@@ -158,7 +158,7 @@ dsh-plugins/
 ## 测试
 
 ```sh
-cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # 13 套
+cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # 14 套
 node dsh-plugins/dsh-ccpg-canvasui/test/client.test.mjs                               # canvasui 客户端
 node dsh-plugins/dsh-ccpg-document-preview/test/index.test.mjs                        # 4/4
 cd web && npm test                                                                    # 10 套
@@ -167,7 +167,7 @@ cd web && npm test                                                              
 ## 已知限制
 
 - 飞书写回为追加段落块，不保留富文本格式
-- 存储 = 每实体一 JSON 文件（多人编辑需求出现再迁 SQLite）
+- 工作流与运行记录按工作区存入 `.workflow-one/workflow-one.sqlite`；state、附件与运行产物仍为本地文件
 
 ## 反馈
 

@@ -22,7 +22,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24.15
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -46,7 +46,7 @@ jobs:
       - name: build
         run: sh dsh-plugins/build-web.sh
         env:
-          DSH_NODE: node # 构建链认 DSH_NODE 指向 ≥20 的 node；CI 里就是 node 本身
+          DSH_NODE: node # Workflow One 用 node:sqlite，要求 ≥24.15；CI 里就是 node 本身
 
       - name: verify npm packages
         run: node scripts/verify-plugin-packages.mjs
