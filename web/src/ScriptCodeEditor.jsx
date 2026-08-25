@@ -24,20 +24,20 @@ import { tags } from '@lezer/highlight';
 
 const externalSync = Annotation.define();
 
-// 暗色高亮，对齐画布设计令牌（紫 #8B5CF6 / 青 #06B6D4）
+// JS 高亮配色经 CSS 变量取值（theme.js 调色板跟随主题切换）
 const scriptHighlight = HighlightStyle.define([
-  { tag: [tags.keyword, tags.modifier, tags.controlKeyword], color: '#C4B5FD' },
-  { tag: [tags.string, tags.special(tags.string)], color: '#6EE7B7' },
-  { tag: [tags.number, tags.bool, tags.null, tags.atom], color: '#FBBF24' },
-  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: '#67E8F9' },
-  { tag: tags.propertyName, color: '#93C5FD' },
-  { tag: [tags.variableName, tags.self], color: '#E7E2D9' },
-  { tag: [tags.definition(tags.variableName), tags.local(tags.variableName)], color: '#E7E2D9' },
-  { tag: [tags.comment, tags.blockComment], color: '#8A857C', fontStyle: 'italic' },
-  { tag: [tags.operator, tags.punctuation, tags.separator], color: '#B8B2A7' },
-  { tag: [tags.typeName, tags.className, tags.standard(tags.variableName)], color: '#FCA5A5' },
-  { tag: tags.regexp, color: '#F0ABFC' },
-  { tag: tags.invalid, color: '#F87171' },
+  { tag: [tags.keyword, tags.modifier, tags.controlKeyword], color: 'var(--cm-keyword)' },
+  { tag: [tags.string, tags.special(tags.string)], color: 'var(--cm-string)' },
+  { tag: [tags.number, tags.bool, tags.null, tags.atom], color: 'var(--cm-number)' },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: 'var(--cm-function)' },
+  { tag: tags.propertyName, color: 'var(--cm-property)' },
+  { tag: [tags.variableName, tags.self], color: 'var(--cm-variable)' },
+  { tag: [tags.definition(tags.variableName), tags.local(tags.variableName)], color: 'var(--cm-variable)' },
+  { tag: [tags.comment, tags.blockComment], color: 'var(--cm-comment)', fontStyle: 'italic' },
+  { tag: [tags.operator, tags.punctuation, tags.separator], color: 'var(--cm-operator)' },
+  { tag: [tags.typeName, tags.className, tags.standard(tags.variableName)], color: 'var(--cm-type)' },
+  { tag: tags.regexp, color: 'var(--cm-regexp)' },
+  { tag: tags.invalid, color: 'var(--danger-fg)' },
 ]);
 
 const scriptTheme = EditorView.theme(
@@ -67,6 +67,7 @@ const scriptTheme = EditorView.theme(
   },
   { dark: true },
 );
+// ponytail: dark 标记恒为 true——cm-editor 底色是透明 var(--bg-raised)，实际明暗由 CSS 变量决定
 
 export function ScriptCodeEditor({ value, onChange, minHeight = '310px', readOnly = false }) {
   const hostRef = useRef(null);

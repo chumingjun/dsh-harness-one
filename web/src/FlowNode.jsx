@@ -5,15 +5,17 @@ import { useEffect, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { NODE_REGISTRY, kindOf } from './registry.jsx';
 
+// 状态边框走 CSS 变量（跟随主题）：borderColor 由 CSS 类/内联 var() 决定，
+// 这里只给结构（粗细/线型/透明度）与光晕强度。
 const STATUS_STYLE = {
   idle: {},
-  queued: { border: '2px solid #94a3b8' },
-  running: { border: '2px solid #f59e0b', boxShadow: '0 0 12px rgba(245,158,11,.6)' },
-  waiting: { border: '2px dashed #db2777', boxShadow: '0 0 12px rgba(219,39,119,.4)' },
-  success: { border: '2px solid #10b981' },
-  error: { border: '2px solid #ef4444' },
-  skipped: { border: '2px dashed #9ca3af', opacity: 0.6 },
-  canceled: { border: '2px dotted #94a3b8', opacity: 0.7 },
+  queued: { border: '2px solid var(--canceled)' },
+  running: { border: '2px solid var(--edge-running)', boxShadow: '0 0 12px rgba(245,158,11,.6)' },
+  waiting: { border: '2px dashed var(--pink)', boxShadow: '0 0 12px rgba(219,39,119,.4)' },
+  success: { border: '2px solid var(--edge-success)' },
+  error: { border: '2px solid var(--edge-error)' },
+  skipped: { border: '2px dashed var(--edge-skipped)', opacity: 0.6 },
+  canceled: { border: '2px dotted var(--canceled)', opacity: 0.7 },
 };
 
 /** 运行中节点的实时计时：mm:ss，每秒自跳（节点结束即停，开销一个 interval） */
