@@ -1,6 +1,7 @@
 // 工作流列表页：搜索 + 复制 + 导出/导入 JSON + 打开/重命名/删除（弹窗替代原生 prompt/confirm）。
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Download, Upload } from 'lucide-react';
 import { apiUrl } from './api.js';
 import { createWorkflowDocument } from './workflow-serialization.js';
 import { useToast, PromptModal, ConfirmModal } from './ui.jsx';
@@ -61,21 +62,42 @@ export function WorkflowList({ currentId, onOpen, onNew }) {
     if (res.ok) { toast('已创建副本', 'success'); load(); }
   };
 
-  const exportWf = (wf) => {
-    const a = document.createElement('a');
-    a.href = apiUrl(`/workflows/transfer?id=${encodeURIComponent(wf.id)}`);
-    a.download = `${wf.name}.workflow-one.json`;
-    a.click();
+  const exportWf = async (wf) => {
+    setBusy(true);
+    try {
+      const res = await fetch(apiUrl(`/workflows/transfer?id=${encodeURIComponent(wf.id)}`));
+      if (!res.ok) {
+        const out = await res.json().catch(() => ({}));
+        throw new Error(out.error || `请求失败（HTTP ${res.status}）`);
+      }
+      if (!res.headers.get('content-type')?.includes('application/json')) {
+        throw new Error('服务返回的不是工作流 JSON');
+      }
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${wf.name}.workflow-one.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      toast(`已导出「${wf.name}」`, 'success');
+    } catch (err) {
+      toast(`导出失败：${err.message}`, 'error');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const importWf = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    setBusy(true);
     try {
       const text = await file.text();
-      const data = JSON.parse(text);
-      if (!data?.graph?.nodes) throw new Error('格式不对：需要 workflow-one 导出文件（含 graph.nodes）');
+      let data;
+      try { data = JSON.parse(text); } catch { throw new Error('文件不是有效的 JSON'); }
       const res = await fetch(apiUrl('/workflows/transfer'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
@@ -84,8 +106,11 @@ export function WorkflowList({ currentId, onOpen, onNew }) {
       if (!res.ok) throw new Error(out.error || '导入失败');
       toast(`已导入「${out.name}」${out.warnings ? `（${out.warnings} 条警告）` : ''}`, 'success');
       load();
+      await onOpen?.(out);
     } catch (err) {
       toast(`导入失败：${err.message}`, 'error');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -94,7 +119,9 @@ export function WorkflowList({ currentId, onOpen, onNew }) {
       <div className="wf-list-head">
         <h3>我的工作流 <span className="sec-hint">{list.length} 个</span></h3>
         <input className="wf-search" placeholder="搜索名称…" value={query} onChange={(e) => setQuery(e.target.value)} />
-        <button className="btn btn-sm" onClick={() => importRef.current?.click()}>导入</button>
+        <button className="btn btn-sm" disabled={busy} onClick={() => importRef.current?.click()}>
+          <Upload size={14} aria-hidden="true" />导入
+        </button>
         <input ref={importRef} type="file" accept=".json" style={{ display: 'none' }} onChange={importWf} />
         <button className="btn btn-primary btn-sm" disabled={busy} onClick={createNew}>＋ 新建</button>
       </div>
@@ -113,7 +140,9 @@ export function WorkflowList({ currentId, onOpen, onNew }) {
             <div className="wf-card-actions">
               <button className="btn-icon" title="打开" onClick={() => onOpen(wf)}>↗</button>
               <button className="btn-icon" title="复制副本" onClick={() => duplicate(wf)}>⧉</button>
-              <button className="btn-icon" title="导出 JSON" onClick={() => exportWf(wf)}>⬇</button>
+              <button className="btn-icon" title="导出工作流" aria-label={`导出「${wf.name}」`} disabled={busy} onClick={() => exportWf(wf)}>
+                <Download size={15} aria-hidden="true" />
+              </button>
               <button className="btn-icon" title="重命名" onClick={() => rename(wf)}>✏️</button>
               <button className="btn-icon" title="删除" onClick={() => remove(wf)}>🗑</button>
             </div>

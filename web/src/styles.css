@@ -898,6 +898,14 @@ body {
 .wf-card-meta { font-size: 12px; color: var(--fg-faint); margin-top: 3px; }
 .wf-card-actions { display: flex; gap: 2px; }
 
+@media (max-width: 520px) {
+  .wf-view { padding: 20px 16px; }
+  .wf-list-head { flex-wrap: wrap; }
+  .wf-list-head h3 { flex-basis: 100%; }
+  .wf-search { flex: 1; width: auto; min-width: 0; }
+  .wf-list-head .btn { white-space: nowrap; }
+}
+
 /* ============ toast ============ */
 .toast-wrap {
   position: fixed; right: 18px; bottom: 18px; z-index: 999;
