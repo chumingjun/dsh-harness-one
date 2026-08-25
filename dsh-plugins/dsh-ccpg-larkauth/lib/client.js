@@ -200,17 +200,31 @@ window.__ModuleLoader__.load({
 			link: { fontSize: "13px", color: "var(--dsw-alias-accent-bg, #4F46E5)" },
 		};
 
-		// 状态点全局样式：注入一次（官方 UI 无此类名约定）
-		function ensureDotStyle() {
-			if (document.getElementById("larka-dot-style")) return;
-			var css = ".larka-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:#9CA3AF}"
-				+ ".larka-dot.ok{background:#10B981;box-shadow:0 0 6px rgba(16,185,129,.5)}"
-				+ ".larka-dot.warn{background:#F59E0B;box-shadow:0 0 6px rgba(245,158,11,.5)}";
-			var el = document.createElement("style");
-			el.id = "larka-dot-style";
-			el.textContent = css;
-			document.head.appendChild(el);
-		}
+	// 全局样式：注入一次（官方 UI 无此类名约定）。
+	// larka-entry 几何逐项对齐官方设置触发器（ui-settings-general VOzbGW_trigger）：
+	// 宽态 42px 满行 12px 圆角、收起态 36px 圆——两态都与「设置」按钮同轴。
+	// footerActions 官方是横向 flex：多个 footer.action 注册者（如 dsh-remote-web-ui）
+	// 会并排挤一行。slot anchor 是 display:contents（不参与布局），真正的 flex 上下文
+	// 是 anchor 的父容器；这里用 :has() 命中「含有本入口的 footerActions 容器」，
+	// 改为纵向堆叠——每个 footer 图标独占一行，与设置按钮同宽对齐。
+	function ensureDotStyle() {
+		if (document.getElementById("larka-dot-style")) return;
+		var css = ".larka-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:#9CA3AF}"
+			+ ".larka-dot.ok{background:#10B981;box-shadow:0 0 6px rgba(16,185,129,.5)}"
+			+ ".larka-dot.warn{background:#F59E0B;box-shadow:0 0 6px rgba(245,158,11,.5)}"
+			+ ".larka-entry{box-sizing:border-box;cursor:pointer;width:calc(100% + 4px);height:42px;"
+			+ "color:var(--dsw-alias-label-primary);background:0 0;border:none;border-radius:12px;"
+			+ "flex:none;align-items:center;justify-content:flex-start;gap:8px;margin:4px -2px;"
+			+ "padding:0 10px 0 8px;font-family:inherit;font-size:14px;line-height:22px;"
+			+ "display:flex;overflow:hidden;white-space:nowrap}"
+			+ ".larka-entry:hover{background:var(--dsw-alias-interactive-bg-hover)}"
+			+ ".larka-entry.larka-rail{border-radius:50%;justify-content:center;gap:0;width:36px;height:36px;margin:8px 0 10px;padding:0}"
+			+ ":has(> [data-slot=\"sidebar.footer.action\"] .larka-entry){display:flex;flex-direction:column}";
+		var el = document.createElement("style");
+		el.id = "larka-dot-style";
+		el.textContent = css;
+		document.head.appendChild(el);
+	}
 
 		// ---- 侧边栏 footer 入口：点击打开设置面板 ----
 		// settings 面板由官方 ui-settings 打开；这里用官方入口同款方式：派发打开设置后切换到本 section。
@@ -230,24 +244,11 @@ window.__ModuleLoader__.load({
 			};
 			var label = st[0] && st[0].user && st[0].user.tokenStatus === "valid"
 				? "飞书 " + (st[0].user.userName || "已登录") : "飞书账号";
+			// 几何走 larka-entry/larka-rail 类（见 ensureDotStyle）：与官方设置按钮逐项同款
 			return react.createElement("button", {
 				onClick: openSettings,
 				title: "飞书账号授权（lark-cli 扫码登录）",
-				style: {
-					display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px",
-					width: wide ? "auto" : "36px",
-					alignSelf: wide ? "stretch" : "center",
-					height: "36px", margin: wide ? "2px 0 2px -4px" : "2px 0",
-					padding: wide ? "0 12px" : "0",
-					border: "1px solid transparent", borderRadius: wide ? "10px" : "50%",
-					background: "transparent", color: "inherit",
-					fontSize: "14px", cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden",
-					transition: "background .15s ease",
-				},
-				onMouseEnter: (e) => { e.currentTarget.style.background = "var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.06))"; },
-				onMouseLeave: (e) => { e.currentTarget.style.background = "transparent"; },
-				onMouseDown: (e) => { e.currentTarget.style.transform = "scale(.97)"; },
-				onMouseUp: (e) => { e.currentTarget.style.transform = ""; },
+				className: wide ? "larka-entry" : "larka-entry larka-rail",
 			},
 				react.createElement("span", { className: dotClass(st[0]) }),
 				wide ? react.createElement("span", null, label) : null);
