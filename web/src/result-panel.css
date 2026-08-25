@@ -234,3 +234,33 @@
   0%, 100% { opacity: 1; }
   50% { opacity: .35; }
 }
+
+/* 定时任务面板 */
+.sch-list { display: flex; flex-direction: column; gap: 10px; }
+.sch-empty { padding: 8px 2px; }
+.sch-rows { display: flex; flex-direction: column; gap: 8px; }
+.sch-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; }
+.sch-row-off { opacity: .62; }
+.sch-row-main { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.sch-row-title { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.sch-row-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--fg-faint); font-size: 11px; }
+.sch-row-actions { display: flex; gap: 6px; flex: none; }
+.sch-footer { display: flex; justify-content: flex-end; padding-top: 2px; }
+.sch-confirm { border-top: 1px solid var(--border); padding-top: 10px; }
+.sch-confirm p { font-size: 12px; margin-bottom: 8px; }
+.sch-form { display: flex; flex-direction: column; gap: 2px; }
+.sch-presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }
+.sch-input { width: 100%; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input, var(--bg-panel)); color: var(--fg); font-size: 12px; }
+.sch-input:focus { outline: none; border-color: var(--accent, #6d8cff); }
+.sch-input-err { border-color: var(--danger-fg, #ef4444); }
+.sch-textarea { resize: vertical; font-family: var(--mono, monospace); }
+.sch-err { color: var(--danger-fg, #ef4444); font-size: 11px; margin: 4px 0 0; }
+.sch-preview { margin: 6px 0 0; font-size: 11px; color: var(--fg-muted); }
+.sch-preview strong { color: var(--fg); margin-right: 8px; }
+.sch-overlap { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; }
+.sch-radio { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+.sch-radio-on { border-color: var(--accent, #6d8cff); }
+.sch-radio input { margin-top: 3px; }
+.sch-radio span { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.sch-radio em { font-style: normal; color: var(--fg-faint); font-size: 11px; }
+.sch-form-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 10px; }

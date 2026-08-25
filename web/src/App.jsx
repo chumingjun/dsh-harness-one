@@ -36,6 +36,7 @@ import { FeishuCredModal } from './FeishuCredModal.jsx';
 import { TestRunModal } from './TestRunModal.jsx';
 import { NodeDetailModal } from './NodeDetailModal.jsx';
 import { VariableCenter } from './VariableCenter.jsx';
+import { ScheduleCenter } from './ScheduleCenter.jsx';
 import { TEMPLATES, TemplateModal } from './templates.jsx';
 
 export default function App() {
@@ -78,6 +79,7 @@ export default function App() {
   const [progress, setProgress] = useState({}); // nodeId → { turns, preview }
   const [credOpen, setCredOpen] = useState(false);
   const [variableCenterOpen, setVariableCenterOpen] = useState(false);
+  const [scheduleCenterOpen, setScheduleCenterOpen] = useState(false);
   const [globalVariableEpoch, setGlobalVariableEpoch] = useState(0);
   const [larkStatus, setLarkStatus] = useState(null); // lark-cli 登录状态（⋯ 菜单入口数据源）
   const [focusLark, setFocusLark] = useState(false); // 从 ⋯ 打开设置时聚焦授权区
@@ -1429,6 +1431,7 @@ export default function App() {
               { key: 'redo', icon: '↪', label: '重做', hint: 'Cmd+Shift+Z', compactOnly: true, disabled: !undoInfo.canRedo, onClick: redo },
               larkStatus?.installed ? { key: 'lark', icon: '◈', label: larkStatus.user?.tokenStatus === 'valid' ? `飞书已登录：${larkStatus.user.userName}` : '飞书登录 / 设置', onClick: () => { setFocusLark(true); setCredOpen(true); } } : null,
               { key: 'variables', icon: '⌘', label: '变量与输入', hint: '实例变量 / 工作流变量 / 运行输入', onClick: () => setVariableCenterOpen(true) },
+              { key: 'schedules', icon: '⏰', label: '定时任务', hint: '按周期自动运行工作流', onClick: () => setScheduleCenterOpen(true) },
               { key: 'settings', icon: '⚙', label: '设置', hint: '凭据 / 飞书', onClick: () => setCredOpen(true) },
               { key: 'templates', icon: '▤', label: '模板库', onClick: () => setTemplateOpen(true) },
               { key: 'reset', icon: '⟲', label: '重置为示例', danger: true, onClick: resetGraph },
@@ -1724,6 +1727,14 @@ export default function App() {
           inputSchema={inputSchema}
           onClose={() => setVariableCenterOpen(false)}
           onGlobalChanged={(revision) => setGlobalVariableEpoch(revision)}
+        />
+      )}
+      {scheduleCenterOpen && (
+        <ScheduleCenter
+          currentWorkflowId={currentWf?.id || null}
+          onRan={refreshRunList}
+          onClose={() => setScheduleCenterOpen(false)}
+          toast={toast}
         />
       )}
       {templateOpen && <TemplateModal onClose={() => setTemplateOpen(false)} onApply={applyTemplate} />}
