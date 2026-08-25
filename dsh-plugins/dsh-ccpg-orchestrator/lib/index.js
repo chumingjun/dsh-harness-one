@@ -782,7 +782,8 @@ export function apply(ctx, config) {
         if (r.error) return r.error;
         const cv = canvasOf(exec.canvasId);
         cv.workflowId = r.wf.id;
-        cv.graph = r.wf.graph;
+        // 浅拷贝防别名：库里的图对象与画布态解耦，后续任一侧替换互不影响
+        cv.graph = { nodes: r.wf.graph.nodes.map((n) => ({ ...n, data: { ...n.data } })), edges: r.wf.graph.edges.map((e) => ({ ...e })) };
         cv.version += 1;
         broadcast('assistant-open-workflow', {
           canvasId: exec.canvasId, workflowId: r.wf.id,
