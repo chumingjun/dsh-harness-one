@@ -61,7 +61,8 @@ sh start.sh wf1                         # http://127.0.0.1:4021/
 ```sh
 git clone https://github.com/chumingjun/harness-one.git
 cd harness-one
-npm test                                # Optional: run the complete test suite
+npm install
+npm --prefix web install
 sh dsh-plugins/build-web.sh             # Required for source installs
 sh dsh-plugins/setup.sh --one dev 4021
 sh dsh-plugins/start.sh dev
