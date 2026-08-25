@@ -1,5 +1,7 @@
 # Workflow One
 
+简体中文 | [English](README.en.md)
+
 **运行在 [DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) 中的可视化 AI 工作流编排器。** 用拖拽 DAG 组合真实 dsh agent、脚本、条件分支和 HTTP 节点，实时查看运行进度，异常后从中断节点恢复，并将成果写回飞书。
 
 [![npm](https://img.shields.io/npm/v/dsh-ccpg-one)](https://www.npmjs.com/package/dsh-ccpg-one)
@@ -7,7 +9,9 @@
 [![GitHub Release](https://img.shields.io/github/v/release/chumingjun/harness-one)](https://github.com/chumingjun/harness-one/releases/latest)
 [![MIT License](https://img.shields.io/github/license/chumingjun/harness-one)](LICENSE)
 
-![Workflow One 完整工作流画布](images/workflow01.png)
+![Workflow One 从完整画布切换到节点运行详情](images/workflow-one-demo.gif)
+
+[查看完整分辨率截图](images/workflow01.png)
 
 ## 立即安装
 
@@ -34,6 +38,10 @@ Workflow One 嵌在 dsh 官方界面中：左侧保留与智能体的对话，�
 下图展示同一次运行的协同视图：左侧对话持续跟踪进度，中间选中正在执行的节点并查看配置，右侧按拓扑顺序展示每个节点的运行状态。
 
 ![对话、节点配置与运行进度协同视图](images/workflow.png)
+
+## 可导入模板
+
+[`examples/workflows/`](examples/workflows/) 提供三套可直接导入的工作流：报修工单整理、紧急度分流和多方并行评审。打开「工作流」列表，点击「导入」并选择 `.workflow-one.json` 文件即可使用。
 
 ## 快速开始
 
