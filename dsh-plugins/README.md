@@ -1,6 +1,6 @@
 # Workflow One — dsh 插件包（本地分发）
 
-7 个默认 Cordis 插件把物业智能体编排（拖拽画布 + 节点级真实 agent）装进任何 DeepSeek Harness (dsh)；brand 保留为独立可选插件：
+7 个默认 Cordis 插件把 AI 对话自动创建的物业智能体编排（可视化 DAG + 节点级真实 agent）装进任何 DeepSeek Harness (dsh)；brand 保留为独立可选插件：
 
 | 包 | 安装方式 | 职责 |
 |---|---|---|
