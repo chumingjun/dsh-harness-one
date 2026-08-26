@@ -76,12 +76,12 @@ Models and API keys are managed entirely by the dsh profile. This repository and
 
 ## How it works
 
-Workflow One lives inside the official dsh interface: the conversation remains visible on the left, with a zoomable workflow canvas beside it.
+Workflow One lives inside the official dsh interface and is designed for creating complex workflows through AI conversation. Describe the goal and needs in natural language on the left, and the generated DAG appears on the canvas. Use the canvas to verify structure, fine-tune settings, and observe execution; manual node editing remains available when needed.
 
-1. Open **Workflow** beside the dsh chat input, then create or load a workflow.
-2. Add input, agent, script, condition, HTTP, output, notification, or note nodes and configure their prompts, variables, tools, and models.
-3. Save and run from the canvas, or ask the AI assistant in chat to inspect, edit, and run the workflow.
-4. Select a running node to inspect its actual input and execution details, then review the timeline, final result, and artifacts in the result panel.
+1. Describe the workflow you need in natural language. The AI will plan the flow and create the nodes for you.
+2. When requirements change, describe the update in the conversation and the AI will update the workflow accordingly.
+3. Confirm the generated graph on the canvas, save it, then start the run from chat or the canvas.
+4. During a run, the conversation shows each node's progress directly in cards. You can also configure a notification node to sync node status to a Feishu group or direct chat in real time. Canvas nodes expose actual input and execution details, while the result panel provides the timeline, final result, and artifacts.
 
 ![Workflow One switching from the full canvas to live node details](images/workflow-one-demo.gif)
 
