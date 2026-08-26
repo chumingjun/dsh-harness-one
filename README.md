@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/DeepSeek-Harness-4D6BFE?labelColor=0F0F1A" alt="DeepSeek Harness 插件"></a>
+  <a href="https://zcode.z.ai/cn"><img src="https://img.shields.io/badge/Built%20with-ZCode-14B8A6?labelColor=0F0F1A" alt="使用 ZCode 开发"></a>
   <a href="https://www.npmjs.com/package/dsh-ccpg-one"><img src="https://img.shields.io/npm/v/dsh-ccpg-one" alt="npm 版本"></a>
   <a href="https://github.com/chumingjun/harness-one/actions/workflows/ci.yml"><img src="https://github.com/chumingjun/harness-one/actions/workflows/ci.yml/badge.svg" alt="CI 状态"></a>
   <a href="https://github.com/chumingjun/harness-one/releases/latest"><img src="https://img.shields.io/github/v/release/chumingjun/harness-one" alt="最新版本"></a>
@@ -183,17 +184,7 @@ Workflow One 嵌在 dsh 官方界面中：左侧保留与智能体的对话，�
 
 ## 架构
 
-```text
-web/                    前端（Vite + React 18 + @xyflow/react + CodeMirror）
-  src/App.jsx           画布 + 工具栏 + SSE 订阅
-  src/NodePanel.jsx     节点属性面板（脚本参数/Schema/模板编辑器）
-  src/registry.jsx      节点注册表（icon/色/preset/summary/badges）
-  src/result-adapter.js 运行结果适配（拓扑时间线/最终结果/产物分组）
-dsh-plugins/
-  dsh-ccpg-orchestrator/  引擎：NodeKind 注册表（execute/lint/edgeTaken/wantsSink）
-                          + agent 进程内驱动 + QuickJS 脚本运行器 + HTTP/SSE
-  dsh-ccpg-canvasui/      官方对话输入按钮 + better-sidebar 工作流画布
-```
+![Workflow One 系统架构](images/architecture.svg)
 
 双端节点注册表：引擎 NodeKind（调度/超时/重试）+ 前端 registry（图标/表单/徽标），新节点两处注册即得全部能力。agent 节点 = `ctx.agents.create` 进程内真实 dsh agent（followup → whenIdle → session events 聚合，同官方 headless 驱动）。
 
@@ -219,6 +210,10 @@ cd web && npm test
 
 - 飞书写回为追加段落块，不保留富文本格式
 - 工作流与运行记录按工作区存入 `.workflow-one/workflow-one.sqlite`；state、附件与运行产物仍为本地文件
+
+## 致谢
+
+本项目 90% 以上的开发工作使用 [ZCode](https://zcode.z.ai/cn) 完成，感谢 ZCode 提供的开发平台与支持。
 
 ## 反馈
 
