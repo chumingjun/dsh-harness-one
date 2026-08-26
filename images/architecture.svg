@@ -1,0 +1,154 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Workflow One system architecture</title>
+  <desc id="desc">Architecture diagram showing entry points, dsh plugins, orchestration services, workflow nodes, dsh capabilities, and workspace-local storage.</desc>
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#34312e" opacity="0.65"/>
+    </pattern>
+    <linearGradient id="titleAccent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8b7cf6"/>
+      <stop offset="0.5" stop-color="#4da4ff"/>
+      <stop offset="1" stop-color="#2dd4bf"/>
+    </linearGradient>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0 10 5 0 10Z" fill="#4da4ff"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0 10 5 0 10Z" fill="#2dd4bf"/>
+    </marker>
+    <style>
+      .label { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #f4f1ed; letter-spacing: 0; }
+      .muted { fill: #aaa49e; }
+      .eyebrow { font-size: 17px; font-weight: 700; }
+      .heading { font-size: 24px; font-weight: 750; }
+      .body { font-size: 17px; font-weight: 600; }
+      .small { font-size: 14px; font-weight: 550; }
+      .panel { fill: #181715; stroke: #3b3733; stroke-width: 1.5; }
+      .box { fill: #211f1d; stroke-width: 1.5; }
+      .line { fill: none; stroke-width: 2; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1000" fill="#11100f"/>
+  <rect width="1600" height="1000" fill="url(#grid)"/>
+
+  <text class="label eyebrow" x="72" y="66" fill="#8b7cf6">DEEPSEEK HARNESS PLUGIN</text>
+  <text class="label" x="72" y="116" font-size="42" font-weight="800">Workflow One</text>
+  <text x="362" y="116" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="42" font-weight="800" fill="url(#titleAccent)">System Architecture</text>
+  <text class="label muted body" x="72" y="151">Visual workflow orchestration on native dsh agents, tools, models, and skills</text>
+
+  <!-- Entry points -->
+  <rect class="panel" x="72" y="190" width="1456" height="130" rx="8"/>
+  <text class="label eyebrow muted" x="96" y="222">ENTRY POINTS</text>
+
+  <rect class="box" x="96" y="240" width="324" height="56" rx="8" stroke="#8b7cf6"/>
+  <circle cx="120" cy="268" r="7" fill="#8b7cf6"/>
+  <text class="label body" x="139" y="274">dsh Web UI + Better Sidebar</text>
+
+  <rect class="box" x="450" y="240" width="324" height="56" rx="8" stroke="#4da4ff"/>
+  <circle cx="474" cy="268" r="7" fill="#4da4ff"/>
+  <text class="label body" x="493" y="274">AI Chat Assistant</text>
+
+  <rect class="box" x="804" y="240" width="324" height="56" rx="8" stroke="#f6b84a"/>
+  <circle cx="828" cy="268" r="7" fill="#f6b84a"/>
+  <text class="label body" x="847" y="274">Webhook + Cron Schedule</text>
+
+  <rect class="box" x="1158" y="240" width="346" height="56" rx="8" stroke="#2dd4bf"/>
+  <circle cx="1182" cy="268" r="7" fill="#2dd4bf"/>
+  <text class="label body" x="1201" y="274">Standalone Canvas /wf1/</text>
+
+  <!-- Plugin layer -->
+  <rect class="panel" x="72" y="356" width="1456" height="142" rx="8"/>
+  <text class="label eyebrow muted" x="96" y="389">DSH PLUGIN LAYER</text>
+
+  <rect class="box" x="96" y="407" width="250" height="66" rx="8" stroke="#8b7cf6"/>
+  <text class="label body" x="116" y="435">dsh-ccpg-canvasui</text>
+  <text class="label muted small" x="116" y="458">official UI integration</text>
+
+  <rect class="box" x="366" y="407" width="250" height="66" rx="8" stroke="#2dd4bf"/>
+  <text class="label body" x="386" y="435">dsh-ccpg-web</text>
+  <text class="label muted small" x="386" y="458">canvas static host</text>
+
+  <rect class="box" x="636" y="407" width="304" height="66" rx="8" stroke="#4da4ff"/>
+  <text class="label body" x="656" y="435">dsh-ccpg-orchestrator</text>
+  <text class="label muted small" x="656" y="458">engine + HTTP + SSE</text>
+
+  <rect class="box" x="960" y="407" width="250" height="66" rx="8" stroke="#f6b84a"/>
+  <text class="label body" x="980" y="435">tools + larkauth</text>
+  <text class="label muted small" x="980" y="458">dsh tools + Feishu login</text>
+
+  <rect class="box" x="1230" y="407" width="274" height="66" rx="8" stroke="#ef6461"/>
+  <text class="label body" x="1250" y="435">preview + llm-guard</text>
+  <text class="label muted small" x="1250" y="458">artifacts + call safety</text>
+
+  <!-- Core -->
+  <rect x="186" y="540" width="1228" height="188" rx="8" fill="#171819" stroke="#4da4ff" stroke-width="2"/>
+  <text class="label eyebrow" x="214" y="575" fill="#4da4ff">ORCHESTRATION CORE</text>
+  <text class="label heading" x="214" y="611">One run-isolated engine, shared by every entry point</text>
+
+  <rect class="box" x="214" y="636" width="214" height="64" rx="8" stroke="#4da4ff"/>
+  <text class="label body" x="234" y="663">HTTP + SSE API</text>
+  <text class="label muted small" x="234" y="685">/wf1/api/*</text>
+
+  <rect class="box" x="448" y="636" width="214" height="64" rx="8" stroke="#8b7cf6"/>
+  <text class="label body" x="468" y="663">Workflow Engine</text>
+  <text class="label muted small" x="468" y="685">DAG + retry + resume</text>
+
+  <rect class="box" x="682" y="636" width="214" height="64" rx="8" stroke="#f6b84a"/>
+  <text class="label body" x="702" y="663">Run Scheduler</text>
+  <text class="label muted small" x="702" y="685">concurrency + triggers</text>
+
+  <rect class="box" x="916" y="636" width="214" height="64" rx="8" stroke="#2dd4bf"/>
+  <text class="label body" x="936" y="663">Assistant Tools</text>
+  <text class="label muted small" x="936" y="685">canvas_* + workflow_*</text>
+
+  <rect class="box" x="1150" y="636" width="236" height="64" rx="8" stroke="#ef6461"/>
+  <text class="label body" x="1170" y="663">Notifications</text>
+  <text class="label muted small" x="1170" y="685">channel registry</text>
+
+  <!-- Nodes -->
+  <rect class="panel" x="72" y="770" width="970" height="162" rx="8"/>
+  <text class="label eyebrow muted" x="96" y="803">NODE EXECUTION</text>
+  <text class="label muted small" x="271" y="803">dual registry: engine behavior + canvas presentation</text>
+
+  <g class="label body" text-anchor="middle">
+    <rect class="box" x="96" y="827" width="102" height="66" rx="8" stroke="#4da4ff"/>
+    <text x="147" y="867">Input</text>
+    <rect class="box" x="214" y="827" width="102" height="66" rx="8" stroke="#8b7cf6"/>
+    <text x="265" y="867">Agent</text>
+    <rect class="box" x="332" y="827" width="102" height="66" rx="8" stroke="#f6b84a"/>
+    <text x="383" y="867">Script</text>
+    <rect class="box" x="450" y="827" width="118" height="66" rx="8" stroke="#f6b84a"/>
+    <text x="509" y="867">Condition</text>
+    <rect class="box" x="584" y="827" width="102" height="66" rx="8" stroke="#4da4ff"/>
+    <text x="635" y="867">HTTP</text>
+    <rect class="box" x="702" y="827" width="102" height="66" rx="8" stroke="#2dd4bf"/>
+    <text x="753" y="867">Output</text>
+    <rect class="box" x="820" y="827" width="102" height="66" rx="8" stroke="#ef6461"/>
+    <text x="871" y="867">Notify</text>
+    <rect class="box" x="938" y="827" width="80" height="66" rx="8" stroke="#aaa49e"/>
+    <text x="978" y="867">Note</text>
+  </g>
+
+  <!-- Foundation -->
+  <rect class="panel" x="1070" y="770" width="458" height="162" rx="8"/>
+  <text class="label eyebrow muted" x="1094" y="803">FOUNDATION</text>
+
+  <rect class="box" x="1094" y="827" width="190" height="78" rx="8" stroke="#8b7cf6"/>
+  <text class="label body" x="1114" y="855">Native dsh</text>
+  <text class="label muted small" x="1114" y="878">agents / models / tools</text>
+  <text class="label muted small" x="1114" y="896">skills / credentials</text>
+
+  <rect class="box" x="1304" y="827" width="200" height="78" rx="8" stroke="#2dd4bf"/>
+  <text class="label body" x="1324" y="855">Local Workspace</text>
+  <text class="label muted small" x="1324" y="878">SQLite / state / files</text>
+  <text class="label muted small" x="1324" y="896">isolated by session cwd</text>
+
+  <!-- Main flow arrows -->
+  <path class="line" d="M800 320V348" stroke="#4da4ff" marker-end="url(#arrowBlue)"/>
+  <path class="line" d="M788 498V532" stroke="#4da4ff" marker-end="url(#arrowBlue)"/>
+  <path class="line" d="M800 728V762" stroke="#2dd4bf" marker-end="url(#arrowGreen)"/>
+  <path class="line" d="M1298 728V762" stroke="#2dd4bf" marker-end="url(#arrowGreen)"/>
+
+  <text class="label muted small" x="72" y="972">All workflow data stays in the active dsh workspace; models and credentials remain managed by the dsh profile.</text>
+</svg>

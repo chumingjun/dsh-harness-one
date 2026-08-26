@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/DeepSeek-Harness-4D6BFE?labelColor=0F0F1A" alt="DeepSeek Harness plugin"></a>
+  <a href="https://zcode.z.ai/cn"><img src="https://img.shields.io/badge/Built%20with-ZCode-14B8A6?labelColor=0F0F1A" alt="Built with ZCode"></a>
   <a href="https://www.npmjs.com/package/dsh-ccpg-one"><img src="https://img.shields.io/npm/v/dsh-ccpg-one" alt="npm version"></a>
   <a href="https://github.com/chumingjun/harness-one/actions/workflows/ci.yml"><img src="https://github.com/chumingjun/harness-one/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="https://github.com/chumingjun/harness-one/releases/latest"><img src="https://img.shields.io/github/v/release/chumingjun/harness-one" alt="latest release"></a>
@@ -107,6 +108,14 @@ Cards show progress, duration, node counts, output summaries, and failure or can
 The default bundle contains `dsh-ccpg-tools`, `dsh-ccpg-orchestrator`, `dsh-ccpg-web`, `dsh-ccpg-canvasui`, `dsh-ccpg-document-preview`, `dsh-ccpg-larkauth`, and `dsh-ccpg-llm-guard`. `dsh-ccpg-brand` is an optional standalone package.
 
 See [dsh-plugins/README.md](dsh-plugins/README.md) for installation, packaging, architecture, and storage details.
+
+## Architecture
+
+![Workflow One system architecture](images/architecture.svg)
+
+## Acknowledgements
+
+More than 90% of this project was developed using [ZCode](https://zcode.z.ai/cn). We thank ZCode for providing the development platform and support.
 
 ## Contributing and Security
 
