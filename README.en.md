@@ -20,7 +20,7 @@
 
 ## Turn real agents into observable workflows
 
-`Workflow One` is a visual AI workflow orchestrator for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness). Build DAGs from real dsh agents, scripts, conditions, and HTTP nodes; start them from the canvas or chat; inspect every node's input, output, and artifacts; and resume interrupted runs without starting over.
+`Workflow One` is a visual AI workflow orchestrator for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness). Describe what you need in natural language and the AI will plan and create a DAG of real dsh agents, scripts, conditions, and HTTP nodes. Fine-tune it on the canvas when needed, then start the flow, inspect every node's input, output, and artifacts, and resume interrupted runs without starting over.
 
 ## Why Workflow One?
 

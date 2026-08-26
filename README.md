@@ -20,7 +20,7 @@
 
 ## 一句话，把真实 Agent 变成可观察的工作流
 
-`Workflow One` 是运行在 [DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) 中的可视化 AI 工作流编排器。用拖拽 DAG 组合真实 dsh agent、脚本、条件分支和 HTTP 节点，在画布或对话中启动流程，实时查看每个节点的输入、输出和产物，失败后从中断处恢复。
+`Workflow One` 是运行在 [DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) 中的可视化 AI 工作流编排器。只需用自然语言描述需求，AI 会自动规划并创建由真实 dsh agent、脚本、条件分支和 HTTP 节点组成的 DAG；也可在画布中微调后启动流程，实时查看每个节点的输入、输出和产物，失败后从中断处恢复。
 
 ## 为什么需要 Workflow One？
 

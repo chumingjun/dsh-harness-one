@@ -6,7 +6,7 @@
 
 ### 用 dsh 搭一个可恢复的多智能体可视化工作流
 
-Workflow One 是运行在 DeepSeek Harness（dsh）里的可视化工作流编排器。它把输入、智能体、QuickJS 脚本、条件分支、HTTP 请求和输出节点连成 DAG，并在同一界面展示实时执行状态、节点输入输出、产物和错误。
+Workflow One 是运行在 DeepSeek Harness（dsh）里的可视化工作流编排器。只需用自然语言描述需求，AI 就会自动规划并创建由输入、智能体、QuickJS 脚本、条件分支、HTTP 请求和输出节点组成的 DAG；随后可在画布中确认和微调，并在同一界面查看实时执行状态、节点输入输出、产物和错误。
 
 这次发布重点解决三个实际问题：
 
@@ -29,7 +29,7 @@ dsh web
 
 ### Workflow One: visual, recoverable multi-agent DAGs for DeepSeek Harness
 
-Workflow One is a visual workflow orchestrator that runs inside DeepSeek Harness (dsh). Connect input, agent, QuickJS script, condition, HTTP, output, and note nodes into a DAG; then inspect live status, real node inputs and outputs, artifacts, and failures from the same interface.
+Workflow One is a visual workflow orchestrator that runs inside DeepSeek Harness (dsh). Describe your needs in natural language and the AI will plan and create a DAG of input, agent, QuickJS script, condition, HTTP, output, and note nodes. Confirm and fine-tune it on the canvas, then inspect live status, real node inputs and outputs, artifacts, and failures from the same interface.
 
 It supports parallel scheduling, retries, cancellation, replay, restart recovery, webhook and cron triggers, and optional Feishu writeback. Workflows and run history are stored in a workspace-local SQLite database.
 
