@@ -3,11 +3,11 @@
 PROFILE="${1:-}"
 export DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
 
-# 定位能跑 Workflow One 的 node（>=22.13.0，内置 node:sqlite）与 dsh bin
+# 定位能跑 Workflow One 的 node（>=22.15.0，内置 node:sqlite）与 dsh bin
 NODE_BIN="${DSH_NODE:-}"
-[ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "const [a,b]=process.versions.node.split('.').map(Number); console.log(a>22||(a===22&&b>=13)?process.execPath:'')" 2>/dev/null || true)
-if [ -z "$NODE_BIN" ] || ! "$NODE_BIN" -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>22||(a===22&&b>=13)?0:1)" 2>/dev/null; then
-  echo "✗ 需要 node>=22.13.0（或设 DSH_NODE 指向）"
+[ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "const [a,b]=process.versions.node.split('.').map(Number); console.log(a>22||(a===22&&b>=15)?process.execPath:'')" 2>/dev/null || true)
+if [ -z "$NODE_BIN" ] || ! "$NODE_BIN" -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>22||(a===22&&b>=15)?0:1)" 2>/dev/null; then
+  echo "✗ 需要 node>=22.15.0（或设 DSH_NODE 指向）"
   exit 1
 fi
 

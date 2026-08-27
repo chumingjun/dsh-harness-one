@@ -12,7 +12,7 @@
     "directory": "dsh-plugins/dsh-ccpg-orchestrator"
   },
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.15.0"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-llm": "*",
