@@ -912,8 +912,285 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // ================= 设置面板「Workflow One」section：版本中心 + 一键升级 =================
+    // 后端 /wf1/api/system/*（orchestrator）。数据安全边界（#60）：升级只动安装目录与
+    // profile 依赖，工作区 .workflow-one/（SQLite/state）、定时 triggers、飞书凭据均不在触达面。
+    var SYSTEM_INFO_API = "/wf1/api/system/info";
+    var SYSTEM_CHECK_API = "/wf1/api/system/check-update";
+    var SYSTEM_UPGRADE_API = "/wf1/api/system/upgrade";
+
+    function systemGet(api) {
+      return fetch(api, { headers: { accept: "application/json" } }).then(function (r) {
+        return r.json();
+      });
+    }
+    function systemPost(api, body) {
+      return fetch(api, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      }).then(function (r) {
+        return r.json();
+      });
+    }
+
+    function sourceMeta(pkg) {
+      if (!pkg) return { label: "未安装", bg: "rgba(148,163,184,.18)" };
+      if (pkg.kind === "registry") return { label: "npm", bg: "rgba(56,189,248,.16)" };
+      if (pkg.kind === "link")
+        return pkg.gitRoot
+          ? { label: "源码", bg: "rgba(52,211,153,.16)" }
+          : { label: "离线包", bg: "rgba(251,191,36,.16)" };
+      return { label: "未知", bg: "rgba(148,163,184,.18)" };
+    }
+
+    var s2 = react.useState;
+
+    function VersionRow(name, version, meta) {
+      return react.createElement(
+        "div",
+        { key: name, style: { display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", lineHeight: "22px" } },
+        react.createElement("code", { style: { color: "var(--dsw-alias-label-primary)" } }, name),
+        react.createElement("span", { style: { color: "var(--dsw-alias-text-secondary)" } }, version || "—"),
+        react.createElement(
+          "span",
+          {
+            style: {
+              fontSize: "11px", padding: "0 6px", borderRadius: "6px",
+              background: meta.bg, color: "var(--dsw-alias-label-primary)",
+            },
+          },
+          meta.label,
+        ),
+      );
+    }
+
+    function ProfileBlock(profile) {
+      var agg = profile.packages.find(function (p) { return p.name === "dsh-ccpg-one"; }) || null;
+      return react.createElement(
+        "div",
+        {
+          key: profile.name,
+          style: {
+            border: "1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,.25))",
+            borderRadius: "10px", padding: "10px 12px", display: "flex",
+            flexDirection: "column", gap: "4px",
+          },
+        },
+        react.createElement(
+          "div",
+          { style: { fontSize: "13px", fontWeight: 600 } },
+          "profile: ",
+          profile.name,
+          agg ? react.createElement(
+            "span",
+            { style: { marginLeft: "8px", fontWeight: 400, color: "var(--dsw-alias-text-secondary)", fontSize: "12px" } },
+            AGG_SPEC_TEXT(agg),
+          ) : null,
+        ),
+        profile.packages.map(function (p) {
+          return VersionRow(p.name, p.version || p.spec, sourceMeta(p));
+        }),
+      );
+    }
+
+    function AGG_SPEC_TEXT(entry) {
+      if (entry.kind === "registry") return "聚合安装（npm " + (entry.spec || "") + "）";
+      if (entry.gitRoot) return "聚合安装（源码 link）";
+      return "聚合安装（离线包）";
+    }
+
+    function WorkflowOneSection() {
+      var a = s2(null), info = a[0], setInfo = a[1];
+      var b = s2(null), check = b[0], setCheck = b[1];
+      var c = s2(false), loading = c[0], setLoading = c[1];
+      var d = s2(null), upgradeLog = d[0], setUpgradeLog = d[1];
+      var e = s2(false), confirming = e[0], setConfirming = e[1];
+
+      var load = react.useCallback(function () {
+        setLoading(true);
+        systemGet(SYSTEM_INFO_API)
+          .then(function (d2) { if (d2 && d2.ok) setInfo(d2); })
+          .catch(function () {})
+          .finally(function () { setLoading(false); });
+      }, []);
+      react.useEffect(function () { load(); }, [load]);
+
+      var doCheck = function () {
+        setCheck({ pending: true });
+        systemPost(SYSTEM_CHECK_API).then(setCheck).catch(function () {
+          setCheck({ ok: false, error: "网络失败" });
+        });
+      };
+
+      var doUpgrade = function () {
+        if (!confirming) {
+          setConfirming(true);
+          // 5 秒不点确认自动回落，防手滑长亮
+          setTimeout(function () { setConfirming(false); }, 5000);
+          return;
+        }
+        setConfirming(false);
+        setUpgradeLog(["⏳ 升级进行中…"]);
+        systemPost(SYSTEM_UPGRADE_API, { confirm: true })
+          .then(function (r) {
+            setUpgradeLog(r.ok ? r.log : ["✗ " + (r.error || "升级失败")]);
+          })
+          .catch(function () {
+            setUpgradeLog(["✗ 升级请求失败（服务不可达？）"]);
+          });
+      };
+
+      var secStyle = { display: "flex", flexDirection: "column", gap: "14px", maxWidth: "620px" };
+      var btnBase = {
+        cursor: "pointer", borderRadius: "8px", padding: "5px 12px", fontSize: "13px",
+        border: "1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,.3))",
+        background: "transparent", color: "var(--dsw-alias-label-primary)",
+      };
+      var primaryBtn = Object.assign({}, btnBase, {
+        background: "var(--dsw-alias-accent-bg, #4F46E5)", color: "#fff",
+        borderColor: "transparent", opacity: confirming ? 0.85 : 1,
+      });
+
+      var profiles = (info && info.profiles) || [];
+      return react.createElement(
+        "div",
+        { style: secStyle },
+        // —— 当前部署版本 + 检查更新 ——
+        react.createElement(
+          "div",
+          { style: { display: "flex", alignItems: "center", gap: "10px" } },
+          react.createElement(
+            "div",
+            null,
+            react.createElement("div", { style: { fontSize: "14px", fontWeight: 600 } }, "Workflow One 版本中心"),
+            react.createElement(
+              "div",
+              { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } },
+              "当前部署：" + ((info && info.selfVersion) || "…"),
+              check && check.latest
+                ? " · npm 最新 v" + check.latest +
+                  (check.updateAvailable ? "（可升级）" : "（已是最新）")
+                : "",
+            ),
+          ),
+          react.createElement("button", { style: btnBase, onClick: doCheck, disabled: !!check?.pending }, check?.pending ? "检查中…" : "检查更新"),
+        ),
+
+        // —— profiles 安装清单 ——
+        profiles.length === 0
+          ? react.createElement(
+              "div",
+              { style: { fontSize: "13px", color: "var(--dsw-alias-text-secondary)" } },
+              loading ? "正在探测安装…" : "未在本机 dsh profiles 中发现已安装的 Workflow One。",
+            )
+          : profiles.map(ProfileBlock),
+
+        // —— 一键升级 ——
+        profiles.length
+          ? react.createElement(
+              "div",
+              { style: { display: "flex", flexDirection: "column", gap: "6px" } },
+              react.createElement(
+                "div",
+                { style: { display: "flex", alignItems: "center", gap: "10px" } },
+                react.createElement(
+                  "button",
+                  { style: primaryBtn, onClick: doUpgrade },
+                  confirming ? "再点一次确认执行" : upgradeLog ? "重新升级" : "一键升级",
+                ),
+                react.createElement(
+                  "span",
+                  { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } },
+                  "源码装＝git pull＋重建；npm 装＝移除旧聚合包重装最新；离线包装＝提示原地覆盖。完成后需彻底重启 dsh。",
+                ),
+              ),
+              upgradeLog
+                ? react.createElement(
+                    "pre",
+                    {
+                      style: {
+                        margin: 0, padding: "10px 12px", borderRadius: "8px", fontSize: "12px",
+                        lineHeight: "18px", maxHeight: "220px", overflow: "auto",
+                        background: "var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.12))",
+                        whiteSpace: "pre-wrap",
+                      },
+                    },
+                    upgradeLog.join("\n"),
+                  )
+                : null,
+            )
+          : null,
+
+        // —— 数据安全脚注 ——
+        react.createElement(
+          "div",
+          { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)", borderTop: "1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,.2))", paddingTop: "8px" } },
+          "工作流与运行记录（工作区 .workflow-one/）、定时触发配置、飞书凭据均在升级触达面之外，升级与重装不需要迁移数据。",
+        ),
+      );
+    }
+
+    // ---- 设置导航图标注入 ----
+    // 官方 ui-settings-general 的 navIcon 是编译期写死的 id→图标映射，第三方 section
+    // 统一回退齿轮且无扩展口（SlotMap 只有 id/order/label）。这里用最小 DOM 补丁：
+    // 监听文档变化，定位文本精确等于本插件 section 名的导航按钮，前置一枚与官方
+    // *_Outline16 同规格（16px / 描边 currentColor）的自绘 SVG。找不到目标行静默不动。
+    var NAV_ICON_MARK = "data-ccpg-nav-icon";
+    function startSettingsNavIcon(labelText, svgMarkup) {
+      // 非 DOM 宿主（单测加载 bundle）直接跳过
+      if (typeof document === "undefined" || typeof MutationObserver === "undefined") return;
+      var scheduled = false;
+      var scan = function () {
+        scheduled = false;
+        if (!document.body) return;
+        var buttons = document.getElementsByTagName("button");
+        for (var i = 0; i < buttons.length; i++) {
+          var btn = buttons[i];
+          if (btn.getAttribute(NAV_ICON_MARK)) continue;
+          if ((btn.textContent || "").trim() !== labelText) continue;
+          btn.setAttribute(NAV_ICON_MARK, "seen");
+          if (btn.querySelector("[" + NAV_ICON_MARK + "='icon']")) continue;
+          var holder = document.createElement("span");
+          holder.setAttribute(NAV_ICON_MARK, "icon");
+          holder.style.cssText = "flex:none;display:inline-flex;width:16px;height:16px;";
+          holder.innerHTML = svgMarkup;
+          btn.insertBefore(holder, btn.firstChild);
+        }
+      };
+      var schedule = function () {
+        if (scheduled) return;
+        scheduled = true;
+        requestAnimationFrame(scan);
+      };
+      if (document.body) schedule();
+      new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+    }
+
+    // 「Workflow One」导航图标：三节点流水线（与侧栏「工作流」tab 图标同族）
+    var WF_NAV_ICON_SVG =
+      '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
+      '<circle cx="3.25" cy="4" r="1.35"/><circle cx="12.75" cy="3.25" r="1.35"/><circle cx="12.75" cy="12.75" r="1.35"/>' +
+      '<path d="M4.6 4h2.15A2.25 2.25 0 0 1 9 6.25v4.25A2.25 2.25 0 0 0 11.25 12.75h.15M9 7V5.5a2.25 2.25 0 0 1 2.25-2.25h.15"/>' +
+      "</svg>";
+
     function apply(ctx) {
       ensureStyle();
+
+      ctx.slots.inject("settings.section", function () {
+        return ctx.slots.register(
+          {
+            name: "settings.section",
+            id: "workflow-one",
+            order: 30,
+            label: function () {
+              return "Workflow One";
+            },
+          },
+          WorkflowOneSection,
+        );
+      });
+      startSettingsNavIcon("Workflow One", WF_NAV_ICON_SVG);
 
       ctx.slots.inject("conversation.input.left", function () {
         return ctx.slots.register(
