@@ -41,8 +41,8 @@ echo "✓ node: $("$NODE_BIN" -v)"
 PATH=$(dirname "$NODE_BIN"):$PATH
 export PATH
 # release 与 npm 聚合包使用同一精确 sidebar 版本，避免两个渠道漂移。
-SIDEBAR_VER=$("$NODE_BIN" -e "console.log(require(process.argv[1]).dependencies['dsh-better-sidebar'] || '')" "$HERE/$AGG/package.json")
-[ -n "$SIDEBAR_VER" ] || { echo "✗ $AGG 未声明 dsh-better-sidebar 精确依赖"; exit 1; }
+SIDEBAR_VER=$("$NODE_BIN" -e "console.log(require(process.argv[1]).dependencies['dsh-better-sidebar'] || '')" "$HERE/dsh-ccpg-one/package.json")
+[ -n "$SIDEBAR_VER" ] || { echo "✗ dsh-ccpg-one 未声明 dsh-better-sidebar 精确依赖"; exit 1; }
 
 # ---- 0.1 插件清单 ----
 for p in $PLUGINS $OPTIONAL_PLUGINS; do
@@ -55,6 +55,10 @@ echo "✓ 七个默认插件 + 独立可选 brand 清单已校验"
 # ---- 1. 构建画布（生成 dsh-ccpg-web/web-dist）----
 sh "$HERE/build-web.sh"
 echo "✓ 画布已构建"
+
+# ---- 1.2 单包装配（干净 checkout 无产物目录，此处现装）----
+sh "$HERE/assemble-one.sh"
+echo "✓ 单包已装配（7 插件合一）"
 
 # ---- 2. orchestrator 真依赖（ajv/cron-parser/QuickJS WASM）----
 cd "$HERE/dsh-ccpg-orchestrator"
