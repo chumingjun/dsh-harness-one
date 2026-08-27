@@ -98,6 +98,7 @@ client.apply({
   },
 });
 assert.deepEqual(injectedSlots, [
+  "settings.section",
   "conversation.input.left",
   "tool.call.toolview",
   "tool.call.toolview",

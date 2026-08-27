@@ -68,7 +68,23 @@ sh start.sh wf1
 
 适合定时巡检群播报、长流程进度同步、异常值班告警，以及向流程负责人私聊发送结果。飞书扫码登录由 `dsh-ccpg-larkauth` / lark-cli 管理用户身份；消息通知节点使用的是画布中保存的自建应用凭据，两者不要混用。
 
-release 包特性：**拿到即装**（画布/依赖/聚合壳全带）；better-sidebar 的钉版本 tgz 在 `vendor/`（断网/上游下架也能装）；装完的 `dsh-plugins/` 目录保留着，升级 = 下载新包重复上述步骤。
+release 包特性：**拿到即装**（画布/依赖/聚合壳全带）；better-sidebar 的钉版本 tgz 在 `vendor/`（断网/上游下架也能装）；装完的 `dsh-plugins/` 目录保留着，后续升级见下方[「升级」](#升级)。
+
+## 升级
+
+入口在 **dsh 官方设置面板 → Workflow One → 一键升级**（版本中心），按安装来源自动分流：
+
+| 安装来源 | 升级动作 |
+|---|---|
+| 源码 link（目录上方有 `.git`） | 拒绝脏工作树 → `git pull --ff-only` → 画布/canvasui 双构建重建 → orchestrator 依赖兜底 |
+| 离线包解包（link、无 `.git`） | 提示下载新版 tarball 原地解包覆盖该目录，完成后回到面板再点一次收尾重链 |
+| npm 安装（纯版本号依赖） | 复用已装聚合包自带安装器 remove→add 最新版；pnpm 放行预写内含，无需源码在场 |
+
+npm 渠道等价命令行（无需源码）：重跑一次 `npx dsh-ccpg-one <profile>` 即为升级。
+
+**数据安全边界**：工作流与运行记录（工作区 `.workflow-one/` SQLite）、定时触发配置（state/triggers.json）、飞书凭据（dsh 用户级/lark-cli）全部在升级触达面之外——升级与重装都不需要迁移数据。
+
+> 升级执行带单飞锁与二次确认；改完必须**彻底重启 dsh** 才生效（HMR 缓存模块）。检查更新会访问 npm registry，离线时仅该按钮不可用。
 
 ### B. 开发者 · 源码（本仓库）
 

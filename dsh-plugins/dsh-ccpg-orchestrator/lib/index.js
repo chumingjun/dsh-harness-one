@@ -50,6 +50,7 @@ import {
 } from './agent-schema.js';
 import { FeishuClient } from './feishu.js';
 import { createFeishuNotificationChannel } from './notification-feishu.js';
+import { collectInstallReport, compareSemver, executePlan, planUpgrade } from './system-upgrade.js';
 import { NotificationChannelRegistry, WorkflowNotificationManager } from './notifications.js';
 import { listFeishuCreds, addFeishuCred, removeFeishuCred, setDefaultFeishuCred, getFeishuCredOrEnv } from './credentials.js';
 import { Orchestrator, lintGraph, getKind } from './engine.js';
@@ -2176,6 +2177,59 @@ export function apply(ctx, config) {
     });
   } }, { scoped: false });
 
+  // ---- 版本中心 / 一键升级（settings「Workflow One」section 后端；无会话作用域）----
+  // 探测/planner/执行都在 lib/system-upgrade.js；这里只做 HTTP 形状与并发闸。
+  let upgradeRunning = false;
+  register({ kind: 'exact', path: '/wf1/api/system/info', handler(_req, res) {
+    json(res, 200, { ok: true, selfVersion: selfPluginVersion(), profiles: collectInstallReport() });
+  } }, { scoped: false });
+
+  register({ kind: 'exact', path: '/wf1/api/system/check-update', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    const current = selfPluginVersion();
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      const r = await fetch('https://registry.npmjs.org/dsh-ccpg-one', {
+        headers: { accept: 'application/vnd.npm.install-v1+json', 'user-agent': 'dsh-ccpg-one-upgrade-check' },
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      if (!r.ok) throw new Error(`registry ${r.status}`);
+      const doc = await r.json();
+      const latest = doc['dist-tags']?.latest || null;
+      return json(res, 200, {
+        ok: true, current, latest,
+        updateAvailable: !!(latest && compareSemver(latest, current) > 0),
+      });
+    } catch (error) {
+      return json(res, 200, { ok: false, current, latest: null, updateAvailable: false, error: String(error.message || error) });
+    }
+  } }, { scoped: false });
+
+  register({ kind: 'exact', path: '/wf1/api/system/upgrade', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    const body = await readBody(req).catch(() => ({}));
+    if (!body?.confirm) return json(res, 400, { error: '升级会更新安装与 profile 依赖，请携带 { confirm: true } 显式确认' });
+    if (upgradeRunning) return json(res, 409, { error: '已有一次升级正在进行，请稍候' });
+    upgradeRunning = true;
+    const startedAt = Date.now();
+    try {
+      const plan = planUpgrade(collectInstallReport());
+      const log = await executePlan(plan);
+      return json(res, 200, {
+        ok: true, actions: plan.actions.map((a) => a.title),
+        warnings: plan.warnings, restartRequired: plan.restartRequired,
+        log, durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      ctx.logger?.error?.(`Workflow One 升级失败：${error.stack || error.message || error}`);
+      return json(res, 500, { error: '升级执行失败（详见 dsh 日志）' });
+    } finally {
+      upgradeRunning = false;
+    }
+  } }, { scoped: false });
+
   // ---- 定时触发 ----
   // POST /wf1/api/schedule { workflowId, cron, input?, runInputs?, overlap? }
   // 调度核心在 lib/schedule.js（computeNextDelay + 链式 setTimeout + overlap 策略）
@@ -2832,4 +2886,15 @@ function defaultGraph() {
       { id: 'e3', source: 'n_agent1', target: 'n_output' },
     ],
   };
+}
+
+// ---------------- 版本中心辅助 ----------------
+
+// 部署版本 = 本插件包版本（link/npm 两渠道都随安装走）
+function selfPluginVersion() {
+  try {
+    return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || null;
+  } catch {
+    return null;
+  }
 }

@@ -135,20 +135,31 @@ window.__ModuleLoader__.load({
 			var loggedIn = u.tokenStatus === "valid";
 			var needsRefresh = u.userName && u.tokenStatus !== "valid";
 			var renew = status.autoRenew || {};
-			var renewText = renew.lastAt
-				? " · 自动续约 " + String(renew.lastAt).slice(11, 19) +
-					(renew.lastResult === "renewed" ? " ✓" : renew.lastResult === "fresh" ? "（有效）" : renew.lastResult ? "（" + renew.lastResult + "）" : "")
+			// 用户视角三件事：我是谁 / 授权是否正常 / 凭证何时续期。
+			// 应用 ID、bot 状态这类运维字段不再铺在面上（排障走接口）。
+			var renewSuffix = renew.lastResult === "renewed"
+				? " ✓"
+				: renew.lastResult === "fresh" ? "" : renew.lastResult ? "（" + renew.lastResult + "）" : "";
+			var renewalLine = loggedIn && u.expiresAt
+				? "凭证自动续期：当前至 " + fmtWhen(u.expiresAt) +
+					(renew.lastAt ? "，上次续期 " + fmtWhen(renew.lastAt) + renewSuffix : "")
 				: "";
+			// 技术明细挂 title 悬浮提示，界面上不再占一行
+			var techLine = "App " + (status.appId || "-") + " · 默认身份 " + (status.defaultIdentity || "-") +
+				" · bot " + ((status.bot && status.bot.status) || "-");
 
 			return react.createElement("div", { style: S.wrap },
-				react.createElement("div", { style: S.stateRow },
+				react.createElement("div", {
+					style: S.stateRow,
+					title: loggedIn || status.appId ? techLine : undefined,
+				},
 					react.createElement("span", { className: dotClass(status) }),
 					react.createElement("strong", null, u.userName || "未登录飞书账号"),
 					u.userName ? react.createElement("span", { style: S.muted },
-						u.tokenStatus === "valid" ? "（已授权，agent 默认以用户身份执行，token 自动续约）" : "（token 需刷新，重新扫码即可）") : null),
-				react.createElement("div", { style: S.meta },
-					"App " + (status.appId || "-") + " · 默认身份 " + (status.defaultIdentity || "-") + " · bot " + ((status.bot && status.bot.status) || "-") +
-					(u.expiresAt ? " · user token 至 " + String(u.expiresAt).slice(11, 16) : "") + renewText),
+						loggedIn ? "已登录 · agent 会以你的身份执行飞书操作" : "登录已过期，重新扫码即可") : null),
+				renewalLine
+					? react.createElement("div", { style: S.meta }, renewalLine)
+					: null,
 				react.createElement("div", { style: S.actions },
 					loggedIn
 						? react.createElement("button", { style: S.btn, onClick: logout, disabled: busy }, "退出登录")
@@ -254,8 +265,68 @@ window.__ModuleLoader__.load({
 				wide ? react.createElement("span", null, label) : null);
 		}
 
+		// ISO → 「今天 HH:MM」/「M月D日 HH:MM」/「YYYY年M月D日 HH:MM」（跨天才有意义，
+		// 之前 slice(11,16) 只剩时分，隔天续约/token 到期看不出是哪天）
+		function fmtWhen(iso) {
+			if (!iso) return "";
+			var d = new Date(iso);
+			if (isNaN(d.getTime())) return String(iso);
+			var hm = ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+			var now = new Date();
+			if (d.getFullYear() !== now.getFullYear()) return d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() + "日 " + hm;
+			if (d.toDateString() === now.toDateString()) return "今天 " + hm;
+			return d.getMonth() + 1 + "月" + d.getDate() + "日 " + hm;
+		}
+		// ---- 设置导航图标注入 ----
+		// 官方 ui-settings-general 的 navIcon 是编译期写死的 id→图标映射，第三方 section
+		// 统一回退齿轮且无扩展口（SlotMap 只有 id/order/label）。DOM 最小补丁：定位文本
+		// 精确等于「飞书账号」的导航按钮，前置一枚 16px 描边 currentColor 的自绘 SVG。
+		var NAV_ICON_MARK = "data-larka-nav-icon";
+		function startSettingsNavIcon(labelText, svgMarkup) {
+			// 非 DOM 宿主（单测加载 bundle）直接跳过
+			if (typeof document === "undefined" || typeof MutationObserver === "undefined") return;
+			// 官方行内的回退齿轮不删除（React 自己的节点）——纯 CSS 隐藏，避免 reconcile 冲突
+			if (!document.getElementById("larka-nav-icon-style")) {
+				var styleEl = document.createElement("style");
+				styleEl.id = "larka-nav-icon-style";
+				styleEl.textContent =
+					'button[' + NAV_ICON_MARK + '="seen"] > svg:first-of-type { display:none !important; }';
+				document.head.appendChild(styleEl);
+			}
+			var scheduled = false;
+			var scan = function () {
+				scheduled = false;
+				if (!document.body) return;
+				var buttons = document.getElementsByTagName("button");
+				for (var i = 0; i < buttons.length; i++) {
+					var btn = buttons[i];
+					if (btn.getAttribute(NAV_ICON_MARK)) continue;
+					if ((btn.textContent || "").trim() !== labelText) continue;
+					btn.setAttribute(NAV_ICON_MARK, "seen");
+					if (btn.querySelector("[" + NAV_ICON_MARK + "='icon']")) continue;
+					var holder = document.createElement("span");
+					holder.setAttribute(NAV_ICON_MARK, "icon");
+					holder.style.cssText = "flex:none;display:inline-flex;width:16px;height:16px;";
+					holder.innerHTML = svgMarkup;
+					btn.insertBefore(holder, btn.firstChild);
+				}
+			};
+			var schedule = function () {
+				if (scheduled) return;
+				scheduled = true;
+				requestAnimationFrame(scan);
+			};
+			if (document.body) schedule();
+			new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+		}
+		// 飞书账号导航图标：官方 Lark 鸟形 brand mark 单色剪影
+		// （path 数据取自 dashboard-icons 的 lark.svg，坐标精简到 0.1 位）
+		var LARK_NAV_ICON_SVG =
+			"<svg viewBox=\"62.16 94.5 407.87 324.19\" width=\"16\" height=\"16\" aria-hidden=\"true\" fill=\"currentColor\"><path d=\"M274.2 264.8q.515-.517 1.0-1.0c.685-.688 1.4-1.3 2.1-1.9l1.4-1.4 4.1-4.1 5.6-5.6 4.8-4.8 4.6-4.5 4.8-4.7 4.3-4.3 6.1-6.1c1.1-1.1 2.3-2.3 3.5-3.3 2.2-2.1 4.5-4 6.9-5.8 2.2-1.7 4.3-3.3 6.5-4.9 3.1-2.2 6.4-4.3 9.7-6.3 3.2-1.9 6.6-3.7 10.1-5.4 3.2-1.6 6.5-3.0 9.8-4.2 1.8-.684 3.8-1.4 5.6-2.1.914-.344 1.9-.688 2.9-.914-8.6-33.7-24.2-64.6-45.3-90.9-4.1-5.1-10.4-8.1-17.0-8.1H130.8c-3.2 0-4.5 4-1.9 5.9 59.5 43.7 109.1 99.9 145.0 164.8 0-.226.2-.34.3-.457m0 0\"/><path d=\"M204.8 418.7c90.3 0 169.0-49.8 210.1-123.5 1.5-2.6 2.9-5.3 4.2-7.9q-3.1 6-6.9 11.3l-2.7 3.8c-1.1 1.5-2.4 3.0-3.7 4.5-1.0 1.1-2.1 2.3-3.1 3.3-2.1 2.2-4.3 4.2-6.6 6.2a53 53 0 0 1-3.9 3.2c-1.6 1.1-3.1 2.3-4.7 3.4-1.0.683-2.1 1.4-3.1 1.9-1.1.684-2.2 1.3-3.3 1.9a131 131 0 0 1-7.0 3.5c-2.1.918-4.1 1.8-6.3 2.5-2.3.801-4.6 1.6-7.0 2.3-3.5.914-7.1 1.7-10.7 2.3-2.6.457-5.3.687-8 .914-2.9.23-5.6.23-8.5.23-3.1 0-6.3-.23-9.5-.57a83 83 0 0 1-7.1-1.0c-2.1-.34-4.1-.801-6.2-1.3-1.0-.227-2.2-.57-3.2-.797-3.0-.8-6.1-1.6-9.0-2.5-1.5-.457-3.0-.914-4.5-1.3-2.2-.683-4.5-1.4-6.6-2.1-1.8-.57-3.7-1.1-5.4-1.7q-2.6-.86-5.1-1.7c-1.1-.344-2.3-.8-3.5-1.1-1.4-.457-2.9-1.0-4.2-1.5-1.0-.344-2.1-.687-3.0-1.0-1.9-.688-4-1.5-5.9-2.2-1.1-.457-2.3-.914-3.4-1.3-1.5-.57-3.1-1.1-4.6-1.8-1.6-.687-3.2-1.3-4.8-1.9-1.0-.457-2.1-.797-3.1-1.3-1.3-.57-2.6-1.0-3.9-1.6-1.0-.457-1.9-.8-3.0-1.3l-3.1-1.4c-.914-.344-1.8-.801-2.7-1.1a44 44 0 0 1-2.5-1.1c-.8-.345-1.7-.802-2.5-1.1-.914-.344-1.7-.801-2.5-1.1-1.0-.457-2.2-1.0-3.2-1.5-1.1-.575-2.3-1.0-3.4-1.6-1.3-.574-2.4-1.1-3.7-1.7-1.0-.457-2.1-1.0-3.1-1.5-54.2-27.0-102.2-63.1-143.1-106.7-2.1-2.2-5.7-.684-5.7 2.3l.112 154.4v12.6c0 7.3 3.5 14.1 9.6 18.2 38.2 24.8 83.8 39.5 132.9 39.5m0 0\"/><path d=\"M414.8 295.2c0 .113-.113.1-.113.2zl.8-1.5c-.343.5-.574 1.0-.8 1.5m3.8-7.0.226-.457.1-.23q-.17.5-.34.7m0 0\"/><path d=\"M470.0 201.1c-18.3-9.0-38.9-14.1-60.7-14.1-12.9 0-25.5 1.8-37.4 5.1-1.4.344-2.7.8-4.1 1.3-.914.3-1.9.574-2.9.914-1.9.688-3.8 1.4-5.6 2.1-3.3 1.3-6.6 2.7-9.8 4.2-3.4 1.6-6.7 3.4-10.1 5.4a128 128 0 0 0-9.7 6.3c-2.3 1.6-4.5 3.2-6.5 4.9a154 154 0 0 0-6.9 5.8c-1.1 1.1-2.4 2.2-3.5 3.3l-6.1 6.1-4.3 4.3-4.8 4.7-4.6 4.5-4.8 4.8-11.1 11.1c-.687.7-1.4 1.4-2.1 1.9l-1.0 1.0c-.457.5-1.0 1.0-1.6 1.5-.57.6-1.1 1.0-1.7 1.6a244.4 244.4 0 0 1-49.8 35.3c1.0.457 2.2 1.0 3.2 1.5.8.3 1.7.797 2.5 1.1.8.3 1.7.801 2.5 1.1.801.3 1.6.684 2.5 1.1.914.3 1.8.802 2.7 1.1l3.1 1.4c1.0.457 1.9.801 3.0 1.3 1.3.57 2.6 1.0 3.9 1.6 1.0.46 2.1.8 3.1 1.3 1.6.687 3.2 1.3 4.8 1.9 1.5.57 3.1 1.1 4.6 1.8 1.1.457 2.3.914 3.4 1.3 1.9.684 4 1.5 5.9 2.2a81 81 0 0 1 3.0 1.0c1.4.457 2.9 1.0 4.2 1.5 1.1.343 2.3.8 3.5 1.1q2.6.86 5.1 1.7c1.8.57 3.7 1.1 5.4 1.7 2.2.688 4.5 1.4 6.6 2.1 1.5.457 3.0.914 4.5 1.3 3.0.914 5.9 1.7 9.0 2.5 1.0.344 2.2.574 3.2.8 2.1.458 4.1.915 6.2 1.3 2.4.457 4.7.8 7.1 1.0 3.2.34 6.4.571 9.5.571 2.9 0 5.7 0 8.5-.23 2.6-.227 5.4-.457 8-.914 3.7-.57 7.2-1.4 10.7-2.3 2.4-.683 4.7-1.4 7.0-2.3 2.2-.8 4.2-1.6 6.3-2.5 2.4-1.0 4.7-2.3 7.0-3.5 1.1-.57 2.2-1.3 3.3-1.9 1.0-.687 2.1-1.3 3.1-1.9 1.6-1.0 3.2-2.2 4.7-3.4a52 52 0 0 0 3.9-3.2c2.3-1.9 4.5-4 6.6-6.2 1.0-1.0 2.1-2.2 3.1-3.3 1.3-1.5 2.5-3.0 3.7-4.5.918-1.3 1.8-2.5 2.7-3.8 2.5-3.5 4.8-7.3 6.9-11.2l2.3-4.7 21.1-42.2v.113c6.7-14.7 16.2-28.1 27.7-39.4m0 0\"/></svg>";
+
 		function apply(ctx) {
 			ensureDotStyle();
+			startSettingsNavIcon("飞书账号", LARK_NAV_ICON_SVG);
 			// 1) 设置面板「飞书账号」section（无 locale 字典时 label 用字符串）
 			ctx.slots.inject("settings.section", () => ctx.slots.register({
 				name: "settings.section",
