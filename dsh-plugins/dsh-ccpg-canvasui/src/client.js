@@ -1006,7 +1006,8 @@ window.__ModuleLoader__.load({
       var a = s2(null), info = a[0], setInfo = a[1];
       var b = s2(null), check = b[0], setCheck = b[1];
       var c = s2(false), loading = c[0], setLoading = c[1];
-      var d = s2(null), upgradeLog = d[0], setUpgradeLog = d[1];
+      // null | {phase:'running'} | {phase:'done', log} | {phase:'failed', message}
+      var d = s2(null), upgradeState = d[0], setUpgradeState = d[1];
       var e = s2(false), confirming = e[0], setConfirming = e[1];
 
       var load = react.useCallback(function () {
@@ -1028,107 +1029,211 @@ window.__ModuleLoader__.load({
       var doUpgrade = function () {
         if (!confirming) {
           setConfirming(true);
-          // 5 秒不点确认自动回落，防手滑长亮
-          setTimeout(function () { setConfirming(false); }, 5000);
+          // 6 秒不点确认自动回落，防手滑长亮
+          setTimeout(function () { setConfirming(false); }, 6000);
           return;
         }
         setConfirming(false);
-        setUpgradeLog(["⏳ 升级进行中…"]);
+        setUpgradeState({ phase: "running" });
         systemPost(SYSTEM_UPGRADE_API, { confirm: true })
           .then(function (r) {
-            setUpgradeLog(r.ok ? r.log : ["✗ " + (r.error || "升级失败")]);
+            if (r.ok) {
+              setUpgradeState({ phase: "done", log: r.log || [] });
+              load();
+              setCheck(null);
+            } else {
+              setUpgradeState({ phase: "failed", message: r.error || "升级失败" });
+            }
           })
           .catch(function () {
-            setUpgradeLog(["✗ 升级请求失败（服务不可达？）"]);
+            setUpgradeState({ phase: "failed", message: "连接不上本地服务，请确认 dsh 正在运行" });
           });
       };
 
-      var secStyle = { display: "flex", flexDirection: "column", gap: "14px", maxWidth: "620px" };
+      // ---- 用户视图状态机：普通用户只关心三件事：现在啥版本 / 有没有新的 / 怎么升 ----
+      var currentV = (info && info.selfVersion) || null;
+      var running = !!upgradeState && upgradeState.phase === "running";
+      var pendingCheck = !!check && check.pending === true;
+      var available = !!(check && check.ok && check.updateAvailable && check.latest);
+      var upToDate = !!(check && check.ok && check.latest && !check.updateAvailable);
+      var checkFailed = !!check && check.ok === false;
+
+      var status = running
+        ? { text: "正在升级…", bg: "rgba(56,189,248,.18)" }
+        : available
+          ? { text: "发现新版本 v" + check.latest, bg: "rgba(79,70,229,.22)" }
+          : upToDate
+            ? { text: "已是最新", bg: "rgba(52,211,153,.18)" }
+            : pendingCheck
+              ? { text: "检查中…", bg: "rgba(148,163,184,.2)" }
+              : checkFailed
+                ? { text: "暂时连不上更新服务", bg: "rgba(148,163,184,.2)" }
+                : { text: "", bg: "transparent" };
+
       var btnBase = {
-        cursor: "pointer", borderRadius: "8px", padding: "5px 12px", fontSize: "13px",
+        cursor: "pointer", borderRadius: "8px", padding: "6px 14px", fontSize: "13px",
         border: "1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,.3))",
         background: "transparent", color: "var(--dsw-alias-label-primary)",
       };
       var primaryBtn = Object.assign({}, btnBase, {
         background: "var(--dsw-alias-accent-bg, #4F46E5)", color: "#fff",
-        borderColor: "transparent", opacity: confirming ? 0.85 : 1,
+        borderColor: "transparent",
       });
-
       var profiles = (info && info.profiles) || [];
+
       return react.createElement(
         "div",
-        { style: secStyle },
-        // —— 当前部署版本 + 检查更新 ——
+        { style: { display: "flex", flexDirection: "column", gap: "14px", maxWidth: "560px" } },
+
+        // —— 第一眼：当前版本大字 + 状态一句话 ——
         react.createElement(
           "div",
           { style: { display: "flex", alignItems: "center", gap: "10px" } },
           react.createElement(
-            "div",
-            null,
-            react.createElement("div", { style: { fontSize: "14px", fontWeight: 600 } }, "Workflow One 版本中心"),
-            react.createElement(
-              "div",
-              { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } },
-              "当前部署：" + ((info && info.selfVersion) || "…"),
-              check && check.latest
-                ? " · npm 最新 v" + check.latest +
-                  (check.updateAvailable ? "（可升级）" : "（已是最新）")
-                : "",
-            ),
+            "span",
+            { style: { fontSize: "26px", fontWeight: 700, lineHeight: "32px" } },
+            currentV ? "v" + currentV : "…",
           ),
-          react.createElement("button", { style: btnBase, onClick: doCheck, disabled: !!check?.pending }, check?.pending ? "检查中…" : "检查更新"),
+          status.text
+            ? react.createElement(
+                "span",
+                {
+                  style: {
+                    fontSize: "12px", padding: "3px 10px", borderRadius: "999px",
+                    background: status.bg, color: "var(--dsw-alias-label-primary)",
+                  },
+                },
+                status.text,
+              )
+            : null,
+        ),
+        react.createElement(
+          "div",
+          { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } },
+          running
+            ? "正在自动完成升级，窗口可以离开，回来再看结果就行。"
+            : available
+              ? "点下面的按钮即可升级，剩余的事全自动。"
+              : currentV
+                ? upToDate
+                  ? "有新版本发布时会在这里提示，不用常来点。"
+                  : "看看有没有新版本？点一下就知道。"
+                : "",
         ),
 
-        // —— profiles 安装清单 ——
-        profiles.length === 0
-          ? react.createElement(
-              "div",
-              { style: { fontSize: "13px", color: "var(--dsw-alias-text-secondary)" } },
-              loading ? "正在探测安装…" : "未在本机 dsh profiles 中发现已安装的 Workflow One。",
-            )
-          : profiles.map(ProfileBlock),
-
-        // —— 一键升级 ——
-        profiles.length
-          ? react.createElement(
-              "div",
-              { style: { display: "flex", flexDirection: "column", gap: "6px" } },
-              react.createElement(
-                "div",
-                { style: { display: "flex", alignItems: "center", gap: "10px" } },
-                react.createElement(
+        // —— 唯一的主按钮 ——
+        react.createElement(
+          "div",
+          { style: { display: "flex", gap: "8px" } },
+          running
+            ? react.createElement("button", { style: btnBase, disabled: true }, "升级中…")
+            : available
+              ? react.createElement(
                   "button",
                   { style: primaryBtn, onClick: doUpgrade },
-                  confirming ? "再点一次确认执行" : upgradeLog ? "重新升级" : "一键升级",
+                  confirming ? "再点一次确认开始升级" : "一键升级",
+                )
+              : react.createElement(
+                  "button",
+                  { style: btnBase, onClick: doCheck, disabled: pendingCheck },
+                  pendingCheck ? "检查中…" : "检查更新",
                 ),
-                react.createElement(
-                  "span",
-                  { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } },
-                  "源码装＝git pull＋重建；npm 装＝移除旧聚合包重装最新；离线包装＝提示原地覆盖。完成后需彻底重启 dsh。",
-                ),
-              ),
-              upgradeLog
+        ),
+
+        // —— 结果横幅 ——
+        !!upgradeState && upgradeState.phase === "done"
+          ? react.createElement(
+              "div",
+              {
+                style: {
+                  padding: "10px 12px", borderRadius: "10px", fontSize: "13px", lineHeight: "20px",
+                  background: "rgba(52,211,153,.14)",
+                  border: "1px solid rgba(52,211,153,.35)",
+                },
+              },
+              "✓ 升级完成！请彻底退出并重新启动 dsh（HMR 会缓存旧模块），新版即刻生效。",
+              (upgradeState.log || []).length
                 ? react.createElement(
-                    "pre",
-                    {
-                      style: {
-                        margin: 0, padding: "10px 12px", borderRadius: "8px", fontSize: "12px",
-                        lineHeight: "18px", maxHeight: "220px", overflow: "auto",
-                        background: "var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.12))",
-                        whiteSpace: "pre-wrap",
+                    "details",
+                    { style: { marginTop: "6px" } },
+                    react.createElement(
+                      "summary",
+                      { style: { cursor: "pointer", fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } },
+                      "查看升级过程",
+                    ),
+                    react.createElement(
+                      "pre",
+                      {
+                        style: {
+                          margin: "6px 0 0", padding: "8px 10px", borderRadius: "8px", fontSize: "12px",
+                          lineHeight: "18px", maxHeight: "200px", overflow: "auto",
+                          background: "var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.12))",
+                          whiteSpace: "pre-wrap",
+                        },
                       },
-                    },
-                    upgradeLog.join("\n"),
+                      upgradeState.log.join("\n"),
+                    ),
                   )
                 : null,
             )
           : null,
+        !!upgradeState && upgradeState.phase === "failed"
+          ? react.createElement(
+              "div",
+              {
+                style: {
+                  padding: "10px 12px", borderRadius: "10px", fontSize: "13px",
+                  background: "rgba(248,113,113,.12)",
+                  border: "1px solid rgba(248,113,113,.35)",
+                },
+              },
+              "✗ 升级没成功：" + upgradeState.message + "。可以再试一次；反复失败请把这段话截图给管理员。",
+            )
+          : null,
 
-        // —— 数据安全脚注 ——
+        // —— 没装的情况（正常用户极少看到）——
+        !profiles.length
+          ? react.createElement(
+              "div",
+              { style: { fontSize: "13px", color: "var(--dsw-alias-text-secondary)" } },
+              loading ? "正在读取安装信息…" : "本机没有发现已安装的 Workflow One。",
+            )
+          : null,
+
+        // —— 技术细节折叠区（给排障的人看，普通用户不用展开）——
+        profiles.length
+          ? react.createElement(
+              "details",
+              null,
+              react.createElement(
+                "summary",
+                { style: { cursor: "pointer", fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } },
+                "安装详情（有多个 profile 或排查问题时才需要看）",
+              ),
+              react.createElement(
+                "div",
+                { style: { display: "flex", flexDirection: "column", gap: "10px", marginTop: "10px" } },
+                profiles.map(ProfileBlock),
+                react.createElement(
+                  "div",
+                  { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } },
+                  "「离线包」标记表示该目录来自 release 解包且没有 git 元数据，一键升级对它只给覆盖指引；npm 与源码来源可全自动。",
+                ),
+              ),
+            )
+          : null,
+
+        // —— 数据安全脚注（普通用户最关心的安心话）——
         react.createElement(
           "div",
-          { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)", borderTop: "1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,.2))", paddingTop: "8px" } },
-          "工作流与运行记录（工作区 .workflow-one/）、定时触发配置、飞书凭据均在升级触达面之外，升级与重装不需要迁移数据。",
+          {
+            style: {
+              fontSize: "12px", color: "var(--dsw-alias-text-secondary)",
+              borderTop: "1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,.2))",
+              paddingTop: "8px",
+            },
+          },
+          "你的工作流、运行记录、定时任务和飞书登录都不会被升级改动，无需备份迁移。偏好转命令行的话：npm 安装的用户重跑一次 npx dsh-ccpg-one 效果等同。",
         ),
       );
     }
