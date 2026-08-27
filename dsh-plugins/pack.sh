@@ -14,7 +14,7 @@
 #   sh pack.sh [tag]     # tag 默认取最近 git tag（无则 0.0.0）
 # 环境变量：
 #   PACK_DIR   打包根目录（默认 /tmp/dsh-ccpg-pack），结束后可删
-#   DSH_NODE   构建与打包用的 node（默认自动探测，要求 >=22.13.0；兼容旧名 WF1_NODE）
+#   DSH_NODE   构建与打包用的 node（默认自动探测，要求 >=22.15.0；兼容旧名 WF1_NODE）
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$HERE/.." && pwd)
@@ -29,11 +29,11 @@ OPTIONAL_PLUGINS="dsh-ccpg-brand"
 # 聚合壳（bundle patch 挂载七插件 + better-sidebar，可选件 env 门控）；其 node_modules 是本地安装产物，不打包
 AGG="dsh-ccpg-one"
 
-# ---- 0. node（>=22.13.0，内置 node:sqlite）----
+# ---- 0. node（>=22.15.0，内置 node:sqlite）----
 NODE_BIN="${DSH_NODE:-${WF1_NODE:-}}"
-[ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "const [a,b]=process.versions.node.split('.').map(Number); console.log(a>22||(a===22&&b>=13)?process.execPath:'')" 2>/dev/null || true)
-if [ -z "$NODE_BIN" ] || ! "$NODE_BIN" -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>22||(a===22&&b>=13)?0:1)" 2>/dev/null; then
-  echo "✗ 需要 node>=22.13.0（或设 DSH_NODE 指向）"
+[ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "const [a,b]=process.versions.node.split('.').map(Number); console.log(a>22||(a===22&&b>=15)?process.execPath:'')" 2>/dev/null || true)
+if [ -z "$NODE_BIN" ] || ! "$NODE_BIN" -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>22||(a===22&&b>=15)?0:1)" 2>/dev/null; then
+  echo "✗ 需要 node>=22.15.0（或设 DSH_NODE 指向）"
   exit 1
 fi
 echo "✓ node: $("$NODE_BIN" -v)"

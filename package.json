@@ -3,7 +3,7 @@
   "private": true,
   "description": "dsh 插件开发工作区（Workflow One 物业编排套件）",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.15.0"
   },
   "scripts": {
     "test": "sh scripts/run-tests.sh",

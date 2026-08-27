@@ -28,7 +28,7 @@
     "cordis"
   ],
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.15.0"
   },
   "type": "module",
   "private": false,
