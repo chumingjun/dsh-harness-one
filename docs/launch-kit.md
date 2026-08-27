@@ -21,7 +21,7 @@ dsh plugin --profile web add dsh-ccpg-one
 dsh web
 ```
 
-仓库：https://github.com/chumingjun/harness-one
+仓库：https://github.com/chumingjun/dsh-harness-one
 
 欢迎分享实际工作流、安装问题和改进建议。仓库内已经提供报修工单整理、紧急度分流和多方并行评审三个可导入模板。
 
@@ -38,15 +38,15 @@ dsh plugin --profile web add dsh-ccpg-one
 dsh web
 ```
 
-Repository: https://github.com/chumingjun/harness-one
+Repository: https://github.com/chumingjun/dsh-harness-one
 
 Three importable examples are included for ticket normalization, urgency routing, and parallel review.
 
 ## Short Versions
 
-**中文：** Workflow One 把 dsh 智能体、脚本、条件和 HTTP 节点连成可视化 DAG，支持并行执行、实时状态、失败恢复和工作区 SQLite 存储。安装：`dsh plugin --profile web add dsh-ccpg-one`。https://github.com/chumingjun/harness-one
+**中文：** Workflow One 把 dsh 智能体、脚本、条件和 HTTP 节点连成可视化 DAG，支持并行执行、实时状态、失败恢复和工作区 SQLite 存储。安装：`dsh plugin --profile web add dsh-ccpg-one`。https://github.com/chumingjun/dsh-harness-one
 
-**English:** Workflow One adds visual, recoverable multi-agent DAGs to DeepSeek Harness: parallel execution, live node details, replay, and workspace-local SQLite storage. Install with `dsh plugin --profile web add dsh-ccpg-one`. https://github.com/chumingjun/harness-one
+**English:** Workflow One adds visual, recoverable multi-agent DAGs to DeepSeek Harness: parallel execution, live node details, replay, and workspace-local SQLite storage. Install with `dsh plugin --profile web add dsh-ccpg-one`. https://github.com/chumingjun/dsh-harness-one
 
 ## Suggested Media Order
 

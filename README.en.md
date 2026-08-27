@@ -13,9 +13,9 @@
   <a href="https://zcode.z.ai/cn"><img src="https://img.shields.io/badge/Built%20with-ZCode-14B8A6?labelColor=0F0F1A" alt="Built with ZCode"></a>
   <a href="https://github.com/bruc3van/awesome-dsh-plugin/blob/main/catalog/media-vision.md"><img src="https://img.shields.io/badge/listed%20in-awesome--dsh--plugin-2563EB?labelColor=0F0F1A" alt="Listed in awesome-dsh-plugin"></a>
   <a href="https://www.npmjs.com/package/dsh-ccpg-one"><img src="https://img.shields.io/npm/v/dsh-ccpg-one" alt="npm version"></a>
-  <a href="https://github.com/chumingjun/harness-one/actions/workflows/ci.yml"><img src="https://github.com/chumingjun/harness-one/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
-  <a href="https://github.com/chumingjun/harness-one/releases/latest"><img src="https://img.shields.io/github/v/release/chumingjun/harness-one" alt="latest release"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/github/license/chumingjun/harness-one" alt="MIT license"></a>
+  <a href="https://github.com/chumingjun/dsh-harness-one/actions/workflows/ci.yml"><img src="https://github.com/chumingjun/dsh-harness-one/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/chumingjun/dsh-harness-one/releases/latest"><img src="https://img.shields.io/github/v/release/chumingjun/dsh-harness-one" alt="latest release"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/chumingjun/dsh-harness-one" alt="MIT license"></a>
 </p>
 
 ## Turn real agents into observable workflows
@@ -51,10 +51,10 @@ dsh web
 
 ### Offline bundle
 
-Download the prebuilt bundle from [GitHub Releases](https://github.com/chumingjun/harness-one/releases/latest):
+Download the prebuilt bundle from [GitHub Releases](https://github.com/chumingjun/dsh-harness-one/releases/latest):
 
 ```sh
-curl -LO https://github.com/chumingjun/harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
+curl -LO https://github.com/chumingjun/dsh-harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
 tar -xzf dsh-ccpg-plugins-<tag>.tar.gz && cd dsh-plugins
 sh setup.sh --one wf1 4021
 sh start.sh wf1                         # http://127.0.0.1:4021/
@@ -63,7 +63,7 @@ sh start.sh wf1                         # http://127.0.0.1:4021/
 ### Build from source
 
 ```sh
-git clone https://github.com/chumingjun/harness-one.git
+git clone https://github.com/chumingjun/dsh-harness-one.git
 cd harness-one
 npm install
 npm --prefix web install
@@ -123,6 +123,6 @@ More than 90% of this project was developed using [ZCode](https://zcode.z.ai/cn)
 - [Contributing guide](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 - [Code of conduct](CODE_OF_CONDUCT.md)
-- [Discussions](https://github.com/chumingjun/harness-one/discussions)
+- [Discussions](https://github.com/chumingjun/dsh-harness-one/discussions)
 
 Licensed under the [MIT License](LICENSE).

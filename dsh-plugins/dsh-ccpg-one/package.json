@@ -5,12 +5,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/chumingjun/harness-one.git",
+    "url": "git+https://github.com/chumingjun/dsh-harness-one.git",
     "directory": "dsh-plugins/dsh-ccpg-one"
   },
-  "homepage": "https://github.com/chumingjun/harness-one#readme",
+  "homepage": "https://github.com/chumingjun/dsh-harness-one#readme",
   "bugs": {
-    "url": "https://github.com/chumingjun/harness-one/issues"
+    "url": "https://github.com/chumingjun/dsh-harness-one/issues"
   },
   "keywords": [
     "deepseek",

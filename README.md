@@ -13,9 +13,9 @@
   <a href="https://zcode.z.ai/cn"><img src="https://img.shields.io/badge/Built%20with-ZCode-14B8A6?labelColor=0F0F1A" alt="使用 ZCode 开发"></a>
   <a href="https://github.com/bruc3van/awesome-dsh-plugin/blob/main/catalog/media-vision.md"><img src="https://img.shields.io/badge/listed%20in-awesome--dsh--plugin-2563EB?labelColor=0F0F1A" alt="已被 awesome-dsh-plugin 收录"></a>
   <a href="https://www.npmjs.com/package/dsh-ccpg-one"><img src="https://img.shields.io/npm/v/dsh-ccpg-one" alt="npm 版本"></a>
-  <a href="https://github.com/chumingjun/harness-one/actions/workflows/ci.yml"><img src="https://github.com/chumingjun/harness-one/actions/workflows/ci.yml/badge.svg" alt="CI 状态"></a>
-  <a href="https://github.com/chumingjun/harness-one/releases/latest"><img src="https://img.shields.io/github/v/release/chumingjun/harness-one" alt="最新版本"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/github/license/chumingjun/harness-one" alt="MIT 许可证"></a>
+  <a href="https://github.com/chumingjun/dsh-harness-one/actions/workflows/ci.yml"><img src="https://github.com/chumingjun/dsh-harness-one/actions/workflows/ci.yml/badge.svg" alt="CI 状态"></a>
+  <a href="https://github.com/chumingjun/dsh-harness-one/releases/latest"><img src="https://img.shields.io/github/v/release/chumingjun/dsh-harness-one" alt="最新版本"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/chumingjun/dsh-harness-one" alt="MIT 许可证"></a>
 </p>
 
 ## 一句话，把真实 Agent 变成可观察的工作流
@@ -51,10 +51,10 @@ dsh web
 
 ### 离线包
 
-从 [GitHub Releases](https://github.com/chumingjun/harness-one/releases/latest) 下载聚合包，无需仓库源码：
+从 [GitHub Releases](https://github.com/chumingjun/dsh-harness-one/releases/latest) 下载聚合包，无需仓库源码：
 
 ```sh
-curl -LO https://github.com/chumingjun/harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
+curl -LO https://github.com/chumingjun/dsh-harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
 tar -xzf dsh-ccpg-plugins-<tag>.tar.gz && cd dsh-plugins
 sh setup.sh --one wf1 4021
 sh start.sh wf1                         # http://127.0.0.1:4021/
@@ -63,7 +63,7 @@ sh start.sh wf1                         # http://127.0.0.1:4021/
 ### 从源码构建
 
 ```sh
-git clone https://github.com/chumingjun/harness-one.git
+git clone https://github.com/chumingjun/dsh-harness-one.git
 cd harness-one
 npm install
 npm --prefix web install
@@ -220,6 +220,6 @@ cd web && npm test
 
 ## 反馈
 
-- 🐛 安装失败 / 运行报错：[提 Issue](https://github.com/chumingjun/harness-one/issues/new?template=bug_report.md)
-- 💡 功能建议：[提 Issue](https://github.com/chumingjun/harness-one/issues/new?template=feature_request.md)
-- 💬 使用提问、工作流配置求助、展示你搭的流程：[Discussions](https://github.com/chumingjun/harness-one/discussions)
+- 🐛 安装失败 / 运行报错：[提 Issue](https://github.com/chumingjun/dsh-harness-one/issues/new?template=bug_report.md)
+- 💡 功能建议：[提 Issue](https://github.com/chumingjun/dsh-harness-one/issues/new?template=feature_request.md)
+- 💬 使用提问、工作流配置求助、展示你搭的流程：[Discussions](https://github.com/chumingjun/dsh-harness-one/discussions)

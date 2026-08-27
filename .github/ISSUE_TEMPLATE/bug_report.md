@@ -7,7 +7,7 @@ body:
       value: |
         感谢反馈！请先确认：
         - 用的是 npm 安装（`dsh plugin add dsh-ccpg-one`）还是源码安装（`setup.sh`）
-        - 已在 [Releases](https://github.com/chumingjun/harness-one/releases) 确认不是已修复的旧版问题
+        - 已在 [Releases](https://github.com/chumingjun/dsh-harness-one/releases) 确认不是已修复的旧版问题
   - type: input
     id: version
     attributes:

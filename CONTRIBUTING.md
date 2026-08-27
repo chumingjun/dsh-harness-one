@@ -1,6 +1,6 @@
 # 参与贡献 / Contributing
 
-感谢你改进 Workflow One。提交前请先搜索现有 Issue；使用问题和工作流配置交流优先放到 [Discussions](https://github.com/chumingjun/harness-one/discussions)。
+感谢你改进 Workflow One。提交前请先搜索现有 Issue；使用问题和工作流配置交流优先放到 [Discussions](https://github.com/chumingjun/dsh-harness-one/discussions)。
 
 ## 开发环境
 

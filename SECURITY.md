@@ -6,7 +6,7 @@ Security fixes target the latest published release and the `main` branch.
 
 ## Reporting a Vulnerability
 
-Please do not open a public Issue for an unpatched vulnerability. Use [GitHub's private vulnerability reporting](https://github.com/chumingjun/harness-one/security/advisories/new) and include:
+Please do not open a public Issue for an unpatched vulnerability. Use [GitHub's private vulnerability reporting](https://github.com/chumingjun/dsh-harness-one/security/advisories/new) and include:
 
 - affected version and environment;
 - reproduction steps or a minimal proof of concept;
