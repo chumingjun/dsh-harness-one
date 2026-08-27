@@ -12,7 +12,7 @@
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/DeepSeek-Harness-4D6BFE?labelColor=0F0F1A" alt="DeepSeek Harness 插件"></a>
   <a href="https://zcode.z.ai/cn"><img src="https://img.shields.io/badge/Built%20with-ZCode-14B8A6?labelColor=0F0F1A" alt="使用 ZCode 开发"></a>
   <a href="https://github.com/bruc3van/awesome-dsh-plugin/blob/main/catalog/media-vision.md"><img src="https://img.shields.io/badge/listed%20in-awesome--dsh--plugin-2563EB?labelColor=0F0F1A" alt="已被 awesome-dsh-plugin 收录"></a>
-  <a href="https://www.npmjs.com/package/dsh-ccpg-one"><img src="https://img.shields.io/npm/v/dsh-ccpg-one" alt="npm 版本"></a>
+  <a href="https://www.npmjs.com/package/dsh-harness-one"><img src="https://img.shields.io/npm/v/dsh-harness-one" alt="npm 版本"></a>
   <a href="https://github.com/chumingjun/dsh-harness-one/actions/workflows/ci.yml"><img src="https://github.com/chumingjun/dsh-harness-one/actions/workflows/ci.yml/badge.svg" alt="CI 状态"></a>
   <a href="https://github.com/chumingjun/dsh-harness-one/releases/latest"><img src="https://img.shields.io/github/v/release/chumingjun/dsh-harness-one" alt="最新版本"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/chumingjun/dsh-harness-one" alt="MIT 许可证"></a>
@@ -41,21 +41,23 @@
 ### npm
 
 ```sh
-dsh plugin --profile web add dsh-ccpg-one
+dsh plugin --profile web add dsh-harness-one
 dsh web
 ```
 
-[Harness Desktop](https://github.com/anywhere-labs/deepseek-harness-desktop) 用户从托盘打开 **Open DSH Terminal**，执行 `dsh plugin add dsh-ccpg-one` 后重启 Desktop。不要在 Desktop 中运行 `setup.sh`，Desktop 会自行管理 profile、Node/pnpm 和随机 loopback 端口。详见 [Desktop 安装与排障](dsh-plugins/DESKTOP.md)。
+> v0.5.0 起 Workflow One 合并为单包 `dsh-harness-one`（旧 `dsh-ccpg-one` 已停更）。老用户在设置面板「Workflow One → 检查更新」一键迁移，或手动：`dsh plugin --profile <name> remove dsh-ccpg-one && dsh plugin --profile <name> add dsh-harness-one`。
 
-**界面依赖说明**：Workflow One 在 dsh 官方界面中的「工作流」画布由开源项目 [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 提供侧栏与标签页宿主，`dsh-ccpg-one` 会自动安装并依赖它。未安装或禁用 DSH-better-sidebar 时，官方界面内嵌的「工作流」入口不可用，但独立画布 `/wf1/` 仍可访问。
+[Harness Desktop](https://github.com/anywhere-labs/deepseek-harness-desktop) 用户从托盘打开 **Open DSH Terminal**，执行 `dsh plugin add dsh-harness-one` 后重启 Desktop。不要在 Desktop 中运行 `setup.sh`，Desktop 会自行管理 profile、Node/pnpm 和随机 loopback 端口。详见 [Desktop 安装与排障](dsh-plugins/DESKTOP.md)。
+
+**界面依赖说明**：Workflow One 在 dsh 官方界面中的「工作流」画布由开源项目 [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 提供侧栏与标签页宿主，`dsh-harness-one` 会自动安装并依赖它。未安装或禁用 DSH-better-sidebar 时，官方界面内嵌的「工作流」入口不可用，但独立画布 `/wf1/` 仍可访问。
 
 ### 离线包
 
 从 [GitHub Releases](https://github.com/chumingjun/dsh-harness-one/releases/latest) 下载聚合包，无需仓库源码：
 
 ```sh
-curl -LO https://github.com/chumingjun/dsh-harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
-tar -xzf dsh-ccpg-plugins-<tag>.tar.gz && cd dsh-plugins
+curl -LO https://github.com/chumingjun/dsh-harness-one/releases/download/<tag>/dsh-harness-one-plugins-<tag>.tar.gz
+tar -xzf dsh-harness-one-plugins-<tag>.tar.gz && cd dsh-plugins
 sh setup.sh --one wf1 4021
 sh start.sh wf1                         # http://127.0.0.1:4021/
 ```
@@ -64,7 +66,7 @@ sh start.sh wf1                         # http://127.0.0.1:4021/
 
 ```sh
 git clone https://github.com/chumingjun/dsh-harness-one.git
-cd harness-one
+cd dsh-harness-one
 npm install
 npm --prefix web install
 sh dsh-plugins/build-web.sh             # 源码安装必跑，构建产物不入库
@@ -161,7 +163,7 @@ Workflow One 嵌在 dsh 官方界面中，推荐从 AI 对话开始创建复杂�
 | `dsh-ccpg-document-preview` | 默认 | 文档全屏预览（pdfjs / docx-preview / sheetjs / @file-viewer/pptx，inline workers、无第三方上传） |
 | `dsh-ccpg-larkauth` | 默认 | 飞书扫码登录（启动自举、token 续约、技能种子）；官方设置面板「飞书账号」section |
 | `dsh-ccpg-llm-guard` | 默认 | 模型工具调用完整性防护：空 id/name/arguments 自动重试，不写入会话 |
-| `dsh-ccpg-brand` | 独立可选 | 品牌定制（CCPG logo + 聊天 hero 标题）；`setup.sh` 与 `dsh-ccpg-one` 均不安装 |
+| `dsh-ccpg-brand` | 独立可选 | 品牌定制（CCPG logo + 聊天 hero 标题）；`setup.sh` 与单包均不安装 |
 
 安装 / 打包 / 数据位置见 [dsh-plugins/README.md](dsh-plugins/README.md)。
 

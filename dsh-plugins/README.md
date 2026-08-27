@@ -22,7 +22,7 @@
 从 Desktop 托盘打开 **Open DSH Terminal**；该终端已绑定当前 profile：
 
 ```sh
-dsh plugin add dsh-ccpg-one
+dsh plugin add dsh-harness-one
 ```
 
 安装后重启 Desktop，让新 bundle 进入 Loader 组合。compatibility 与 advanced 模式都继续使用普通 DSH Web Client；画布、同源 `/wf1/api/*`、侧栏和预览无需 Desktop 专用注册。飞书账号页首次点击「自动安装」时，插件通过公开 `desktopPnpm` service 把固定版本 lark-cli 安装到当前 profile，并在 profile 切换或退出时取消仍在运行的操作。
@@ -35,8 +35,8 @@ Desktop 不要运行 `setup.sh`：它用于普通 dsh，会创建/修改 profile
 
 ```sh
 # 1. 下载 release 包（GitHub Releases 页拿最新 tag 的 asset）
-curl -LO https://github.com/chumingjun/dsh-harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
-tar -xzf dsh-ccpg-plugins-<tag>.tar.gz   # 解出 dsh-plugins/ 目录（自带全部构建产物 + vendor 件）
+curl -LO https://github.com/chumingjun/dsh-harness-one/releases/download/<tag>/dsh-harness-one-plugins-<tag>.tar.gz
+tar -xzf dsh-harness-one-plugins-<tag>.tar.gz   # 解出 dsh-plugins/ 目录（自带全部构建产物 + vendor 件）
 
 # 2. 一键安装（聚合模式：一个包装齐 7 插件 + better-sidebar，并建好独立 profile）
 cd dsh-plugins
@@ -80,7 +80,7 @@ release 包特性：**拿到即装**（画布/依赖/聚合壳全带）；better
 | 离线包解包（link、无 `.git`） | 提示下载新版 tarball 原地解包覆盖该目录，完成后回到面板再点一次收尾重链 |
 | npm 安装（纯版本号依赖） | 复用已装聚合包自带安装器 remove→add 最新版；pnpm 放行预写内含，无需源码在场 |
 
-npm 渠道等价命令行（无需源码）：重跑一次 `npx dsh-ccpg-one <profile>` 即为升级。
+npm 渠道等价命令行（无需源码）：老版（dsh-ccpg-one）在设置面板「Workflow One → 检查更新」一键迁移到 dsh-harness-one；此后重跑一次 `npx dsh-harness-one <profile>` 即为升级。
 
 **数据安全边界**：工作流与运行记录（工作区 `.workflow-one/` SQLite）、定时触发配置（state/triggers.json）、飞书凭据（dsh 用户级/lark-cli）全部在升级触达面之外——升级与重装都不需要迁移数据。
 
@@ -113,12 +113,12 @@ sh start.sh dev
 | `CCPG_NO_LARK=1` | 不加载 larkauth（飞书扫码登录） | 运行时（bundle patch） |
 | `CCPG_NO_PREVIEW=1` | 不加载 document-preview（预览退化为下载） | 运行时（bundle patch） |
 | `CCPG_NO_GUARD=1` | 不加载 llm-guard（不建议关） | 运行时（bundle patch） |
-| `CCPG_NO_SIDEBAR=1` | 不装 better-sidebar（官方 UI 内工作流侧栏宿主不可用，独立 `/wf1/` 入口不受影响） | **安装时**（npm 渠道：`npx dsh-ccpg-one` 检测到即 `dsh plugin remove dsh-better-sidebar`；源码渠道：setup.sh 未装它即无） |
+| `CCPG_NO_SIDEBAR=1` | 不装 better-sidebar（官方 UI 内工作流侧栏宿主不可用，独立 `/wf1/` 入口不受影响） | **安装时**（npm 渠道：`npx dsh-harness-one` 检测到即 `dsh plugin remove dsh-better-sidebar`；源码渠道：setup.sh 未装它即无） |
 | `CCPG_ONLY_CORE=1` | 一键只留核心：tools/orchestrator/web/canvasui（+ 移除 sidebar） | 运行时 + 安装时 |
 
 > better-sidebar 的挂载由它自己的 `dsh.bundle.patch` 提供（聚合层不再 insert——双 insert 会 duplicate route）。因此关闭 sidebar 无法在运行时做，npm 渠道由安装器移除依赖实现。
 
-> `dsh-ccpg-brand` 不属于聚合包，需要时必须单独安装（`dsh plugin --profile <name> add <repo>/dsh-plugins/dsh-ccpg-brand`）。聚合模式不要再单独 add 其余 7 个子插件或手写 insert 行——双层挂载 = duplicate prefix route。`dsh plugin --profile <name> remove dsh-ccpg-one` 一次卸掉聚合包包含的默认插件。
+> `dsh-ccpg-brand` 不属于聚合包，需要时必须单独安装（`dsh plugin --profile <name> add <repo>/dsh-plugins/dsh-ccpg-brand`）。聚合模式不要再单独 add 其余 7 个子插件或手写 insert 行——双层挂载 = duplicate prefix route。`dsh plugin --profile <name> remove dsh-harness-one` 一次卸掉全部默认插件（单包形态）。
 
 > 模型完全交给 dsh 自带配置：agent 走 dsh 默认模型栈（`deepseek-official`），key 与选型在官方 UI「模型」页配置；setup.sh 的 patch 只写端口覆盖，不写任何 provider。要加自定义 provider，按 dsh 原生方式改 profile `cordis.patch.yml` 或 `~/.dsh/settings.yaml`。
 
@@ -136,7 +136,7 @@ sh start.sh dev
 6. `dsh plugin add` 7 个默认插件——**各插件自带 `dsh.bundle.patch`（包内 `cordis.patch.yml`），add 一步完成安装+进 bundles 层+挂载**（与 dsh-better-sidebar 的 npm 分发同一机制；失败即中止，不留半成品 profile）
 7. 依赖引导：dsh SDK 是 dsh 包内层 bundled deps，registry 版本滞后且插件解析路径够不到——`bootstrap-deps.sh` 软链进插件源码目录（npm 安装渠道则无需此步：插件实体落在 profile 内，dsh 启动时的 `~/.dsh/profiles/node_modules` 扁平兜底自动接通运行实例的 SDK）
 8. 写 `cordis.patch.yml`——**只写 webserver 端口覆盖**（模型 provider 走 dsh 自带体系，不在此写）
-9. 装 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（npm 包，自带 bundle patch 一步挂载）：官方 UI 右侧工作台侧边栏——canvasui 往它注册「工作流」tab。版本由 `dsh-ccpg-one` 精确依赖统一；release 包携带同版本 vendor tgz
+9. 装 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（npm 包，自带 bundle patch 一步挂载）：官方 UI 右侧工作台侧边栏——canvasui 往它注册「工作流」tab。版本由 `dsh-harness-one` 精确依赖统一；release 包携带同版本 vendor tgz
 
 > 双挂载警告：插件挂载行已由各包 `dsh.bundle.patch` 提供，profile 的 `cordis.patch.yml` 里**不要再手写**同名 `- insert` 行——两层都生效会重复注册路由，boot 时 duplicate prefix route 报错。
 
@@ -145,16 +145,16 @@ sh start.sh dev
 聚合包和 7 个默认插件均为带 `dsh.bundle.patch` 的自描述包。**pnpm 11 环境推荐**（见下）：
 
 ```sh
-npx dsh-ccpg-one myprofile        # 预写 pnpm 11 放行（node-pty/koffi 构建许可）再一步装齐
+npx dsh-harness-one myprofile     # 预写 pnpm 11 放行（node-pty/koffi 构建许可）再一步装齐
 ```
 
 也可直接用官方命令：
 
 ```sh
-dsh plugin --profile myprofile add dsh-ccpg-one
+dsh plugin --profile myprofile add dsh-harness-one
 ```
 
-> **pnpm 11 注意（issue #24）**：`dsh plugin add` 是 profile 目录里裸跑 pnpm，聚合依赖链里的 `node-pty`（dsh-better-sidebar 传递依赖，原生模块）会被 strict-dep-builds 拦下：安装非零退出、且 pnpm 往 profile 的 `pnpm-workspace.yaml` 写非法占位符 `node-pty: set this to true or false`，把 `pnpm approve-builds` 与重跑 install 一起堵死——**重试无效**。0.2.2 起用 `npx dsh-ccpg-one` 安装即可（它先把放行写对再装，幂等，可反复重跑）；已中招的 profile 也能用它自愈。
+> **pnpm 11 注意（issue #24）**：`dsh plugin add` 是 profile 目录里裸跑 pnpm，聚合依赖链里的 `node-pty`（dsh-better-sidebar 传递依赖，原生模块）会被 strict-dep-builds 拦下：安装非零退出、且 pnpm 往 profile 的 `pnpm-workspace.yaml` 写非法占位符 `node-pty: set this to true or false`，把 `pnpm approve-builds` 与重跑 install 一起堵死——**重试无效**。0.5.0 起用 `npx dsh-harness-one` 安装即可（它先把放行写对再装，幂等，可反复重跑）；已中招的 profile 也能用它自愈。
 
 需要 CCPG 品牌外观时，再显式安装独立插件：
 
@@ -175,11 +175,11 @@ dsh plugin --profile myprofile add dsh-ccpg-brand
 
 ## 打包发布
 
-`pack.sh <tag>`：7 个默认插件 + 独立可选 brand 清单校验 → 画布双构建 → orchestrator 依赖 → canvasui bundle 重建并 `--check` → rsync 组装（清运行时数据）→ `dist-release/dsh-ccpg-plugins-<tag>.tar.gz`。通用发布归档仍携带 brand 源包供显式安装，但 `setup.sh` 和 `dsh-ccpg-one` 都不会自动安装它。CI（release.yml）同源执行并作为 release asset 上传。
+`pack.sh <tag>`：7 个默认插件 + 独立可选 brand 清单校验 → 画布双构建 → orchestrator 依赖 → canvasui bundle 重建并 `--check` → rsync 组装（清运行时数据）→ `dist-release/dsh-harness-one-plugins-<tag>.tar.gz`。通用发布归档仍携带 brand 源包供显式安装，但 `setup.sh` 和单包 `dsh-harness-one` 都不会自动安装它。CI（release.yml）同源执行并作为 release asset 上传。
 
-`sh publish-npm.sh --dry-run` 会构建并验证 8 个 npm 包：7 个默认插件**独立发布为公共包**（loader 与 client-modules 都从 profile 根按包名解析 entry，嵌套 bundle 布局两处都解析不到），`dsh-ccpg-one` 作为聚合壳以普通依赖引用它们——用户一条 `dsh plugin add dsh-ccpg-one` 装齐全部。brand 不单独发布。安装冒烟会校验「无 @deepseek-ai SDK 泄漏」（peer 自动安装会遮蔽 dsh 全局版本导致官方 UI 400）。去掉 `--dry-run` 才上传官方 npm registry；tag 必须与聚合包版本一致。GitHub `release.yml` 先上传 release 资产，再使用仓库 Actions Secret `NPM_TOKEN` 按子包→聚合包顺序发布，失败后可安全重跑（已存在版本会自动跳过）。
+`sh publish-npm.sh --dry-run` 会装配并验证单包 `dsh-harness-one`（assemble-one.sh 把 7 个插件合并为一个 npm 包：单 loader entry + 合并 client bundle）与 `dsh-ccpg-brand`。老 8 包（dsh-ccpg-one + 7 子包）已停更，发布时统一 deprecate 指向新包。安装冒烟会校验「无 @deepseek-ai SDK 泄漏」（peer 自动安装会遮蔽 dsh 全局版本导致官方 UI 400）。去掉 `--dry-run` 才上传官方 npm registry；tag 必须与聚合包版本一致。GitHub `release.yml` 先上传 release 资产，再使用仓库 Actions Secret `NPM_TOKEN` 按子包→聚合包顺序发布，失败后可安全重跑（已存在版本会自动跳过）。
 
 ## 已知边界
 
 - SDK 软链指向本机 dsh 安装——换机器重跑 `setup.sh` 自动重链
-- npm 首次发布需要仓库所有者配置具备 `dsh-ccpg-one` 发布权限的 granular token 为 Actions Secret `NPM_TOKEN`；代码与包内容不保存 token
+- npm 首次发布需要仓库所有者配置具备 `dsh-harness-one` 与 `dsh-ccpg-brand` 发布权限的 granular token 为 Actions Secret `NPM_TOKEN`；代码与包内容不保存 token

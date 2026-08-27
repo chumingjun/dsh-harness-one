@@ -1,6 +1,6 @@
 name: release
 
-# 打 tag 发版：构建并打包 dsh-ccpg-* 插件，作为 GitHub Release asset 上传。
+# 打 tag 发版：构建装配单包 dsh-harness-one 并发布 npm，作为 GitHub Release asset 上传。
 # 触发：git tag v1.2.3 && git push origin v1.2.3
 
 on:
@@ -44,7 +44,7 @@ jobs:
       - name: boot smoke（安装+启动端到端；验证聚合包钉定的 better-sidebar）
         run: |
           sh dsh-plugins/boot-smoke.sh \
-            "dist-release/dsh-ccpg-plugins-$(echo "$GITHUB_REF_NAME" | sed 's/^v//').tar.gz"
+            "dist-release/dsh-harness-one-plugins-$(echo "$GITHUB_REF_NAME" | sed 's/^v//').tar.gz"
 
       - name: build npm packages（8 包：7 子插件 + 聚合壳）
         run: sh dsh-plugins/publish-npm.sh --dry-run
@@ -55,8 +55,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist-release/dsh-ccpg-plugins-*.tar.gz
-            dist-release/dsh-ccpg-one-*.tgz
+            dist-release/dsh-harness-one-plugins-*.tar.gz
+            dist-release/dsh-harness-one-*.tgz
           generate_release_notes: true
 
       # 8 包顺序发布（子插件→聚合壳；已存在版本自动跳过，重跑安全）

@@ -12,7 +12,7 @@
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/DeepSeek-Harness-4D6BFE?labelColor=0F0F1A" alt="DeepSeek Harness plugin"></a>
   <a href="https://zcode.z.ai/cn"><img src="https://img.shields.io/badge/Built%20with-ZCode-14B8A6?labelColor=0F0F1A" alt="Built with ZCode"></a>
   <a href="https://github.com/bruc3van/awesome-dsh-plugin/blob/main/catalog/media-vision.md"><img src="https://img.shields.io/badge/listed%20in-awesome--dsh--plugin-2563EB?labelColor=0F0F1A" alt="Listed in awesome-dsh-plugin"></a>
-  <a href="https://www.npmjs.com/package/dsh-ccpg-one"><img src="https://img.shields.io/npm/v/dsh-ccpg-one" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/dsh-harness-one"><img src="https://img.shields.io/npm/v/dsh-harness-one" alt="npm version"></a>
   <a href="https://github.com/chumingjun/dsh-harness-one/actions/workflows/ci.yml"><img src="https://github.com/chumingjun/dsh-harness-one/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="https://github.com/chumingjun/dsh-harness-one/releases/latest"><img src="https://img.shields.io/github/v/release/chumingjun/dsh-harness-one" alt="latest release"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/chumingjun/dsh-harness-one" alt="MIT license"></a>
@@ -41,21 +41,21 @@
 ### npm
 
 ```sh
-dsh plugin --profile web add dsh-ccpg-one
+dsh plugin --profile web add dsh-harness-one
 dsh web
 ```
 
-[Harness Desktop](https://github.com/anywhere-labs/deepseek-harness-desktop) users should open **Open DSH Terminal**, run `dsh plugin add dsh-ccpg-one`, and restart Desktop. Do not run `setup.sh` in Desktop; it manages its own profile, Node/pnpm runtime, and loopback port. See [Desktop setup and troubleshooting](dsh-plugins/DESKTOP.md).
+[Harness Desktop](https://github.com/anywhere-labs/deepseek-harness-desktop) users should open **Open DSH Terminal**, run `dsh plugin add dsh-harness-one`, and restart Desktop. Do not run `setup.sh` in Desktop; it manages its own profile, Node/pnpm runtime, and loopback port. See [Desktop setup and troubleshooting](dsh-plugins/DESKTOP.md).
 
-**UI dependency:** Workflow One's embedded canvas is hosted in the official dsh interface by the open-source [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) project. `dsh-ccpg-one` installs and depends on it automatically. If DSH-better-sidebar is missing or disabled, the embedded Workflow entry is unavailable, while the standalone `/wf1/` canvas remains accessible.
+**UI dependency:** Workflow One's embedded canvas is hosted in the official dsh interface by the open-source [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) project. `dsh-harness-one` installs and depends on it automatically. If DSH-better-sidebar is missing or disabled, the embedded Workflow entry is unavailable, while the standalone `/wf1/` canvas remains accessible.
 
 ### Offline bundle
 
 Download the prebuilt bundle from [GitHub Releases](https://github.com/chumingjun/dsh-harness-one/releases/latest):
 
 ```sh
-curl -LO https://github.com/chumingjun/dsh-harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
-tar -xzf dsh-ccpg-plugins-<tag>.tar.gz && cd dsh-plugins
+curl -LO https://github.com/chumingjun/dsh-harness-one/releases/download/<tag>/dsh-harness-one-plugins-<tag>.tar.gz
+tar -xzf dsh-harness-one-plugins-<tag>.tar.gz && cd dsh-plugins
 sh setup.sh --one wf1 4021
 sh start.sh wf1                         # http://127.0.0.1:4021/
 ```

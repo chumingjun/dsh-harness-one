@@ -1,7 +1,8 @@
 #!/bin/sh
-# 打包 dsh-ccpg-* 插件为可分发 tarball（release 用，CI 与本地同源）。
+# 打包 Workflow One 插件为可分发 tarball（release 用，CI 与本地同源）。
 #
-# 产物：dsh-ccpg-plugins-<tag>.tar.gz，内容 = 七个默认插件 + 独立可选 brand 插件 + setup/start/build/bootstrap 脚本，
+# 产物：dsh-harness-one-plugins-<tag>.tar.gz，内容 = 单包 dsh-harness-one（7 合 1）
+#      + 独立可选 brand 插件 + setup/start/build/assemble/bootstrap 脚本，
 # 且满足"拿到即装"（产物不入库，本脚本现场构建）：
 #   - 画布已构建：dsh-ccpg-web/web-dist/ 由第 1 步 build-web.sh 现场生成，装包机无需再跑构建
 #   - orchestrator 真依赖已装：ajv/cron-parser 在 dsh-ccpg-orchestrator/node_modules/（本地 setup.sh 直接
@@ -22,12 +23,12 @@ TAG="${1:-$(git -C "$REPO_ROOT" describe --tags --abbrev=0 2>/dev/null || echo 0
 TAG="${TAG#v}"
 OUT="${PACK_DIR:-/tmp/dsh-ccpg-pack}"
 DIST_DIR="$REPO_ROOT/dist-release"
-PKG="dsh-ccpg-plugins-$TAG"
+PKG="dsh-harness-one-plugins-$TAG"
 TAR="$DIST_DIR/$PKG.tar.gz"
 PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-llm-guard"
 OPTIONAL_PLUGINS="dsh-ccpg-brand"
-# 聚合壳（bundle patch 挂载七插件 + better-sidebar，可选件 env 门控）；其 node_modules 是本地安装产物，不打包
-AGG="dsh-ccpg-one"
+# 单包（assemble-one.sh 装配产物，7 插件合一）；brand 独立可选
+AGG="dsh-harness-one"
 
 # ---- 0. node（>=22.15.0，内置 node:sqlite）----
 NODE_BIN="${DSH_NODE:-${WF1_NODE:-}}"
@@ -100,12 +101,27 @@ rsync -a --delete \
   --exclude 'dsh-ccpg-one/node_modules' \
   --exclude 'dsh-ccpg-one/pnpm-lock.yaml' \
   --exclude 'web-dist' \
+  --exclude 'data/runs' \
+  --exclude 'data/run-artifacts' \
+  --exclude 'data/workspaces' \
+  --exclude 'data/attachments' \
+  --exclude 'data/credentials.json' \
+  --exclude 'data/triggers.json' \
+  --exclude 'data/global-variables.json' \
   "$HERE/" "$OUT/dsh-plugins/"
 # web-dist 单独拷（构建产物，rsync 排除了但需要带）
 rsync -a "$HERE/dsh-ccpg-web/web-dist/" "$OUT/dsh-plugins/dsh-ccpg-web/web-dist/"
 
+# 单包运行时依赖实体化：装配目录不带 node_modules（防打包机绝对路径软链断链），
+# 归档现场把 orchestrator 依赖树拷成实体——离线装机 setup.sh --one 直接软链可用。
+ONE_NM="$OUT/dsh-plugins/dsh-harness-one/node_modules"
+rm -rf "$ONE_NM"; mkdir -p "$ONE_NM"
+for dep in ajv cron-parser quickjs-emscripten fast-deep-equal fast-uri json-schema-traverse require-from-string luxon @jitl; do
+  cp -R "$HERE/dsh-ccpg-orchestrator/node_modules/$dep" "$ONE_NM/$dep"
+done
+
 # 清理插件包内运行时数据与残余
-for p in $PLUGINS $OPTIONAL_PLUGINS; do
+for p in $PLUGINS $OPTIONAL_PLUGINS dsh-harness-one; do
   rm -rf "$OUT/dsh-plugins/$p/data/runs" \
          "$OUT/dsh-plugins/$p/data/run-artifacts" \
          "$OUT/dsh-plugins/$p/data/workspaces" \

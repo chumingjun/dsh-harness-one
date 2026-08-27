@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -8,6 +8,8 @@ import {
   compareSemver,
   executePlan,
   gitRootOf,
+  LEGACY_PACKAGES,
+  PACKAGE,
   planUpgrade,
   SIDEBAR,
 } from '../lib/system-upgrade.js';
@@ -42,21 +44,21 @@ console.log('system-upgrade tests:');
   writePkg(join(releaseTree, 'dsh-plugins', 'dsh-ccpg-canvasui'), '0.3.0');
 
   const profilesDir = join(root, 'profiles');
-  // p-npm：纯 registry 版本号 + 已装聚合包的 install.js + bundles 无 sidebar（NO_SIDEBAR 用户）
-  const npmOneDir = join(profilesDir, 'p-npm', 'node_modules', AGGREGATE);
+  // p-npm：纯 registry 老聚合包（迁移场景）+ install.js + bundles 无 sidebar（NO_SIDEBAR 用户）
+  const npmOneDir = join(profilesDir, 'p-npm', 'node_modules', 'dsh-ccpg-one');
   mkdirSync(join(npmOneDir, 'bin'), { recursive: true });
   writePkg(npmOneDir, '0.3.0');
   writeFileSync(join(npmOneDir, 'bin', 'install.js'), '// fixture installer\n');
   writeFileSync(join(profilesDir, 'p-npm', 'package.json'), JSON.stringify({
     name: 'dsh-profile-p-npm',
-    dependencies: { [AGGREGATE]: '0.3.0', [SIDEBAR]: '^0.15.2' },
+    dependencies: { 'dsh-ccpg-one': '0.3.0', [SIDEBAR]: '^0.15.2' },
     dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } },
   }));
   // p-residue：remove 中断后依赖表和实体都没了，但 .bin 留下悬空软链。
   const residueDir = join(profilesDir, 'p-residue');
   mkdirSync(join(residueDir, 'node_modules', '.bin'), { recursive: true });
   writeFileSync(join(residueDir, 'package.json'), JSON.stringify({ name: 'dsh-profile-p-residue' }));
-  symlinkSync('../../nowhere', join(residueDir, 'node_modules', '.bin', AGGREGATE));
+  symlinkSync('../../nowhere', join(residueDir, 'node_modules', '.bin', 'dsh-ccpg-one'));
   // p-src：link 进 git 仓库
   mkdirSync(join(profilesDir, 'p-src'), { recursive: true });
   writeFileSync(join(profilesDir, 'p-src', 'package.json'), JSON.stringify({
@@ -115,12 +117,12 @@ console.log('system-upgrade tests:');
     assert.match(plan.actions[0].instruction, /覆盖/);
   });
 
-  await test('planner：npm 形态复用已装安装器并保持 NO_SIDEBAR 关闭态', () => {
+  await test('planner：老包 registry 形态产出 npm-migrate 并保持 NO_SIDEBAR 关闭态', () => {
     const report = collectInstallReport({ profilesRoot: profilesDir });
     const npmProfile = report.find((p) => p.name === 'p-npm');
     const plan = planUpgrade([npmProfile]);
     assert.deepEqual(plan.warnings, []);
-    assert.equal(plan.actions[0].type, 'npm-reinstall');
+    assert.equal(plan.actions[0].type, 'npm-migrate');
     assert.equal(plan.actions[0].installerDir, npmOneDir);
     assert.equal(plan.actions[0].profile, 'p-npm');
     assert.equal(plan.actions[0].keepSidebarRemoved, true);
@@ -172,13 +174,13 @@ console.log('system-upgrade tests:');
     const report = collectInstallReport({ profilesRoot: profilesDir });
     const residue = report.find((p) => p.name === 'p-residue');
     assert.ok(residue);
-    assert.equal(residue.packages[0].name, AGGREGATE);
+    assert.equal(residue.packages[0].name, 'dsh-ccpg-one');
     assert.equal(residue.packages[0].broken, true);
     const plan = planUpgrade([residue]);
-    assert.equal(plan.actions[0].type, 'npm-reinstall');
+    assert.equal(plan.actions[0].type, 'npm-migrate');
     assert.equal(plan.actions[0].installerDir, null);
     assert.equal(plan.actions[0].keepSidebarRemoved, true);
-    assert.match(plan.actions[0].title, /修复|重装/);
+    assert.match(plan.actions[0].title, /修复|迁移/);
   });
 
   await test('executePlan：残局依赖表为空时使用 add 重新落表', async () => {
@@ -186,7 +188,7 @@ console.log('system-upgrade tests:');
     const residue = report.find((p) => p.name === 'p-residue');
     const calls = [];
     const realFetch = globalThis.fetch;
-    globalThis.fetch = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '0.4.0' } }) });
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '0.5.0' } }) });
     try {
       await executePlan(planUpgrade([residue]), {
         dshBin: '/fake/dsh',
@@ -196,29 +198,117 @@ console.log('system-upgrade tests:');
       globalThis.fetch = realFetch;
     }
     assert.deepEqual(calls[0].slice(0, 5), ['/fake/dsh', 'plugin', '--profile', 'p-residue', 'add']);
-    assert.equal(calls[0][5], `${AGGREGATE}@0.4.0`);
-    assert.ok(!calls.some((c) => c.includes('remove') && c.includes(AGGREGATE)), '残局修复不先 remove 聚合包');
+    assert.equal(calls[0][5], `${PACKAGE}@0.5.0`);
+    assert.ok(!calls.some((c) => c.includes('remove') && c.includes(AGGREGATE)), '残局修复不 remove 聚合包');
   });
 
-  await test('executePlan：npm 路径 prewrite→up latest 原地更新，全程无 remove', async () => {
+  await test('executePlan：迁移 prewrite→add 新包→remove 老包（装新在前）', async () => {
     const report = collectInstallReport({ profilesRoot: profilesDir });
     const npmProfile = report.find((p) => p.name === 'p-npm');
     const calls = [];
-    await executePlan(planUpgrade([npmProfile]), {
-      dshBin: '/fake/dsh',
-      runCmd: async (cmd, args) => { calls.push([cmd, ...args]); return { ok: true, out: '', err: null }; },
-    });
+    // 依赖表随 add/remove 演进：模拟 dsh plugin 的真实落表行为
+    const profileManifest = join(profilesDir, 'p-npm', 'package.json');
+    const originalManifest = readFileSync(profileManifest, 'utf8');
+    const depsState = new Map([
+      ['dsh-ccpg-one', '0.3.0'], [SIDEBAR, '^0.15.2'],
+    ]);
+    const flushDeps = () => writeFileSync(profileManifest, JSON.stringify({
+      name: 'dsh-profile-p-npm',
+      dependencies: Object.fromEntries(depsState),
+      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } },
+    }));
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '0.5.0' } }) });
+    try {
+      await executePlan(planUpgrade([npmProfile]), {
+        dshBin: '/fake/dsh',
+        runCmd: async (cmd, args) => {
+          calls.push([cmd, ...args]);
+          if (cmd === '/fake/dsh' && args[3] === 'add') {
+            depsState.set(PACKAGE, '0.5.0'); flushDeps(); // add 落表
+          }
+          if (cmd === '/fake/dsh' && args[3] === 'remove') {
+            depsState.delete(String(args[4])); flushDeps(); // remove 摘表
+          }
+          return { ok: true, out: '', err: null };
+        },
+      });
+    } finally {
+      globalThis.fetch = realFetch;
+      writeFileSync(profileManifest, originalManifest); // 还原 fixture
+    }
     const prewrite = calls[0];
     assert.equal(prewrite[0], process.execPath);
     assert.equal(prewrite[1], join(npmOneDir, 'bin', 'install.js'));
     assert.equal(prewrite[2], 'p-npm');
     assert.equal(prewrite[3], '--prewrite');
-    const up = calls[1];
-    assert.deepEqual(up.slice(0, 3), ['/fake/dsh', 'plugin', '--profile']);
-    assert.equal(up[4], 'up');
-    assert.match(up[5], new RegExp(`^${AGGREGATE}@\\d+\\.\\d+\\.\\d+$`));
-    assert.ok(!calls.some((c) => c.includes('remove') && c.includes(AGGREGATE)), '聚合包绝不 remove');
-    assert.ok(calls.some((c) => c.includes('remove') && c.includes(SIDEBAR)), 'NO_SIDEBAR 配置需在升级后保持关闭');
+    const add = calls[1];
+    assert.equal(add[4], 'add');
+    assert.equal(add[5], `${PACKAGE}@0.5.0`);
+    const rmIdx = calls.findIndex((c) => c[4] === 'remove');
+    const addIdx = calls.findIndex((c) => c[4] === 'add');
+    assert.ok(addIdx >= 0 && rmIdx > addIdx, '先 add 新包再 remove 旧包');
+    assert.ok(calls.some((c) => c.includes('remove') && c.includes('dsh-ccpg-one')), '老聚合包被移除');
+    assert.ok(!depsState.has('dsh-ccpg-one'), '迁移后依赖表无老包');
+    assert.ok(depsState.has(PACKAGE), '迁移后依赖表有新包');
+    assert.ok(calls.some((c) => c.includes('remove') && c.includes(SIDEBAR)), 'NO_SIDEBAR 配置需在迁移后保持关闭');
+  });
+
+  await test('executePlan：新包在场走 up 原地更新，不触发迁移', async () => {
+    const root2 = mkdtempSync(join(tmpdir(), 'ccpg-sysupd-new-'));
+    try {
+      const pdir = join(root2, 'p-new');
+      mkdirSync(join(pdir, 'node_modules', PACKAGE, 'bin'), { recursive: true });
+      writeFileSync(join(pdir, 'node_modules', PACKAGE, 'bin', 'install.js'), '// fixture\n');
+      writeFileSync(join(pdir, 'package.json'), JSON.stringify({
+        name: 'dsh-profile-p-new',
+        dependencies: { [PACKAGE]: '0.5.0' },
+        dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', PACKAGE] } },
+      }));
+      const report = collectInstallReport({ profilesRoot: root2 });
+      const plan = planUpgrade(report);
+      assert.equal(plan.actions[0].type, 'npm-reinstall');
+      assert.match(plan.actions[0].title, /更新/);
+      const calls = [];
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '0.5.1' } }) });
+      try {
+        await executePlan(plan, {
+          dshBin: '/fake/dsh',
+          runCmd: async (cmd, args) => { calls.push([cmd, ...args]); return { ok: true, out: '', err: null }; },
+        });
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+      const up = calls.find((c) => c[4] === 'up');
+      assert.ok(up, '在装用户用 up 原地更新');
+      assert.equal(up[5], `${PACKAGE}@0.5.1`);
+      assert.ok(!calls.some((c) => c[4] === 'remove' && c[5] !== SIDEBAR), 'up 路径不 remove 任何套件包');
+    } finally {
+      rmSync(root2, { recursive: true, force: true });
+    }
+  });
+
+  await test('executePlan：迁移中途 add 失败则保留老包（可重试）', async () => {
+    const report = collectInstallReport({ profilesRoot: profilesDir });
+    const npmProfile = report.find((p) => p.name === 'p-npm');
+    const calls = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '0.5.0' } }) });
+    try {
+      const log = await executePlan(planUpgrade([npmProfile]), {
+        dshBin: '/fake/dsh',
+        runCmd: async (cmd, args) => {
+          calls.push([cmd, ...args]);
+          if (cmd === '/fake/dsh' && args[3] === 'add') return { ok: false, out: 'ERR_PNPM_NET', err: null };
+          return { ok: true, out: '', err: null };
+        },
+      });
+      assert.ok(log.some((l) => l.includes('旧安装未动')), '失败提示老包未动');
+      assert.ok(!calls.some((c) => c[3] === 'remove'), 'add 失败不 remove 任何包');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   await test('compareSemver 数字段比较、容忍前缀与缺参', () => {
