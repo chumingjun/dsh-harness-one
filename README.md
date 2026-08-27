@@ -123,6 +123,8 @@ Workflow One 嵌在 dsh 官方界面中，推荐从 AI 对话开始创建复杂�
 - 运行：`workflow_run`（异步返回 runId）/ `workflow_run_cancel`（按 runId、工作流或 all 批量）
 - 管理：`workflow_patch`（原子改图+可选改名，正打开的画布实时同步）/ `workflow_create` / `workflow_delete`（confirm 门 + live/webhook/定时关联守卫）/ `workflow_open`（把绑定画布切到指定工作流，SSE 联动）
 
+**workflow-one 技能**（orchestrator 种子到 dsh 原生技能根，同 feishu-cli 先例）：官方 `/` 菜单自动列出 `workflow-one`，选中即注入使用指南，模型按指南调上述工具干活；官方聊天 agent 与画布 agent 共用。
+
 ## 飞书
 
 - **账号登录**：官方 dsh Web UI 设置面板「飞书账号」扫码（lark-cli Device Flow，token 由 CLI 自管零落盘）；user token 后台自动续约（refresh 轮换，授权长期有效）

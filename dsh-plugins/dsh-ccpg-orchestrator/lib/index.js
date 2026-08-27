@@ -60,6 +60,7 @@ import { WorkflowSqliteStore } from './sqlite-store.js';
 import {
   canvasAssistantPersona, checkPatchResult, summarizeGraphForAI, validateGraphOps,
 } from './assistant.js';
+import { ensureWorkflowSkill } from './skill-seed.js';
 import {
   assertNonSensitiveVariableDefinitions, assertSafeContextObject, GlobalVariableStore, VariableStoreError,
   variableDefinitionsToValues,
@@ -109,6 +110,7 @@ const workspaceContext = new AsyncLocalStorage();
 
 export function apply(ctx, config) {
   ctxRef = ctx; // replayTrace 需要在路由 handler 里拿到 ctx.sessionPersistence
+  ensureWorkflowSkill({ log: (msg) => ctx.logger?.info?.(`[orchestrator] ${msg}`) }); // / 菜单入口：workflow-one 技能种子
   const stores = new Map();
   const publicHooks = new Map();
   const notificationChannels = new NotificationChannelRegistry();
