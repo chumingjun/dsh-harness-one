@@ -135,20 +135,31 @@ window.__ModuleLoader__.load({
 			var loggedIn = u.tokenStatus === "valid";
 			var needsRefresh = u.userName && u.tokenStatus !== "valid";
 			var renew = status.autoRenew || {};
-			var renewText = renew.lastAt
-				? " · 自动续约 " + String(renew.lastAt).slice(11, 19) +
-					(renew.lastResult === "renewed" ? " ✓" : renew.lastResult === "fresh" ? "（有效）" : renew.lastResult ? "（" + renew.lastResult + "）" : "")
+			// 用户视角三件事：我是谁 / 授权是否正常 / 凭证何时续期。
+			// 应用 ID、bot 状态这类运维字段不再铺在面上（排障走接口）。
+			var renewSuffix = renew.lastResult === "renewed"
+				? " ✓"
+				: renew.lastResult === "fresh" ? "" : renew.lastResult ? "（" + renew.lastResult + "）" : "";
+			var renewalLine = loggedIn && u.expiresAt
+				? "凭证自动续期：当前至 " + fmtWhen(u.expiresAt) +
+					(renew.lastAt ? "，上次续期 " + fmtWhen(renew.lastAt) + renewSuffix : "")
 				: "";
+			// 技术明细挂 title 悬浮提示，界面上不再占一行
+			var techLine = "App " + (status.appId || "-") + " · 默认身份 " + (status.defaultIdentity || "-") +
+				" · bot " + ((status.bot && status.bot.status) || "-");
 
 			return react.createElement("div", { style: S.wrap },
-				react.createElement("div", { style: S.stateRow },
+				react.createElement("div", {
+					style: S.stateRow,
+					title: loggedIn || status.appId ? techLine : undefined,
+				},
 					react.createElement("span", { className: dotClass(status) }),
 					react.createElement("strong", null, u.userName || "未登录飞书账号"),
 					u.userName ? react.createElement("span", { style: S.muted },
-						u.tokenStatus === "valid" ? "（已授权，agent 默认以用户身份执行，token 自动续约）" : "（token 需刷新，重新扫码即可）") : null),
-				react.createElement("div", { style: S.meta },
-					"App " + (status.appId || "-") + " · 默认身份 " + (status.defaultIdentity || "-") + " · bot " + ((status.bot && status.bot.status) || "-") +
-					(u.expiresAt ? " · user token 至 " + String(u.expiresAt).slice(11, 16) : "") + renewText),
+						loggedIn ? "已登录 · agent 会以你的身份执行飞书操作" : "登录已过期，重新扫码即可") : null),
+				renewalLine
+					? react.createElement("div", { style: S.meta }, renewalLine)
+					: null,
 				react.createElement("div", { style: S.actions },
 					loggedIn
 						? react.createElement("button", { style: S.btn, onClick: logout, disabled: busy }, "退出登录")
@@ -254,6 +265,18 @@ window.__ModuleLoader__.load({
 				wide ? react.createElement("span", null, label) : null);
 		}
 
+		// ISO → 「今天 HH:MM」/「M月D日 HH:MM」/「YYYY年M月D日 HH:MM」（跨天才有意义，
+		// 之前 slice(11,16) 只剩时分，隔天续约/token 到期看不出是哪天）
+		function fmtWhen(iso) {
+			if (!iso) return "";
+			var d = new Date(iso);
+			if (isNaN(d.getTime())) return String(iso);
+			var hm = ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+			var now = new Date();
+			if (d.getFullYear() !== now.getFullYear()) return d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() + "日 " + hm;
+			if (d.toDateString() === now.toDateString()) return "今天 " + hm;
+			return d.getMonth() + 1 + "月" + d.getDate() + "日 " + hm;
+		}
 		// ---- 设置导航图标注入 ----
 		// 官方 ui-settings-general 的 navIcon 是编译期写死的 id→图标映射，第三方 section
 		// 统一回退齿轮且无扩展口（SlotMap 只有 id/order/label）。DOM 最小补丁：定位文本
