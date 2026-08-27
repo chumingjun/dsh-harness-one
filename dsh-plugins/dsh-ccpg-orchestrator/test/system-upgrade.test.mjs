@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -52,6 +52,11 @@ console.log('system-upgrade tests:');
     dependencies: { [AGGREGATE]: '0.3.0', [SIDEBAR]: '^0.15.2' },
     dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } },
   }));
+  // p-residue：remove 中断后依赖表和实体都没了，但 .bin 留下悬空软链。
+  const residueDir = join(profilesDir, 'p-residue');
+  mkdirSync(join(residueDir, 'node_modules', '.bin'), { recursive: true });
+  writeFileSync(join(residueDir, 'package.json'), JSON.stringify({ name: 'dsh-profile-p-residue' }));
+  symlinkSync('../../nowhere', join(residueDir, 'node_modules', '.bin', AGGREGATE));
   // p-src：link 进 git 仓库
   mkdirSync(join(profilesDir, 'p-src'), { recursive: true });
   writeFileSync(join(profilesDir, 'p-src', 'package.json'), JSON.stringify({
@@ -73,7 +78,7 @@ console.log('system-upgrade tests:');
   await test('来源探测：三种形态逐包分类、无关 profile 排除', () => {
     const report = collectInstallReport({ profilesRoot: profilesDir });
     const byName = new Map(report.map((p) => [p.name, p]));
-    assert.deepEqual([...byName.keys()].sort(), ['p-npm', 'p-rel', 'p-src']);
+    assert.deepEqual([...byName.keys()].sort(), ['p-npm', 'p-rel', 'p-residue', 'p-src']);
 
     assert.equal(gitRootOf(join(srcRepo, 'dsh-plugins')), srcRepo);
     assert.equal(gitRootOf(join(releaseTree)), null);
@@ -163,7 +168,39 @@ console.log('system-upgrade tests:');
     assert.ok(log.some((l) => l.includes('画布双构建完成')));
   });
 
-  await test('executePlan：npm 路径 remove→install.js→按先前配置补移 sidebar', async () => {
+  await test('planner：残局（.bin 残留但依赖表空）同样产出重装动作', () => {
+    const report = collectInstallReport({ profilesRoot: profilesDir });
+    const residue = report.find((p) => p.name === 'p-residue');
+    assert.ok(residue);
+    assert.equal(residue.packages[0].name, AGGREGATE);
+    assert.equal(residue.packages[0].broken, true);
+    const plan = planUpgrade([residue]);
+    assert.equal(plan.actions[0].type, 'npm-reinstall');
+    assert.equal(plan.actions[0].installerDir, null);
+    assert.equal(plan.actions[0].keepSidebarRemoved, true);
+    assert.match(plan.actions[0].title, /修复|重装/);
+  });
+
+  await test('executePlan：残局依赖表为空时使用 add 重新落表', async () => {
+    const report = collectInstallReport({ profilesRoot: profilesDir });
+    const residue = report.find((p) => p.name === 'p-residue');
+    const calls = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '0.4.0' } }) });
+    try {
+      await executePlan(planUpgrade([residue]), {
+        dshBin: '/fake/dsh',
+        runCmd: async (cmd, args) => { calls.push([cmd, ...args]); return { ok: true, out: '', err: null }; },
+      });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    assert.deepEqual(calls[0].slice(0, 5), ['/fake/dsh', 'plugin', '--profile', 'p-residue', 'add']);
+    assert.equal(calls[0][5], `${AGGREGATE}@0.4.0`);
+    assert.ok(!calls.some((c) => c.includes('remove') && c.includes(AGGREGATE)), '残局修复不先 remove 聚合包');
+  });
+
+  await test('executePlan：npm 路径 prewrite→up latest 原地更新，全程无 remove', async () => {
     const report = collectInstallReport({ profilesRoot: profilesDir });
     const npmProfile = report.find((p) => p.name === 'p-npm');
     const calls = [];
@@ -171,11 +208,17 @@ console.log('system-upgrade tests:');
       dshBin: '/fake/dsh',
       runCmd: async (cmd, args) => { calls.push([cmd, ...args]); return { ok: true, out: '', err: null }; },
     });
-    assert.ok(calls[0].join(' ').includes(`remove ${AGGREGATE}`));
-    assert.equal(calls[1][0], process.execPath);
-    assert.equal(calls[1][1], join(npmOneDir, 'bin', 'install.js'));
-    assert.equal(calls[1][2], 'p-npm');
-    assert.ok(calls[2].join(' ').includes(`remove ${SIDEBAR}`), 'bundles 无 sidebar ⇒ 升级后补移');
+    const prewrite = calls[0];
+    assert.equal(prewrite[0], process.execPath);
+    assert.equal(prewrite[1], join(npmOneDir, 'bin', 'install.js'));
+    assert.equal(prewrite[2], 'p-npm');
+    assert.equal(prewrite[3], '--prewrite');
+    const up = calls[1];
+    assert.deepEqual(up.slice(0, 3), ['/fake/dsh', 'plugin', '--profile']);
+    assert.equal(up[4], 'up');
+    assert.match(up[5], new RegExp(`^${AGGREGATE}@\\d+\\.\\d+\\.\\d+$`));
+    assert.ok(!calls.some((c) => c.includes('remove') && c.includes(AGGREGATE)), '聚合包绝不 remove');
+    assert.ok(calls.some((c) => c.includes('remove') && c.includes(SIDEBAR)), 'NO_SIDEBAR 配置需在升级后保持关闭');
   });
 
   await test('compareSemver 数字段比较、容忍前缀与缺参', () => {
