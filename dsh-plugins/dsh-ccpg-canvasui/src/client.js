@@ -989,7 +989,9 @@ window.__ModuleLoader__.load({
           ) : null,
         ),
         profile.packages.map(function (p) {
-          return VersionRow(p.name, p.version || p.spec, sourceMeta(p));
+          // link 目标缺版本时用占位符（整条 link: 路径太长不可读）
+          var shown = p.version || (p.kind === "registry" ? p.spec : "—");
+          return VersionRow(p.name, shown, sourceMeta(p));
         }),
       );
     }
@@ -1140,6 +1142,14 @@ window.__ModuleLoader__.load({
     function startSettingsNavIcon(labelText, svgMarkup) {
       // 非 DOM 宿主（单测加载 bundle）直接跳过
       if (typeof document === "undefined" || typeof MutationObserver === "undefined") return;
+      // 官方行内的回退齿轮不删除（React 自己的节点）——纯 CSS 隐藏，避免 reconcile 冲突
+      if (!document.getElementById("ccpg-nav-icon-style")) {
+        var styleEl = document.createElement("style");
+        styleEl.id = "ccpg-nav-icon-style";
+        styleEl.textContent =
+          'button[' + NAV_ICON_MARK + '="seen"] > svg:first-of-type { display:none !important; }';
+        document.head.appendChild(styleEl);
+      }
       var scheduled = false;
       var scan = function () {
         scheduled = false;
