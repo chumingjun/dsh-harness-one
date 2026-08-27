@@ -49,3 +49,6 @@ dsh-plugins/vendor/
 .codegraph/
 # ZCode CLI 会话本地目录（计划/状态，绝不提交）
 .zcode/
+
+# 单包装配产物（assemble-one.sh 生成，不入库）
+dsh-plugins/dsh-harness-one/

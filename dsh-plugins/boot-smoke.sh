@@ -37,8 +37,11 @@ if ! ( cd "$SMOKE_ROOT" && DSH_HOME="$DSH_HOME" sh dsh-plugins/setup.sh --one "$
   exit 1
 fi
 
-# 安装结果断言：聚合包 node_modules 里 better-sidebar 实体在场（vendor 件被真正消费）
-BS_DIR="$SMOKE_ROOT/dsh-plugins/dsh-ccpg-one/node_modules/dsh-better-sidebar"
+# 安装结果断言：单包在 profile bundles 层（reconcile 后）
+ONE_DIR="$DSH_HOME/profiles/$PROFILE/node_modules/dsh-harness-one"
+[ -f "$ONE_DIR/package.json" ] || { echo "✗ dsh-harness-one 未装入 profile"; exit 1; }
+# better-sidebar 经单独 add 注册（vendor 件被真正消费）
+BS_DIR="$DSH_HOME/profiles/$PROFILE/node_modules/dsh-better-sidebar"
 [ -f "$BS_DIR/package.json" ] || { echo "✗ better-sidebar 未装入聚合包"; exit 1; }
 BS_VER=$(node -e "console.log(require(process.argv[1]).version)" "$BS_DIR/package.json")
 echo "✓ better-sidebar 装入: $BS_VER"

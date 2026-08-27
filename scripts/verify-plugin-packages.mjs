@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const pluginsDir = join(root, 'dsh-plugins');
-const packages = [
+
+// ---- 源码包契约：子插件目录仍是发布单元的源（assemble-one.sh 装配进单包）----
+const sources = [
   'dsh-ccpg-tools',
   'dsh-ccpg-orchestrator',
   'dsh-ccpg-web',
@@ -14,7 +16,6 @@ const packages = [
   'dsh-ccpg-document-preview',
   'dsh-ccpg-larkauth',
   'dsh-ccpg-llm-guard',
-  'dsh-ccpg-one',
   'dsh-ccpg-brand',
 ];
 const required = {
@@ -25,42 +26,58 @@ const required = {
   'dsh-ccpg-brand': ['assets/logo.png', 'assets/icon.svg'],
 };
 
-for (const name of packages) {
+for (const name of sources) {
   const dir = join(pluginsDir, name);
   const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
   assert.equal(pkg.name, name);
   assert.equal(pkg.private, false, `${name} must be publishable`);
   assert.equal(pkg.license, 'MIT');
   assert.equal(pkg.repository?.directory, `dsh-plugins/${name}`);
-  assert.equal(pkg.engines?.node, ['dsh-ccpg-orchestrator', 'dsh-ccpg-one'].includes(name) ? '>=22.15.0' : '>=20');
+  assert.equal(pkg.engines?.node, name === 'dsh-ccpg-orchestrator' ? '>=22.15.0' : '>=20');
   assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml');
-
-  // 聚合包的最终 bundle 由 publish-npm.sh 在干净 staging 中逐项校验；
-  // 源码目录可能有 pnpm node_modules，直接 dry-run 会错误枚举整个依赖树。
-  if (name === 'dsh-ccpg-one') {
-    console.log(`✓ ${name}: aggregate manifest`);
-    continue;
+  for (const path of required[name] || []) {
+    assert(existsSync(join(dir, path)), `${name} is missing ${path}`);
   }
-
-  const packed = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--ignore-scripts', '--json'], {
-    cwd: dir,
-    encoding: 'utf8',
-  }));
-  const report = Array.isArray(packed) ? packed[0] : Object.values(packed)[0];
-  const files = new Set(report.files.map((file) => file.path));
-  for (const path of ['LICENSE', 'cordis.patch.yml', ...(required[name] || [])]) {
-    assert(files.has(path), `${name} package is missing ${path}`);
-  }
-  console.log(`✓ ${name}: ${files.size} files`);
+  console.log(`✓ ${name}: source contract`);
 }
 
-const aggregate = JSON.parse(readFileSync(join(pluginsDir, 'dsh-ccpg-one', 'package.json'), 'utf8'));
-const aggregatePackages = packages.filter((name) => name !== 'dsh-ccpg-one' && name !== 'dsh-ccpg-brand');
-// 8 包发布模式：子插件独立上 registry，聚合壳以普通依赖引用（裸包名挂载要求 profile 根可解析）。
-assert.equal(aggregate.bundleDependencies, undefined, 'aggregate must not bundleDependencies (sub-plugins are standalone registry packages)');
-for (const name of aggregatePackages) {
-  assert.equal(aggregate.dependencies[name], aggregate.version, `${name} must match aggregate version`);
+// ---- 单包契约（dsh-harness-one，装配产物）----
+const one = join(pluginsDir, 'dsh-harness-one');
+assert(existsSync(join(one, 'package.json')), 'dsh-harness-one 未装配（先 sh assemble-one.sh）');
+const onePkg = JSON.parse(readFileSync(join(one, 'package.json'), 'utf8'));
+const trainVersion = JSON.parse(readFileSync(join(pluginsDir, 'dsh-ccpg-one', 'package.json'), 'utf8')).version;
+assert.equal(onePkg.name, 'dsh-harness-one');
+assert.equal(onePkg.version, trainVersion, '单包版本必须与 dsh-ccpg-one 版本列车对齐');
+assert.equal(onePkg.private, false);
+assert.equal(onePkg.license, 'MIT');
+assert.equal(onePkg.engines?.node, '>=22.15.0');
+assert.equal(onePkg.dsh?.bundle?.patch, './cordis.patch.yml');
+assert.equal(onePkg.dsh?.client?.platform, 'web');
+assert.equal(onePkg.exports?.['./client'], './lib/client.js');
+assert.equal(onePkg.exports?.['./package.json'], './package.json', 'client-modules 按 <pkg>/package.json 解析，exports 必须暴露');
+assert.match(onePkg.dependencies['dsh-better-sidebar'], /^\d+\.\d+\.\d+$/);
+for (const dep of ['ajv', 'cron-parser', 'quickjs-emscripten']) {
+  assert(onePkg.dependencies[dep], `runtime dep ${dep} must be declared (npm pack ships no node_modules)`);
 }
-assert.match(aggregate.dependencies['dsh-better-sidebar'], /^\d+\.\d+\.\d+$/);
-assert(!Object.values(aggregate.dependencies).some((version) => String(version).startsWith('file:')));
+assert(!Object.keys(onePkg.dependencies).some((name) => name.startsWith('dsh-ccpg-')), '单包不得再依赖老 8 包');
+
+const packed = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--ignore-scripts', '--json'], {
+  cwd: one, encoding: 'utf8',
+}));
+const report = Array.isArray(packed) ? packed[0] : Object.values(packed)[0];
+const files = new Set(report.files.map((file) => file.path));
+for (const path of [
+  'LICENSE', 'cordis.patch.yml', 'lib/index.js', 'lib/client.js',
+  'dsh-ccpg-web/web-dist/index.html',
+  'dsh-ccpg-canvasui/lib/client.js',
+  'dsh-ccpg-document-preview/dist/client.js',
+]) {
+  assert(files.has(path), `dsh-harness-one package is missing ${path}`);
+}
+// 合并 client 必须含 3 个 __ModuleLoader__ 工厂注册（canvasui/larkauth/preview）
+const clientText = readFileSync(join(one, 'lib', 'client.js'), 'utf8');
+const loads = (clientText.match(/window\.__ModuleLoader__\.load\s*\(/g) || []).length;
+assert.equal(loads, 3, `merged client must register 3 factories, got ${loads}`);
+console.log(`✓ dsh-harness-one: ${files.size} files (merged client: 3 factories)`);
+
 console.log('plugin package contracts: ok');

@@ -50,5 +50,10 @@ jobs:
         env:
           DSH_NODE: node # Workflow One 用 node:sqlite，要求 ≥22.15.0；CI 里就是 node 本身
 
+      - name: assemble single package
+        run: sh dsh-plugins/assemble-one.sh
+        env:
+          DSH_NODE: node
+
       - name: verify npm packages
         run: node scripts/verify-plugin-packages.mjs

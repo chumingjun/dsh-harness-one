@@ -29,6 +29,19 @@ PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh
 # vendor/（不入库），自动走 registry。
 SIDEBAR_VER=$("$NODE_BIN" -e "console.log(require(process.argv[1]).dependencies['dsh-better-sidebar'] || '')" "$HERE/dsh-ccpg-one/package.json")
 [ -n "$SIDEBAR_VER" ] || { echo "✗ dsh-ccpg-one 未声明 dsh-better-sidebar 精确依赖"; exit 1; }
+# 单包装配（--one 用）：产物不入库，这里现装；旧产物存在也重建（防源码漂移）。
+# 离线归档里装配目录已带依赖实体，assemble 会整目录重建——装配后按 pack.sh 同款
+# 逻辑回填 ajv/cron-parser/quickjs 实体（源：解包树自带的 orchestrator 依赖或
+# 装机现场 npm install 的产物）。
+if [ "$AGGREGATE" = 1 ]; then
+  sh "$HERE/assemble-one.sh" || { echo "✗ 单包装配失败"; exit 1; }
+  ONE_NM="$HERE/dsh-harness-one/node_modules"
+  rm -rf "$ONE_NM"; mkdir -p "$ONE_NM"
+  for dep in ajv cron-parser quickjs-emscripten fast-deep-equal fast-uri json-schema-traverse require-from-string luxon @jitl; do
+    [ -d "$HERE/dsh-ccpg-orchestrator/node_modules/$dep" ] \
+      && cp -R "$HERE/dsh-ccpg-orchestrator/node_modules/$dep" "$ONE_NM/$dep"
+  done
+fi
 SIDEBAR_TGZ=""
 for f in "$HERE"/vendor/dsh-better-sidebar-*.tgz; do
   [ -f "$f" ] && SIDEBAR_TGZ="$f"
@@ -48,8 +61,8 @@ for pkg in $PLUGINS; do
     "$HERE/$pkg/package.json" "$pkg" || exit 1
 done
 if [ "$AGGREGATE" = 1 ]; then
-  [ -f "$HERE/dsh-ccpg-one/cordis.patch.yml" ] || { echo "✗ 聚合包缺失: dsh-ccpg-one/cordis.patch.yml"; exit 1; }
-  "$NODE_BIN" -e "const p=require('$HERE/dsh-ccpg-one/package.json'); if(!p.dsh?.bundle?.patch) throw new Error('dsh-ccpg-one 缺 dsh.bundle.patch')" || exit 1
+  [ -f "$HERE/dsh-harness-one/cordis.patch.yml" ] || { echo "✗ 单包缺失: dsh-harness-one/cordis.patch.yml"; exit 1; }
+  "$NODE_BIN" -e "const p=require('$HERE/dsh-harness-one/package.json'); if(!p.dsh?.bundle?.patch) throw new Error('dsh-harness-one 缺 dsh.bundle.patch')" || exit 1
 fi
 
 # orchestrator 真实依赖（含 QuickJS WASM）：源码安装与分发包都由脚本兜底，用户无需手动 npm install。
@@ -132,42 +145,18 @@ cd "$PDIR"
 PLUGIN_LOG=$(mktemp "${TMPDIR:-/tmp}/dsh-ccpg-plugin-add.XXXXXX")
 trap 'rm -f "$PLUGIN_LOG"' EXIT HUP INT TERM
 if [ "$AGGREGATE" = 1 ]; then
-  # ---- 聚合安装：只 add dsh-ccpg-one（七插件 + better-sidebar 全由它的 bundle patch 挂载）----
-  # 先装聚合包依赖（workspace overrides 把七插件实体指向同级源码目录并钉 SDK 版本，
-  # 见 dsh-ccpg-one/pnpm-workspace.yaml——registry latest 停 0.0.1-rc.1，0.1.x 只在 next tag）。
-  # better-sidebar：vendor tgz 在场则临时注入 file: override（npm 不可达也能装），
-  # pnpm install 完成后（无论成败）移除——workspace yaml 不留本机路径残留。
-  WS_YML="$HERE/dsh-ccpg-one/pnpm-workspace.yaml"
-  rm_vendor_ov() {
-    [ -f "$WS_YML" ] || return 0
-    # 只删真正注入的 override 行（行首缩进+键名开头）；裸匹配 "file: 会连注释行一起吃掉
-    sed -i.bak '/^[[:space:]]*"dsh-better-sidebar": "file:/d' "$WS_YML" && rm -f "$WS_YML.bak"
-  }
-  if [ -n "$SIDEBAR_TGZ" ]; then
-    sed -i.bak "/^overrides:/a\\
-  \"dsh-better-sidebar\": \"file:$SIDEBAR_TGZ\"
-" "$WS_YML" && rm -f "$WS_YML.bak"
-  fi
-  if ! (cd "$HERE/dsh-ccpg-one" && pnpm install --no-frozen-lockfile); then
-    rm_vendor_ov
-    echo "✗ dsh-ccpg-one 依赖安装失败（在该目录跑 pnpm install 看详情）"
-    exit 1
-  fi
-  rm_vendor_ov
-  # better-sidebar 是聚合包直接依赖，不单独 add——聚合 patch 已挂它，双 add 会 duplicate id。
-  # pnpm 11 预放行（issue #24）：node-pty（better-sidebar 传递依赖）原生构建被 strict-dep-builds
-  # 拦截会让 add 非零退出且写坏 pnpm-workspace.yaml 占位符——复用包内安装入口的预写（幂等）。
-  "$NODE_BIN" "$HERE/dsh-ccpg-one/bin/install.js" "$PROFILE" --prewrite
-  if ! "$NODE_BIN" "$DSH_BIN" plugin --profile "$PROFILE" add "$HERE/dsh-ccpg-one" >"$PLUGIN_LOG" 2>&1; then
+  # ---- 单包安装：只 add dsh-harness-one（7 插件合一，assemble-one.sh 已在头部装配）----
+  # pnpm 11 预放行（issue #24）：node-pty（better-sidebar 传递依赖）原生构建被
+  # strict-dep-builds 拦截会让 add 非零退出——复用包内安装入口的预写（幂等）。
+  "$NODE_BIN" "$HERE/dsh-harness-one/bin/install.js" "$PROFILE" --prewrite
+  if ! "$NODE_BIN" "$DSH_BIN" plugin --profile "$PROFILE" add "$HERE/dsh-harness-one" >"$PLUGIN_LOG" 2>&1; then
     cat "$PLUGIN_LOG" >&2
-    echo "✗ 聚合包安装失败（pnpm 11 用户可改用: npx dsh-ccpg-one $PROFILE，自带放行预写）"
+    echo "✗ 单包安装失败（pnpm 11 用户可改用: npx dsh-harness-one $PROFILE，自带放行预写）"
     exit 1
   fi
   cat "$PLUGIN_LOG"
-  # 聚合 patch 已不 insert better-sidebar（挂载归上游包自己的 bundle 层，单点挂载），
-  # link: 安装又不会触发依赖包的 bundle 注册——必须单独 add 让它进 dsh.profile.bundles。
-  # pnpm 依赖去重：聚合包已声明同版本，此处 add 只做 bundle 注册不引入第二实体。
-  # （boot-smoke.sh 断言官方 UI 加载 better-sidebar/client.js，缺这步会直接挂。）
+  # better-sidebar 单独 add 注册 bundle 层（link: 安装不触发依赖包注册；npm 渠道 pnpm 会放，
+  # 依赖去重后此处只做 bundle 注册不引入第二实体——boot-smoke.sh 断言其 client.js 挂载）。
   if ! "$NODE_BIN" "$DSH_BIN" plugin --profile "$PROFILE" add "$SIDEBAR_SRC" >"$PLUGIN_LOG" 2>&1; then
     cat "$PLUGIN_LOG" >&2
     echo "⚠ better-sidebar bundle 注册失败（官方 UI 工作流侧栏不可用；可稍后手动：dsh plugin --profile $PROFILE add $SIDEBAR_SRC）"
@@ -175,15 +164,18 @@ if [ "$AGGREGATE" = 1 ]; then
     cat "$PLUGIN_LOG"
     echo "✓ dsh-better-sidebar 已注册进 bundles（侧边栏工作台 + 工作流画布）"
   fi
-  # link: 安装时聚合包实体留在源码目录，loader 从 profile 根解析不到聚合 patch 挂载的
-  # 子插件/better-sidebar——补链进 profile node_modules（npm 渠道 pnpm 会放实体，无需此步）。
-  for pkg in $PLUGINS dsh-better-sidebar; do
-    if [ ! -e "$PDIR/node_modules/$pkg" ]; then
-      if [ "$pkg" = dsh-better-sidebar ]; then
-        ln -s "$HERE/dsh-ccpg-one/node_modules/$pkg" "$PDIR/node_modules/$pkg" 2>/dev/null || true
-      else
-        ln -s "$HERE/$pkg" "$PDIR/node_modules/$pkg"
-      fi
+  # link: 安装时单包实体留在装配目录，profile pnpm 不装其声明依赖。
+  # pnpm/npm 在含 link: 依赖表的目录里都装不动——改用相对软链：装配目录若带实体
+  # （离线归档经 rsync 拷贝实体）直接链；否则链源码 orchestrator 的依赖（本机安装）。
+  # npm 渠道安装（registry）会自动解析依赖，无需此步。
+  ORCH_DEPS="$HERE/dsh-ccpg-orchestrator/node_modules"
+  ONE_NM="$HERE/dsh-harness-one/node_modules"
+  for dep in ajv cron-parser quickjs-emscripten fast-deep-equal fast-uri json-schema-traverse require-from-string luxon @jitl; do
+    [ -e "$PDIR/node_modules/$dep" ] && continue
+    if [ -d "$ONE_NM/$dep" ]; then
+      ln -s "$ONE_NM/$dep" "$PDIR/node_modules/$dep" 2>/dev/null || true
+    elif [ -d "$ORCH_DEPS/$dep" ]; then
+      ln -s "$ORCH_DEPS/$dep" "$PDIR/node_modules/$dep" 2>/dev/null || true
     fi
   done
 else
@@ -206,7 +198,9 @@ echo "✓ 插件已安装"
 # 3. 依赖引导（SDK 软链进插件源码目录 + profile 兜底）
 sh "$HERE/bootstrap-deps.sh" "$PDIR" >/dev/null
 SDK_DIR=$("$NODE_BIN" -e "console.log(require('path').dirname(require('path').dirname(process.argv[1])) + '/node_modules/@deepseek-ai')" "$DSH_BIN")
-for pkg in $PLUGINS; do
+LINK_ROOTS="$PLUGINS"
+[ "$AGGREGATE" = 1 ] && LINK_ROOTS="$PLUGINS dsh-harness-one/dsh-ccpg-tools dsh-harness-one/dsh-ccpg-orchestrator dsh-harness-one/dsh-ccpg-web dsh-harness-one/dsh-ccpg-canvasui dsh-harness-one/dsh-ccpg-document-preview dsh-harness-one/dsh-ccpg-larkauth dsh-harness-one/dsh-ccpg-llm-guard"
+for pkg in $LINK_ROOTS; do
   mkdir -p "$HERE/$pkg/node_modules/@deepseek-ai"
   for dep in schemastery cordis dsh-tools dsh-llm dsh-session; do
     [ -d "$SDK_DIR/$dep" ] || continue

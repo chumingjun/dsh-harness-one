@@ -1,6 +1,6 @@
 {
   "name": "dsh-ccpg-brand",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "private": false,
   "type": "module",
   "main": "lib/index.js",
