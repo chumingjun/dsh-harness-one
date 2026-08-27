@@ -15,6 +15,6 @@ Harassment, discrimination, threats, deliberate disruption, doxxing, and publish
 
 ## Enforcement
 
-Report conduct concerns privately through [GitHub's repository contact channel](https://github.com/chumingjun/harness-one/security/advisories/new). Maintainers may edit or remove contributions and temporarily or permanently restrict participation when necessary to protect the community.
+Report conduct concerns privately through [GitHub's repository contact channel](https://github.com/chumingjun/dsh-harness-one/security/advisories/new). Maintainers may edit or remove contributions and temporarily or permanently restrict participation when necessary to protect the community.
 
 This policy applies to repository Issues, Pull Requests, Discussions, and other spaces where someone represents the project.

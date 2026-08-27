@@ -35,7 +35,7 @@ Desktop 不要运行 `setup.sh`：它用于普通 dsh，会创建/修改 profile
 
 ```sh
 # 1. 下载 release 包（GitHub Releases 页拿最新 tag 的 asset）
-curl -LO https://github.com/chumingjun/harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
+curl -LO https://github.com/chumingjun/dsh-harness-one/releases/download/<tag>/dsh-ccpg-plugins-<tag>.tar.gz
 tar -xzf dsh-ccpg-plugins-<tag>.tar.gz   # 解出 dsh-plugins/ 目录（自带全部构建产物 + vendor 件）
 
 # 2. 一键安装（聚合模式：一个包装齐 7 插件 + better-sidebar，并建好独立 profile）
@@ -89,7 +89,7 @@ npm 渠道等价命令行（无需源码）：重跑一次 `npx dsh-ccpg-one <pr
 ### B. 开发者 · 源码（本仓库）
 
 ```sh
-git clone https://github.com/chumingjun/harness-one.git
+git clone https://github.com/chumingjun/dsh-harness-one.git
 cd harness-one/dsh-plugins
 
 npm test                                # （可选）先跑全量单测

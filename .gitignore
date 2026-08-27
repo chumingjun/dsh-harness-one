@@ -47,3 +47,5 @@ dsh-plugins/dsh-ccpg-one/pnpm-lock.yaml
 dsh-plugins/vendor/
 .playwright-mcp/
 .codegraph/
+# ZCode CLI 会话本地目录（计划/状态，绝不提交）
+.zcode/
