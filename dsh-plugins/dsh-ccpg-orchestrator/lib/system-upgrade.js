@@ -7,7 +7,7 @@
 // 不做业务判断——动作合法性全部在 planner 定型。
 
 import { execFile } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
@@ -92,6 +92,15 @@ export function collectInstallReport({ profilesRoot: root = profilesRoot() } = {
         packages.push({ name: pkg, kind: 'registry', spec, version: spec.replace(/^[^\d]*/, '') || null });
       }
     }
+    // 残局探测：升级中断的 profile 被 dsh plugin remove 全量回收——依赖表与
+    // bundles 都不再挂聚合包，但 node_modules/.bin/dsh-ccpg-one 链接残留（悬空
+    // 软链，existsSync 会跟链判 false，须 lstat 看链接本身）。以它为「曾装过」
+    // 信号标记空壳，planner 走 up 自愈重装。
+    if (!packages.length) {
+      let binResidue = false;
+      try { binResidue = lstatSync(join(path, 'node_modules', '.bin', AGGREGATE)).isSymbolicLink(); } catch { /* 无残留 */ }
+      if (binResidue) packages.push({ name: AGGREGATE, kind: 'registry', spec: 'latest', version: null, broken: true });
+    }
     if (packages.length) report.push({ name, path, packages });
   }
   return report;
@@ -134,24 +143,25 @@ export function planUpgrade(report) {
         break;
       }
     }
-    // ---- npm 安装：聚合包整链 remove→add 最新 ----
+    // ---- npm 安装：聚合包原地更新到 latest ----
+    // 成熟包管理器的同款路径：pnpm up 原地覆盖，依赖表/bundles/.bin 全程不动——
+    // 没有 remove→install 的空窗，也就没有「卸完装不回去」的残局。
+    // installerDir 在场时顺带复用包内安装器做 pnpm11 放行预写（幂等，防 node-pty 拦截）。
     const hasRegistry = profile.packages.some((p) => p.kind === 'registry');
     if (hasRegistry) {
       const bundles = readProfileBundles(profile.path);
       const installerDir = locateInstalledInstaller(profile.path);
-      if (!installerDir) {
-        warnings.push(`profile ${profile.name}：registry 来源但未找到已装 ${AGGREGATE} 的安装器（node_modules/${AGGREGATE}/bin/install.js），跳过 npm 升级`);
-      } else {
-        registryProfiles.push(profile.name);
-        actions.push({
-          type: 'npm-reinstall',
-          title: `npm 更新 ${AGGREGATE}@${oneEntry?.spec || '?'} → latest（profile: ${profile.name}）`,
-          profile: profile.name,
-          profilePath: profile.path,
-          installerDir,
-          keepSidebarRemoved: bundles.includes(SIDEBAR) ? false : true,
-        });
-      }
+      registryProfiles.push(profile.name);
+      actions.push({
+        type: 'npm-reinstall',
+        title: oneEntry?.broken
+          ? `修复未完成的安装：重装 ${AGGREGATE}@latest（profile: ${profile.name}）`
+          : `npm 更新 ${AGGREGATE}@${oneEntry?.spec || '?'} → latest（profile: ${profile.name}）`,
+        profile: profile.name,
+        profilePath: profile.path,
+        installerDir,
+        keepSidebarRemoved: bundles.includes(SIDEBAR) ? false : true,
+      });
     }
   }
   if (!actions.length) {
@@ -257,14 +267,33 @@ export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh } = {
         push('  ✗ 未找到 dsh 可执行文件');
         continue;
       }
-      const rm = await runCmd(dsh, ['plugin', '--profile', action.profile, 'remove', AGGREGATE]);
-      push(rm.ok ? '  已移除旧版聚合包' : `  ⚠ 移除旧版非零退出（首次安装？继续）`);
-      const installer = join(action.installerDir, 'bin', 'install.js');
-      const added = await runCmd(process.execPath, [installer, action.profile]);
-      push(added.ok ? `  ✓ ${AGGREGATE} 已更新` : `  ✗ 安装失败：${added.out}`);
+      // pnpm 11 放行预写（node-pty 原生构建，issue #24）：包内安装器只拿来做这一步，
+      // 版本老一点也无所谓——预写内容与包版本无关（幂等键名）。
+      if (action.installerDir) {
+        await runCmd(process.execPath, [join(action.installerDir, 'bin', 'install.js'), action.profile, '--prewrite']);
+        push('  pnpm 构建放行已预写');
+      }
+      // 原地更新到 latest 精确版本，失败时旧版仍在位（pnpm 原子性），无卸载空窗。
+      // 注意 pnpm up 对依赖表里没有的包是 no-op 且报成功——残局（依赖表被清）必须
+      // 用 add 重新落表；在装用户用 up 原地覆盖。up 前先核依赖表，不凭 planner 快照
+      //（探测与执行之间状态可能变了）。
+      const latest = await latestVersion();
+      if (!latest) {
+        push('  ✗ 查询 npm registry 最新版失败（网络？），跳过该 profile');
+        continue;
+      }
+      const currentSpec = readDep(action.profilePath, AGGREGATE);
+      const verb = currentSpec ? 'up' : 'add';
+      const up = await runCmd(dsh, ['plugin', '--profile', action.profile, verb, `${AGGREGATE}@${latest}`]);
+      push(up.ok ? `  ✓ ${AGGREGATE} → ${latest}（${verb === 'up' ? '原地更新' : '重装落表'}）` : `  ✗ ${verb} 失败：${up.out}`);
       if (action.keepSidebarRemoved) {
-        await runCmd(dsh, ['plugin', '--profile', action.profile, 'remove', SIDEBAR]);
-        push('  按先前配置保持 better-sidebar 关闭');
+        const sidebar = await readDep(action.profilePath, SIDEBAR);
+        if (sidebar) {
+          await runCmd(dsh, ['plugin', '--profile', action.profile, 'remove', SIDEBAR]);
+          push('  按先前配置保持 better-sidebar 关闭');
+        } else {
+          push('  better-sidebar 保持未安装（沿用先前配置）');
+        }
       }
     } else if (action.type === 'manual-overlay') {
       push(`  ${action.instruction}`);
@@ -283,4 +312,30 @@ async function resolveDshBin(runCmd = run) {
     if (r.ok) return probe[0];
   }
   return null;
+}
+
+// npm registry dist-tags（带 8s 超时；离线时 up 步骤直接跳过，不动现状）
+async function latestVersion() {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    const r = await fetch('https://registry.npmjs.org/dsh-ccpg-one', {
+      headers: { accept: 'application/vnd.npm.install-v1+json' },
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!r.ok) return null;
+    return (await r.json())['dist-tags']?.latest || null;
+  } catch {
+    return null;
+  }
+}
+
+// 读 profile 依赖表里某个包的 spec（不在则 null）
+function readDep(profilePath, name) {
+  try {
+    return JSON.parse(readFileSync(join(profilePath, 'package.json'), 'utf8')).dependencies?.[name] || null;
+  } catch {
+    return null;
+  }
 }

@@ -1038,7 +1038,13 @@ window.__ModuleLoader__.load({
         systemPost(SYSTEM_UPGRADE_API, { confirm: true })
           .then(function (r) {
             if (r.ok) {
-              setUpgradeState({ phase: "done", log: r.log || [] });
+              var resultLog = r.log || [];
+              var hasFailure = resultLog.some(function (line) { return /^\s*✗/.test(String(line)); });
+              if (hasFailure) {
+                setUpgradeState({ phase: "failed", message: resultLog.filter(function (line) { return /^\s*✗/.test(String(line)); }).join("；") || "升级失败" });
+                return;
+              }
+              setUpgradeState({ phase: "done", log: resultLog });
               load();
               setCheck(null);
             } else {
