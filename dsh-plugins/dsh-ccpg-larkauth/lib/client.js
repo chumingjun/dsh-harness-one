@@ -254,8 +254,49 @@ window.__ModuleLoader__.load({
 				wide ? react.createElement("span", null, label) : null);
 		}
 
+		// ---- 设置导航图标注入 ----
+		// 官方 ui-settings-general 的 navIcon 是编译期写死的 id→图标映射，第三方 section
+		// 统一回退齿轮且无扩展口（SlotMap 只有 id/order/label）。DOM 最小补丁：定位文本
+		// 精确等于「飞书账号」的导航按钮，前置一枚 16px 描边 currentColor 的自绘 SVG。
+		var NAV_ICON_MARK = "data-larka-nav-icon";
+		function startSettingsNavIcon(labelText, svgMarkup) {
+			// 非 DOM 宿主（单测加载 bundle）直接跳过
+			if (typeof document === "undefined" || typeof MutationObserver === "undefined") return;
+			var scheduled = false;
+			var scan = function () {
+				scheduled = false;
+				if (!document.body) return;
+				var buttons = document.getElementsByTagName("button");
+				for (var i = 0; i < buttons.length; i++) {
+					var btn = buttons[i];
+					if (btn.getAttribute(NAV_ICON_MARK)) continue;
+					if ((btn.textContent || "").trim() !== labelText) continue;
+					btn.setAttribute(NAV_ICON_MARK, "seen");
+					if (btn.querySelector("[" + NAV_ICON_MARK + "='icon']")) continue;
+					var holder = document.createElement("span");
+					holder.setAttribute(NAV_ICON_MARK, "icon");
+					holder.style.cssText = "flex:none;display:inline-flex;width:16px;height:16px;";
+					holder.innerHTML = svgMarkup;
+					btn.insertBefore(holder, btn.firstChild);
+				}
+			};
+			var schedule = function () {
+				if (scheduled) return;
+				scheduled = true;
+				requestAnimationFrame(scan);
+			};
+			if (document.body) schedule();
+			new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+		}
+		// 飞书账号导航图标：人形徽标（账户语义），规格对齐官方 *_Outline16
+		var LARK_NAV_ICON_SVG =
+			'<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
+			'<circle cx="8" cy="5.4" r="2.6"/><path d="M3.1 13.4c.9-2.3 2.7-3.5 4.9-3.5s4 1.2 4.9 3.5"/>' +
+			"</svg>";
+
 		function apply(ctx) {
 			ensureDotStyle();
+			startSettingsNavIcon("飞书账号", LARK_NAV_ICON_SVG);
 			// 1) 设置面板「飞书账号」section（无 locale 字典时 label 用字符串）
 			ctx.slots.inject("settings.section", () => ctx.slots.register({
 				name: "settings.section",
