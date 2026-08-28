@@ -42,12 +42,13 @@
 
 ```sh
 dsh plugin --profile web add dsh-harness-one
+dsh plugin --profile web add dsh-better-sidebar   # 官方 UI 侧栏宿主（画布 tab）
 dsh web
 ```
 
-> v0.5.0 起 Workflow One 合并为单包 `dsh-harness-one`（旧 `dsh-ccpg-one` 已停更）。老用户在设置面板「Workflow One → 检查更新」一键迁移，或手动：`dsh plugin --profile <name> remove dsh-ccpg-one && dsh plugin --profile <name> add dsh-harness-one`。
+> v0.5.0 起 Workflow One 合并为单包 `dsh-harness-one`（旧 `dsh-ccpg-one` 已停更）。老用户在设置面板「Workflow One → 检查更新」一键迁移，或手动：`dsh plugin --profile <name> remove dsh-ccpg-one && dsh plugin --profile <name> add dsh-harness-one && dsh plugin --profile <name> add dsh-better-sidebar`。
 
-[Harness Desktop](https://github.com/anywhere-labs/deepseek-harness-desktop) 用户从托盘打开 **Open DSH Terminal**，执行 `dsh plugin add dsh-harness-one` 后重启 Desktop。不要在 Desktop 中运行 `setup.sh`，Desktop 会自行管理 profile、Node/pnpm 和随机 loopback 端口。详见 [Desktop 安装与排障](dsh-plugins/DESKTOP.md)。
+[Harness Desktop](https://github.com/anywhere-labs/deepseek-harness-desktop) 用户从托盘打开 **Open DSH Terminal**，执行 `dsh plugin add dsh-harness-one && dsh plugin add dsh-better-sidebar` 后重启 Desktop。不要在 Desktop 中运行 `setup.sh`，Desktop 会自行管理 profile、Node/pnpm 和随机 loopback 端口。详见 [Desktop 安装与排障](dsh-plugins/DESKTOP.md)。
 
 **界面依赖说明**：Workflow One 在 dsh 官方界面中的「工作流」画布由开源项目 [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 提供侧栏与标签页宿主，`dsh-harness-one` 会自动安装并依赖它。未安装或禁用 DSH-better-sidebar 时，官方界面内嵌的「工作流」入口不可用，但独立画布 `/wf1/` 仍可访问。
 

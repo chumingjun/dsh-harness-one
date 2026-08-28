@@ -159,7 +159,7 @@ dsh plugin --profile myprofile add dsh-harness-one
 需要 CCPG 品牌外观时，再显式安装独立插件：
 
 ```sh
-dsh plugin --profile myprofile add dsh-ccpg-brand
+dsh plugin --profile myprofile add <repo>/dsh-plugins/dsh-ccpg-brand  # brand 不在 npm，用源码/离线包路径装
 ```
 
 模型：dsh 默认模型栈（`deepseek-official`）开箱即用，key 在官方 UI「模型」页保存；自定义 provider 走 dsh 原生配置（profile `cordis.patch.yml` 的 `llm-pi-ai.providers`，key 由 `apiKeyEnv` 声明走环境变量）。插件自身不存任何 key。
@@ -177,9 +177,9 @@ dsh plugin --profile myprofile add dsh-ccpg-brand
 
 `pack.sh <tag>`：7 个默认插件 + 独立可选 brand 清单校验 → 画布双构建 → orchestrator 依赖 → canvasui bundle 重建并 `--check` → rsync 组装（清运行时数据）→ `dist-release/dsh-harness-one-plugins-<tag>.tar.gz`。通用发布归档仍携带 brand 源包供显式安装，但 `setup.sh` 和单包 `dsh-harness-one` 都不会自动安装它。CI（release.yml）同源执行并作为 release asset 上传。
 
-`sh publish-npm.sh --dry-run` 会装配并验证单包 `dsh-harness-one`（assemble-one.sh 把 7 个插件合并为一个 npm 包：单 loader entry + 合并 client bundle）与 `dsh-ccpg-brand`。老 8 包（dsh-ccpg-one + 7 子包）已停更，发布时统一 deprecate 指向新包。安装冒烟会校验「无 @deepseek-ai SDK 泄漏」（peer 自动安装会遮蔽 dsh 全局版本导致官方 UI 400）。去掉 `--dry-run` 才上传官方 npm registry；tag 必须与聚合包版本一致。GitHub `release.yml` 先上传 release 资产，再使用仓库 Actions Secret `NPM_TOKEN` 按子包→聚合包顺序发布，失败后可安全重跑（已存在版本会自动跳过）。
+`sh publish-npm.sh --dry-run` 会装配并验证单包 `dsh-harness-one`（assemble-one.sh 把 7 个插件合并为一个 npm 包：单 loader entry + 合并 client bundle）——这是唯一上 npm 的包；brand 不上 npm，仅随 GitHub Release 离线包分发。老 8 包（dsh-ccpg-one + 7 子包）已停更，发布时统一 deprecate 指向新包。安装冒烟会校验「无 @deepseek-ai SDK 泄漏」（peer 自动安装会遮蔽 dsh 全局版本导致官方 UI 400）。去掉 `--dry-run` 才上传官方 npm registry；tag 必须与聚合包版本一致。GitHub `release.yml` 先上传 release 资产，再使用仓库 Actions Secret `NPM_TOKEN` 按子包→聚合包顺序发布，失败后可安全重跑（已存在版本会自动跳过）。
 
 ## 已知边界
 
 - SDK 软链指向本机 dsh 安装——换机器重跑 `setup.sh` 自动重链
-- npm 首次发布需要仓库所有者配置具备 `dsh-harness-one` 与 `dsh-ccpg-brand` 发布权限的 granular token 为 Actions Secret `NPM_TOKEN`；代码与包内容不保存 token
+- npm 首次发布需要仓库所有者配置具备 `dsh-harness-one` 发布权限的 granular token 为 Actions Secret `NPM_TOKEN`（brand 不上 npm，仅随 Release 离线包）；代码与包内容不保存 token
