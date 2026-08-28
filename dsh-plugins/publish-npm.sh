@@ -1,7 +1,7 @@
 #!/bin/sh
 # 发布 npm 包（v0.5.0 起单包模式）：
-#   dsh-harness-one —— 单包含全部 7 个插件（assemble-one.sh 装配）
-#   dsh-ccpg-brand  —— 独立可选插件（保留）
+#   dsh-harness-one —— 单包含全部 7 个插件（assemble-one.sh 装配），唯一 npm 发布物
+# brand 不上 npm（用户决策）：仅随 GitHub Release 离线包分发（pack.sh OPTIONAL_PLUGINS）。
 # 老 8 包（dsh-ccpg-one + 7 子包）已停更：deprecate 指向 dsh-harness-one。
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -26,9 +26,8 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT INT TERM
 mkdir -p "$PACK_DIR"
 
-# npm pack：单包（装配目录，files 字段裁剪）+ brand
+# npm pack：单包（装配目录，files 字段裁剪）
 (cd "$HERE/dsh-harness-one" && npm pack --silent --ignore-scripts --pack-destination "$PACK_DIR" >/dev/null)
-(cd "$HERE/dsh-ccpg-brand" && npm pack --silent --ignore-scripts --pack-destination "$PACK_DIR" >/dev/null)
 TARBALL="$PACK_DIR/dsh-harness-one-$VERSION.tgz"
 [ -f "$TARBALL" ] || { echo "✗ 缺 $TARBALL"; exit 1; }
 
@@ -68,7 +67,6 @@ publish_one() {
 }
 
 publish_one dsh-harness-one "$VERSION"
-publish_one dsh-ccpg-brand "$(node -e "console.log(require(process.argv[1]).version)" "$HERE/dsh-ccpg-brand/package.json")"
 
 # 老 8 包 deprecate（幂等；本地 dry-run 跳过——没有 token 也不该碰线上元数据）
 if [ "$MODE" != "--dry-run" ]; then

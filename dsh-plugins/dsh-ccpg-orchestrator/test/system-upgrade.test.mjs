@@ -125,7 +125,7 @@ console.log('system-upgrade tests:');
     assert.equal(plan.actions[0].type, 'npm-migrate');
     assert.equal(plan.actions[0].installerDir, npmOneDir);
     assert.equal(plan.actions[0].profile, 'p-npm');
-    assert.equal(plan.actions[0].keepSidebarRemoved, true);
+    assert.equal(plan.actions[0].bootstrapSidebar, false, '依赖表已有 sidebar → 不需兜底');
   });
 
   await test('executePlan：脏工作树跳过该仓库且不重建，仍提示重启', async () => {
@@ -179,7 +179,7 @@ console.log('system-upgrade tests:');
     const plan = planUpgrade([residue]);
     assert.equal(plan.actions[0].type, 'npm-migrate');
     assert.equal(plan.actions[0].installerDir, null);
-    assert.equal(plan.actions[0].keepSidebarRemoved, true);
+    assert.equal(plan.actions[0].bootstrapSidebar, true);
     assert.match(plan.actions[0].title, /修复|迁移/);
   });
 
@@ -251,7 +251,10 @@ console.log('system-upgrade tests:');
     assert.ok(calls.some((c) => c.includes('remove') && c.includes('dsh-ccpg-one')), '老聚合包被移除');
     assert.ok(!depsState.has('dsh-ccpg-one'), '迁移后依赖表无老包');
     assert.ok(depsState.has(PACKAGE), '迁移后依赖表有新包');
-    assert.ok(calls.some((c) => c.includes('remove') && c.includes(SIDEBAR)), 'NO_SIDEBAR 配置需在迁移后保持关闭');
+    assert.ok(!depsState.has('dsh-ccpg-one'), '迁移后依赖表无老包');
+    assert.ok(depsState.has(PACKAGE), '迁移后依赖表有新包');
+    assert.ok(!calls.some((c) => c[4] === 'add' && String(c[5] || '').startsWith(SIDEBAR)), '依赖表已有 sidebar 不重复兜底 add');
+    assert.ok(!calls.some((c) => c[4] === 'remove' && c[5] === SIDEBAR), 'sidebar 不再被自动移除');
   });
 
   await test('executePlan：新包在场走 up 原地更新，不触发迁移', async () => {
@@ -283,7 +286,8 @@ console.log('system-upgrade tests:');
       const up = calls.find((c) => c[4] === 'up');
       assert.ok(up, '在装用户用 up 原地更新');
       assert.equal(up[5], `${PACKAGE}@0.5.1`);
-      assert.ok(!calls.some((c) => c[4] === 'remove' && c[5] !== SIDEBAR), 'up 路径不 remove 任何套件包');
+      assert.ok(!calls.some((c) => c[4] === 'remove'), 'up 路径不 remove 任何包');
+      assert.ok(calls.some((c) => c[4] === 'add' && String(c[5] || '').startsWith(SIDEBAR)), '纯净安装兜底：依赖表无 sidebar 时补 add 注册 bundle');
     } finally {
       rmSync(root2, { recursive: true, force: true });
     }

@@ -175,11 +175,31 @@ fi
 # 但 react.js / renderers 的外部 chunk 路径在 dist/react.js（web 画布用 file: 依赖直引，不走本路由）。
 
 # ---- 5. 安装器（pnpm11 预写，沿用 dsh-ccpg-one 的实现）：包名替换 + 清空 SUBPLUGINS ----
+# 安装器在主 add 后补一条 dsh plugin add dsh-better-sidebar（见下方注入）。
 # 先清空多行数组（单包无子包依赖；正则吃到数组结尾的 `];`），再全局换名。
 sed -E "s/^const SUBPLUGINS = \[[^]]*\];/const SUBPLUGINS = [];/" "$HERE/dsh-ccpg-one/bin/install.js" \
   | sed "s/dsh-ccpg-one/dsh-harness-one/g" > "$OUT/bin/install.js"
 "$NODE_BIN" --check "$OUT/bin/install.js" || { echo "✗ 生成的 install.js 语法错误"; exit 1; }
 chmod +x "$OUT/bin/install.js"
+# sidebar bundle 注册：dsh reconcile 只认直接依赖，纯净安装后侧栏 tab 不挂载——
+# 安装器在主包 add 成功后补一条（依赖表已有则 pnpm 去重，只做 bundle 注册）。
+python3 - "$OUT/bin/install.js" <<'PYI'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+marker = "say('安装完成，重启 dsh 生效。独立画布: http://127.0.0.1:4021/wf1/');"
+inject_code = """if (!process.env.CCPG_NO_SIDEBAR && !process.env.CCPG_ONLY_CORE) {
+  say('注册 better-sidebar（官方 UI 工作流侧栏宿主）…');
+  const sb = spawnSync(dsh, ['plugin', '--profile', PROFILE, 'add', 'dsh-better-sidebar'], { stdio: 'inherit' });
+  if (sb.status !== 0) console.error('[dsh-harness-one] better-sidebar 注册失败（可手动：dsh plugin --profile ' + PROFILE + ' add dsh-better-sidebar）');
+}
+""" + marker
+assert marker in s, 'installer marker missing'
+s = s.replace(marker, inject_code)
+open(p, 'w').write(s)
+print('installer: sidebar add injected')
+PYI
+"$NODE_BIN" --check "$OUT/bin/install.js" || { echo "✗ installer 注入后语法错误"; exit 1; }
 
 # ---- 6. manifest 与 patch ----
 cat > "$OUT/package.json" <<EOF

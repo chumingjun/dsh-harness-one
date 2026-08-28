@@ -162,6 +162,9 @@ export function planUpgrade(report) {
     if (hasRegistry) {
       const bundles = readProfileBundles(profile.path);
       const installerDir = locateInstalledInstaller(profile.path, hasNew ? PACKAGE : 'dsh-ccpg-one');
+      // keepSidebarRemoved 只对「依赖表曾有 sidebar 后来没了」（CCPG_NO_SIDEBAR 用户语义）生效；
+      // 纯净安装（表里从无 sidebar）升级时顺势补装，bundles 无它不构成拒绝信号。
+      const sidebarMissing = !profile.packages.some((p) => p.name === SIDEBAR);
       if ((legacyEntry || profile.packages.some((p) => p.broken)) && !hasNew) {
         actions.push({
           type: 'npm-migrate',
@@ -171,7 +174,7 @@ export function planUpgrade(report) {
           profile: profile.name,
           profilePath: profile.path,
           installerDir,
-          keepSidebarRemoved: bundles.includes(SIDEBAR) ? false : true,
+          bootstrapSidebar: sidebarMissing,
         });
       } else if (hasNew) {
         actions.push({
@@ -182,7 +185,7 @@ export function planUpgrade(report) {
           profile: profile.name,
           profilePath: profile.path,
           installerDir,
-          keepSidebarRemoved: bundles.includes(SIDEBAR) ? false : true,
+          bootstrapSidebar: sidebarMissing,
         });
         if (legacyEntry) {
           warnings.push(`profile ${profile.name} 同时装有 ${PACKAGE} 与旧包 dsh-ccpg-one，升级时建议移除旧包`);
@@ -334,14 +337,13 @@ export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh } = {
         const up = await runCmd(dsh, ['plugin', '--profile', action.profile, verb, `${PACKAGE}@${latest}`]);
         push(up.ok ? `  ✓ ${PACKAGE} → ${latest}（${verb === 'up' ? '原地更新' : '重装落表'}）` : `  ✗ ${verb} 失败：${up.out}`);
       }
-      if (action.keepSidebarRemoved) {
-        const sidebar = await readDep(action.profilePath, SIDEBAR);
-        if (sidebar) {
-          await runCmd(dsh, ['plugin', '--profile', action.profile, 'remove', SIDEBAR]);
-          push('  按先前配置保持 better-sidebar 关闭');
-        } else {
-          push('  better-sidebar 保持未安装（沿用先前配置）');
-        }
+      // sidebar bundle 注册兜底：dsh reconcile 只认 profile 直接依赖，sidebar 作为
+      // 本包传递依赖即使解析到实体也不进 bundles 层——纯净安装（依赖表只有本包）
+      // 官方 UI 侧栏「工作流」tab 会缺。依赖表已有 sidebar（老安装/显式装过）跳过；
+      // 主动关闭走 CCPG_NO_SIDEBAR 环境变量（安装器语义），升级不再自动移除。
+      if (action.bootstrapSidebar && !readDep(action.profilePath, SIDEBAR)) {
+        const sb = await runCmd(dsh, ['plugin', '--profile', action.profile, 'add', SIDEBAR]);
+        push(sb.ok ? `  ✓ ${SIDEBAR} 已注册进 bundles（官方 UI 工作流侧栏）` : `  ⚠ better-sidebar 注册失败：${sb.out}（可手动 dsh plugin --profile ${action.profile} add ${SIDEBAR}）`);
       }
     } else if (action.type === 'manual-overlay') {
       push(`  ${action.instruction}`);
