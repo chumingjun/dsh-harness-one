@@ -50,7 +50,7 @@ import {
 } from './agent-schema.js';
 import { FeishuClient } from './feishu.js';
 import { createFeishuNotificationChannel } from './notification-feishu.js';
-import { collectInstallReport, compareSemver, executePlan, planUpgrade } from './system-upgrade.js';
+import { collectInstallReport, compareSemver, executePlan, planUpgrade, PACKAGE as UPGRADE_PACKAGE } from './system-upgrade.js';
 import { NotificationChannelRegistry, WorkflowNotificationManager } from './notifications.js';
 import { listFeishuCreds, addFeishuCred, removeFeishuCred, setDefaultFeishuCred, getFeishuCredOrEnv } from './credentials.js';
 import { Orchestrator, lintGraph, getKind } from './engine.js';
@@ -2217,8 +2217,11 @@ export function apply(ctx, config) {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 8000);
-      const r = await fetch('https://registry.npmjs.org/dsh-ccpg-one', {
-        headers: { accept: 'application/vnd.npm.install-v1+json', 'user-agent': 'dsh-ccpg-one-upgrade-check' },
+      // 发版渠道自 0.5.0 起是单包 dsh-harness-one（老包 latest 永钉 0.4.1，
+      // 查老包会让所有 0.5+ 用户永远「已是最新」）；与 system-upgrade 的
+      // latestVersion() 同源，保证检查口径 = 实际升级口径。
+      const r = await fetch(`https://registry.npmjs.org/${UPGRADE_PACKAGE}`, {
+        headers: { accept: 'application/vnd.npm.install-v1+json', 'user-agent': 'dsh-harness-one-upgrade-check' },
         signal: ctrl.signal,
       });
       clearTimeout(timer);
