@@ -966,7 +966,8 @@ window.__ModuleLoader__.load({
     }
 
     function ProfileBlock(profile) {
-      var agg = profile.packages.find(function (p) { return p.name === "dsh-ccpg-one"; }) || null;
+      var agg = profile.packages.find(function (p) { return p.name === "dsh-harness-one"; })
+        || profile.packages.find(function (p) { return p.name === "dsh-ccpg-one"; }) || null;
       return react.createElement(
         "div",
         {
@@ -1239,7 +1240,7 @@ window.__ModuleLoader__.load({
               paddingTop: "8px",
             },
           },
-          "你的工作流、运行记录、定时任务和飞书登录都不会被升级改动，无需备份迁移。偏好转命令行的话：npm 安装的用户重跑一次 npx dsh-ccpg-one 效果等同。",
+          "你的工作流、运行记录、定时任务和飞书登录都不会被升级改动，无需备份迁移。偏好转命令行的话：npm 安装的用户重跑一次 npx dsh-harness-one 效果等同。",
         ),
       );
     }
