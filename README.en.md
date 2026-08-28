@@ -42,7 +42,7 @@
 
 ```sh
 dsh plugin --profile web add dsh-harness-one
-dsh plugin --profile web add dsh-better-sidebar   # 官方 UI 侧栏宿主（画布 tab）
+dsh plugin --profile web add dsh-better-sidebar   # DSH UI 侧栏宿主（画布 tab）
 dsh web
 ```
 
