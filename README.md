@@ -121,8 +121,8 @@ Workflow One 嵌在 dsh 官方界面中，推荐从 AI 对话开始创建复杂�
 - **多运行并发**：同一工作流可同时运行多个实例（节点工作区 / 产物 / 日志 / 取消按 runId 互不干扰）；成果面板顶部运行胶囊条随时切换查看任一运行（LIVE 优先、含来源图标与实时进度），画布节点状态随选中运行联动；定时 / Webhook 触发的运行不抢占当前视图，以 toast + 胶囊提示
 - **结果面板**：时间线按图拓扑稳定排序（跳过分支也可见）；最终结果取输出节点、失败不被中间结果顶替；过程产物折叠分组；产物流式下载（Range 206 / 统一 MIME / HTML sandbox CSP）与全屏预览（PDF/DOCX/XLS(X)/PPTX 本地渲染）
 - **消息通知节点**：运行级观察器，可独立放置或在线路中透传；支持仅运行结束、每个业务节点完成两种模式；当前通过飞书消息卡片推送到群聊或私聊，渠道层可继续扩展钉钉和企业微信
-- **触发与集成**：webhook（token 鉴权）、cron 定时（画布「⋯ → 定时任务」可视化管理：预设 + 自定义表达式、下 3 次触发预览、重叠策略可选跳过/并行、立即运行、停用与编辑）、飞书写回（输出节点可选）
-- **持久化**：工作流库（命名工作流 CRUD）、运行历史（含 graph 快照）、重启恢复（触发器落盘 + 链式定时等待，含触发/跳过统计）
+- **触发与集成**：webhook（token 鉴权）、cron 定时（画布「⋯ → 定时任务」可视化管理：预设 + 自定义表达式、下 3 次触发预览、重叠策略可选跳过/并行、错过触发点可选忽略/补跑、立即运行、停用与编辑）、飞书写回（输出节点可选）
+- **持久化**：工作流库（命名工作流 CRUD）、运行历史（含 graph 快照）、重启恢复（触发器落盘 + 链式定时等待，含触发/跳过/停机错过统计；错过补跑可按任务开启）
 - **可靠性**：保存失败 toast 报错并中止运行；命名工作流运行带 graphFingerprint 指纹校验（409 拒绝跑错版本）
 
 ## 画布 AI 助手
@@ -186,7 +186,7 @@ Workflow One 嵌在 dsh 官方界面中，推荐从 AI 对话开始创建复杂�
 | 运行 | `POST /run`、`POST /run/cancel`、`GET /runs`、`GET /runs/detail`、`GET /runs/export`、`POST /runs/replay`、`GET /run-results`、`GET /run-artifact` |
 | 节点 | `POST /node/test`（试运行）、`GET /node-detail` |
 | 产物 | `GET /artifact`（节点工作区文件，支持 preview/Range）、`GET/POST /attachments` |
-| 触发 | `GET/POST/DELETE /hooks`（webhook，token 鉴权）、`GET/POST/PATCH/DELETE /schedule`（cron，含 overlap/启停）、`POST /schedule/preview`（下 3 次触发）、`POST /schedule/run`（立即运行） |
+| 触发 | `GET/POST/DELETE /hooks`（webhook，token 鉴权）、`GET/POST/PATCH/DELETE /schedule`（cron，含 overlap/misfirePolicy/启停）、`POST /schedule/preview`（下 3 次触发）、`POST /schedule/run`（立即运行） |
 | 变量/模板 | `GET /variables/describe`、`GET/POST /global-variables`、`POST /template/render`、`POST /template/validate` |
 | 配置 | `GET /tools`、`GET /skills`、`GET /llm-config`、`GET/POST /runtime-config`、`GET/POST/DELETE /feishu-credentials`、`GET/POST /lark-auth` |
 | AI 助手 | `POST /assistant/bind` / `unbind`、`GET /assistant/canvas-state` |

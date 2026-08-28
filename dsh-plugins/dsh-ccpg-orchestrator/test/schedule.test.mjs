@@ -1,7 +1,7 @@
 // lib/schedule.js 单测：cron 计算、重叠判定、调度器策略（短真实等待驱动）。
 import { strict as assert } from 'node:assert';
 import {
-  computeNextDelay, createScheduler, hasLiveRunForWorkflow, isValidCron, isValidTimezone,
+  computeNextDelay, createScheduler, detectScheduleMisfire, hasLiveRunForWorkflow, isValidCron, isValidTimezone,
   normalizeScheduleMeta, normalizeTimezoneInput, persistableScheduleMeta, upcomingFireTimes,
 } from '../lib/schedule.js';
 
@@ -108,43 +108,74 @@ await test('hasLiveRunForWorkflow：按 workflowId+workspaceRoot 匹配，其他
   assert.equal(hasLiveRunForWorkflow(new Map(), '/ws1', 'wf_a'), false);
 });
 
-await test('normalizeScheduleMeta：旧 triggers.json 字段补默认 skip/enabled；非法 overlap 回落 skip', () => {
+await test('normalizeScheduleMeta：旧 triggers.json 字段补默认 skip/ignore/enabled；非法 overlap/misfirePolicy 回落默认', () => {
   const legacy = normalizeScheduleMeta({ key: 'sch_x', workflowId: 'wf', workflowName: '旧', cron: '0 9 * * *', input: 'hi', createdAt: '2026-01-01T00:00:00Z' });
   assert.equal(legacy.overlap, 'skip');
   assert.equal(legacy.enabled, true);
   assert.deepEqual(legacy.runInputs, {});
   assert.equal(legacy.fireCount, 0);
   assert.equal(legacy.skippedCount, 0);
+  assert.equal(legacy.misfireCount, 0, '旧数据 misfireCount 补 0');
+  assert.equal(legacy.misfirePolicy, 'ignore', '旧数据 misfirePolicy 补 ignore（升级零感知）');
 
-  const full = normalizeScheduleMeta({ key: 'sch_y', workflowId: 'wf', cron: '0 9 * * *', overlap: 'parallel', enabled: false, runInputs: { a: 1 }, fireCount: 3, skippedCount: 2, timezone: 'Asia/Shanghai' });
+  const full = normalizeScheduleMeta({ key: 'sch_y', workflowId: 'wf', cron: '0 9 * * *', overlap: 'parallel', enabled: false, runInputs: { a: 1 }, fireCount: 3, skippedCount: 2, timezone: 'Asia/Shanghai', misfirePolicy: 'catchUp', misfireCount: 4 });
   assert.equal(full.overlap, 'parallel');
   assert.equal(full.enabled, false);
   assert.deepEqual(full.runInputs, { a: 1 });
   assert.equal(full.fireCount, 3);
   assert.equal(full.skippedCount, 2);
   assert.equal(full.timezone, 'Asia/Shanghai');
+  assert.equal(full.misfirePolicy, 'catchUp');
+  assert.equal(full.misfireCount, 4);
 
   // 旧数据无 timezone = 跟随主机（null），非法值回落 null，不做迁移
   assert.equal(legacy.timezone, null);
   assert.equal(normalizeScheduleMeta({ cron: '0 9 * * *', timezone: 'Not/AZone' }).timezone, null);
 
   assert.equal(normalizeScheduleMeta({ overlap: 'whatever' }).overlap, 'skip');
+  assert.equal(normalizeScheduleMeta({ misfirePolicy: 'whatever' }).misfirePolicy, 'ignore');
 });
 
-await test('persistableScheduleMeta：落盘含全部统计与配置字段（含 timezone）', () => {
+await test('persistableScheduleMeta：落盘含全部统计与配置字段（含 timezone/misfire）', () => {
   const disk = persistableScheduleMeta(normalizeScheduleMeta({
     key: 'sch_z', workflowId: 'wf', workflowName: 'n', cron: '0 9 * * *', input: 'x',
     runInputs: { k: 'v' }, overlap: 'parallel', timezone: 'UTC', enabled: false, createdAt: 't',
     nextAt: '2026-01-16T09:00:00.000Z', fireCount: 5, skippedCount: 1,
+    misfirePolicy: 'catchUp', misfireCount: 2,
   }));
   assert.deepEqual(disk, {
     key: 'sch_z', workflowId: 'wf', workflowName: 'n', cron: '0 9 * * *', input: 'x',
-    runInputs: { k: 'v' }, overlap: 'parallel', timezone: 'UTC', enabled: false, createdAt: 't',
-    nextAt: '2026-01-16T09:00:00.000Z', fireCount: 5, skippedCount: 1,
+    runInputs: { k: 'v' }, overlap: 'parallel', misfirePolicy: 'catchUp', timezone: 'UTC', enabled: false, createdAt: 't',
+    nextAt: '2026-01-16T09:00:00.000Z', fireCount: 5, skippedCount: 1, misfireCount: 2,
   });
   // 无 timezone 时落盘 null（不缺字段，便于下游区分「跟随主机」）
   const noTz = persistableScheduleMeta(normalizeScheduleMeta({ key: 'sch_n', workflowId: 'wf', cron: '0 9 * * *' }));
   assert.equal(noTz.timezone, null);
+  assert.equal(noTz.misfirePolicy, 'ignore');
+  assert.equal(noTz.misfireCount, 0);
+});
+
+await test('detectScheduleMisfire：nextAt 过期超宽限才计；一次只计 1；catchUp 受策略与启停控制', () => {
+  const now = Date.parse('2026-08-28T09:30:00Z');
+  // 无 nextAt（从未起过调度/停用中）→ 不计
+  assert.deepEqual(detectScheduleMisfire({ nextAt: null }, now), { count: 0, catchUp: false });
+  assert.deepEqual(detectScheduleMisfire({}, now), { count: 0, catchUp: false });
+  // 垃圾时间串不计
+  assert.deepEqual(detectScheduleMisfire({ nextAt: 'not-a-date' }, now), { count: 0, catchUp: false });
+  // 未来 nextAt / 宽限期内（落后 30s）→ 不计
+  assert.deepEqual(detectScheduleMisfire({ nextAt: '2026-08-28T10:00:00Z' }, now), { count: 0, catchUp: false });
+  assert.deepEqual(detectScheduleMisfire({ nextAt: '2026-08-28T09:29:30Z' }, now), { count: 0, catchUp: false });
+  // 过期超宽限（落后 10 分钟）：ignore 策略 → 计 1 但不补跑
+  const overdue = { nextAt: '2026-08-28T09:20:00Z', enabled: true };
+  assert.deepEqual(detectScheduleMisfire(overdue, now), { count: 1, catchUp: false });
+  // catchUp 策略 → 计 1 且要求补跑；停用任务连计数也不计（无到点义务）
+  assert.deepEqual(detectScheduleMisfire({ ...overdue, misfirePolicy: 'catchUp' }, now), { count: 1, catchUp: true });
+  assert.deepEqual(detectScheduleMisfire({ ...overdue, misfirePolicy: 'catchUp', enabled: false }, now), { count: 0, catchUp: false });
+  assert.deepEqual(detectScheduleMisfire({ ...overdue, enabled: false }, now), { count: 0, catchUp: false }, '停用 + ignore 同样不计');
+  // 非法策略值（未经 normalize 的脏数据）回落 ignore
+  assert.deepEqual(detectScheduleMisfire({ ...overdue, misfirePolicy: 'whatever' }, now), { count: 1, catchUp: false });
+  // 自定义宽限：落后 5s 但宽限 1s → 计
+  assert.deepEqual(detectScheduleMisfire({ nextAt: '2026-08-28T09:29:55Z' }, now, 1000), { count: 1, catchUp: false });
 });
 
 await test('createScheduler：每秒 cron 到点触发 fire 并回调 onFire', async () => {

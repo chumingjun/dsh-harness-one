@@ -17,9 +17,9 @@ export function eventBelongsToRun(payload, activeRunId) {
 }
 
 // run-start 是否应把视图跟随切换到新运行：
-// 带本画布 canvasId 的启动（手动/续跑/助手）→ 跟随；定时/webhook 触发（无 canvasId）→ 不抢占视图。
+// 带本画布 canvasId 的启动（手动/续跑/助手）→ 跟随；定时/webhook/catch-up 触发（无 canvasId）→ 不抢占视图。
 export function shouldFollowRunStart(payload, { canvasId, workflowId }) {
   if (!payload?.runId) return false;
-  if (payload.source === 'schedule' || payload.source === 'webhook') return false;
+  if (payload.source === 'schedule' || payload.source === 'webhook' || payload.source === 'catch-up') return false;
   return eventBelongsToCanvas(payload, { canvasId, workflowId });
 }

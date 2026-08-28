@@ -1,8 +1,8 @@
 // RunSwitcher 胶囊模型（纯函数，可单测）：
 // 合并 /runs 列表与本地已见运行，按「LIVE 优先、开始时间倒序」排序，截断展示。
 
-export const SOURCE_ICON = { manual: '▶', schedule: '⏰', webhook: '🪝', resume: '↻', replay: '↺', assistant: '✦' };
-export const SOURCE_LABEL = { manual: '手动', schedule: '定时', webhook: 'Webhook', resume: '续跑', replay: '重放', assistant: '助手' };
+export const SOURCE_ICON = { manual: '▶', schedule: '⏰', webhook: '🪝', resume: '↻', replay: '↺', assistant: '✦', 'catch-up': '⏱' };
+export const SOURCE_LABEL = { manual: '手动', schedule: '定时', webhook: 'Webhook', resume: '续跑', replay: '重放', assistant: '助手', 'catch-up': '补跑' };
 
 export function switcherCapsules(runs, { max = 6 } = {}) {
   const list = [...(runs || [])];
