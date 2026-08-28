@@ -1,6 +1,6 @@
 {
   "name": "dsh-ccpg-tools",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": false,
   "type": "module",
   "main": "lib/index.js",
