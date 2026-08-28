@@ -227,6 +227,96 @@ await test('恢复语义：停用任务重启后只入 meta 不起定时器', as
   assert.equal(disk.nextAt, null);
 });
 
+await test('misfire 恢复（#57）：过期 nextAt 记账并落盘；ignore 不补跑 / catchUp 补跑一次', async () => {
+  // 造恢复输入：两条任务 nextAt 都改到 10 分钟前（模拟停机错过触发点），
+  // 一条 ignore（默认）、一条 catchUp；再放一条「宽限内」的不应记账
+  const stale = new Date(Date.now() - 10 * 60_000).toISOString();
+  const fresh = new Date(Date.now() - 30_000).toISOString();
+  const mkSched = async (name, extra) => {
+    const created = await call('POST', '/wf1/api/schedule', { workflowId: 'wf_sch', cron: '0 4 * * *', input: name, ...extra });
+    assert.equal(created.status, 200);
+    return created.body.key;
+  };
+  const keyIgnore = await mkSched('mis-ignore');
+  const keyCatch = await mkSched('mis-catch', { misfirePolicy: 'catchUp' });
+  const keyGrace = await mkSched('mis-grace');
+  const disk = readTriggers();
+  for (const s of disk.schedules) {
+    if (s.key === keyIgnore || s.key === keyCatch) s.nextAt = stale;
+    if (s.key === keyGrace) s.nextAt = fresh;
+  }
+  writeFileSync(triggersFile(), JSON.stringify(disk));
+
+  // 重启模拟：第二个 apply 实例（新 store，triggers.json 是唯一交接物）。
+  // 必须在造完数据之后再 apply——apply 启动即跑 ensureTriggers（SSE 装配），
+  // 提前起会把 triggersRestored 置位，测试任务永远进不了恢复视图。
+  // 另注意：两实例共享模块级 stores/sqlite——第二实例的 disposer 丢弃不跑，
+  // 否则它把第一实例正在用的 sqlite 连接关掉，后续断言全部失败。
+  const ctx2 = {
+    webServer: { register(route) { this.routes.push(route); }, routes: [] },
+    tools: { register() {}, schemas() { return []; } },
+    get(name) {
+      if (name === 'sessions') return { get: (id) => (String(id) === 'session-2' ? { header: { cwd: workspace } } : undefined), flush: async () => {} };
+      if (name === 'workspaceRegistry') return { list: () => [{ path: workspace }] };
+      return null;
+    },
+    skills: { async list() { return []; } },
+    llm: { listProviders() { return []; }, async listModels() { return []; } },
+    agentPresets: { async mount() {} },
+    logger: { info() {}, warn() {}, error() {} },
+    effect() { /* 丢弃 disposer：共享 store 只能清一次（见上） */ },
+  };
+  apply(ctx2, {});
+  const route2 = (path) => ctx2.webServer.routes.find((entry) => entry.kind === 'exact' && entry.path === path)?.handler;
+  const call2 = async (method, url, body) => {
+    const res = responseCapture();
+    await route2(url.split('?')[0])(request(method, withSession(url, 'session-2'), body), res);
+    return { status: res.status, body: res.json() };
+  };
+
+  // 触发恢复：第一个 scoped 请求跑 ensureTriggers（与真实重启一致）
+  const list2 = await call2('GET', '/wf1/api/schedule');
+  assert.equal(list2.status, 200);
+  const rows2 = list2.body.schedules;
+  assert.ok(rows2.some((s) => s.key === keyIgnore), `恢复列表应含新任务，实际：${rows2.map((s) => s.key).join(',')}`);
+  assert.equal(rows2.find((s) => s.key === keyIgnore).misfireCount, 1, 'ignore 任务记 1 次 misfire');
+  assert.equal(rows2.find((s) => s.key === keyGrace).misfireCount, 0, '宽限内不记账');
+  const rowCatch = rows2.find((s) => s.key === keyCatch);
+  assert.equal(rowCatch.misfireCount, 1, 'catchUp 任务记 1 次 misfire');
+  assert.ok(rowCatch.nextAt && Date.parse(rowCatch.nextAt) > Date.now(), '恢复后 nextAt 已从当下重算');
+  // misfireCount 立即落盘（不等下一次 persist）
+  const diskAfter = readTriggers().schedules;
+  assert.equal(diskAfter.find((s) => s.key === keyIgnore).misfireCount, 1);
+  assert.equal(diskAfter.find((s) => s.key === keyCatch).misfireCount, 1);
+  assert.equal(diskAfter.find((s) => s.key === keyGrace).misfireCount, 0);
+
+  // catchUp 补跑：等 setImmediate 的补跑落成 run（wf_sch 图只有一个 input 节点，秒级完成）
+  let catchRun = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const runs = await call2('GET', '/wf1/api/runs');
+    catchRun = runs.body.runs.find((r) => r.workflowId === 'wf_sch' && r.source === 'catch-up');
+    if (catchRun && catchRun.status && catchRun.status !== 'running') break;
+    await sleep(20);
+  }
+  assert.ok(catchRun, 'catchUp 任务应补跑一条 source=catch-up 的运行');
+  assert.equal(catchRun.status, 'success');
+  // 补跑只此一条：ignore 任务没有 catch-up 运行
+  const runsAll = await call2('GET', '/wf1/api/runs');
+  const catchRuns = runsAll.body.runs.filter((r) => r.source === 'catch-up');
+  assert.equal(catchRuns.length, 1, '只有 catchUp 任务补跑');
+  // 补跑计入 fireCount（经 onFire 记账语义；恢复场景直接查 meta）
+  const rowCatchAfter = (await call2('GET', '/wf1/api/schedule')).body.schedules.find((s) => s.key === keyCatch);
+  assert.equal(rowCatchAfter.fireCount, 1, '补跑计入 fireCount');
+  const rowIgnoreAfter = (await call2('GET', '/wf1/api/schedule')).body.schedules.find((s) => s.key === keyIgnore);
+  assert.equal(rowIgnoreAfter.fireCount, 0, 'ignore 任务不补跑、fireCount 不变');
+
+  // 幂等：再发请求不重复记账（triggersRestored 守卫）
+  const list2b = await call2('GET', '/wf1/api/schedule');
+  assert.equal(list2b.body.schedules.find((s) => s.key === keyCatch).misfireCount, 1, '同实例内不重复记账');
+
+  for (const key of [keyIgnore, keyCatch, keyGrace]) await call2('DELETE', `/wf1/api/schedule?key=${key}`);
+});
+
 await test('DELETE /schedule：任务移除并落盘', async () => {
   const del = await call('DELETE', `/wf1/api/schedule?key=${globalThis.__schKey}`);
   assert.equal(del.status, 200);

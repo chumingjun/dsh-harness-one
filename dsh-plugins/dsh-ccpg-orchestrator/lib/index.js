@@ -67,8 +67,8 @@ import {
   variableDefinitionsToValues,
 } from './variable-store.js';
 import {
-  createScheduler, hasLiveRunForWorkflow, isValidCron,
-  normalizeScheduleMeta, normalizeTimezoneInput,
+  createScheduler, detectScheduleMisfire, hasLiveRunForWorkflow, isValidCron,
+  MISFIRE_POLICIES, normalizeScheduleMeta, normalizeTimezoneInput,
   persistableScheduleMeta, upcomingFireTimes,
 } from './schedule.js';
 
@@ -2263,7 +2263,7 @@ export function apply(ctx, config) {
   const scheduleStoreRoot = () => currentStore().workspaceRoot;
   const scheduleBusy = (workflowId) => hasLiveRunForWorkflow(orch.runs, scheduleStoreRoot(), workflowId);
   // 触发一次定时运行（fire 与手动「立即运行」共用）：读最新图 + 实例变量，返回 runId 或 null
-  const fireScheduleRun = (meta) => {
+  const fireScheduleRun = (meta, source = 'schedule') => {
     const wf = readWf(meta.workflowId);
     if (!wf) return null;
     let globals;
@@ -2272,7 +2272,7 @@ export function apply(ctx, config) {
       globals = { globalVariables: {} };
     }
     const { runId } = startRun(wf.graph, {
-      triggerInput: meta.input || '', workflowName: wf.name, workflowId: wf.id, source: 'schedule',
+      triggerInput: meta.input || '', workflowName: wf.name, workflowId: wf.id, source,
       globalVariables: globals.globalVariables,
       workflowVariables: variableDefinitionsToValues(wf.variables),
       runInputs: meta.runInputs && typeof meta.runInputs === 'object' ? meta.runInputs : {},
@@ -2318,11 +2318,33 @@ export function apply(ctx, config) {
     const saved = loadTriggers();
     if (store.triggersRestored) return;
     store.triggersRestored = true;
+    let misfireCounted = false;
     for (const raw of saved.schedules || []) {
       const meta = normalizeScheduleMeta(raw);
       if (!meta.key) continue;
       if (!readWf(meta.workflowId)) continue;
       const persisted = { ...meta, ...raw };
+      // 停机 misfire（#57）：恢复前对比落盘 nextAt 与当下，过期即记账；
+      // catchUp 策略再补跑最近一次（source 标记 catch-up），计一次 fireCount。
+      // 补跑走同一 setImmediate，让调度链先挂好（nextAt 先归位）再起 run。
+      const misfire = detectScheduleMisfire(persisted);
+      if (misfire.count) {
+        persisted.misfireCount = (persisted.misfireCount || 0) + misfire.count;
+        misfireCounted = true;
+        if (misfire.catchUp) {
+          setImmediate(() => {
+            try {
+              const runId = fireScheduleRun(persisted, 'catch-up');
+              if (runId) bumpScheduleStat(meta.key, 'fireCount');
+              ctx.logger?.info?.(`dsh-ccpg 定时补跑（${meta.key}）：停机错过触发点，已补跑 ${runId || '失败'}`);
+            } catch (error) {
+              ctx.logger?.warn?.(`dsh-ccpg 定时补跑失败（${meta.key}）：${error?.message || error}`);
+            }
+          });
+        } else {
+          ctx.logger?.info?.(`dsh-ccpg 定时 misfire（${meta.key}）：停机错过触发点（策略 ignore，未补跑）`);
+        }
+      }
       currentSchedulerMeta().set(meta.key, persisted);
       // 停用任务只入 meta 不起定时器：启用时（PATCH）再挂
       if (persisted.enabled === false) continue;
@@ -2330,6 +2352,9 @@ export function apply(ctx, config) {
         currentSchedulers().set(meta.key, startSchedule(meta.key, persisted));
       } catch { /* 单条失败不阻塞 */ }
     }
+    // 记账后的 misfireCount 立即落盘（不等下一次 onMeta/persist），
+    // 否则调度器上报 nextAt 前进程再挂一次，这次 misfire 就丢了
+    if (misfireCounted) persistTriggers();
   };
 
   // 列表行：实时 join 工作流现名（meta 里的名字是创建时快照，改名后仅作 fallback）。
@@ -2370,6 +2395,9 @@ export function apply(ctx, config) {
       if (body?.overlap && !['skip', 'parallel'].includes(body.overlap)) {
         return json(res, 400, { error: 'overlap 仅支持 skip / parallel' });
       }
+      if (body?.misfirePolicy && !MISFIRE_POLICIES.includes(body.misfirePolicy)) {
+        return json(res, 400, { error: 'misfirePolicy 仅支持 ignore / catchUp' });
+      }
       const key = `sch_${randomUUID().slice(0, 8)}`;
       const meta = normalizeScheduleMeta({
         key,
@@ -2379,6 +2407,7 @@ export function apply(ctx, config) {
         input: body.input || '',
         runInputs,
         overlap: body.overlap || 'skip',
+        misfirePolicy: body.misfirePolicy || 'ignore',
         timezone,
         enabled: true,
         createdAt: new Date().toISOString(),
@@ -2387,7 +2416,7 @@ export function apply(ctx, config) {
       // 先入 meta 再启动：createScheduler 的 onMeta 会同步补 nextAt/统计
       currentSchedulers().set(key, startSchedule(key, meta));
       persistTriggers();
-      return json(res, 200, { ok: true, key, cron: body.cron, overlap: meta.overlap });
+      return json(res, 200, { ok: true, key, cron: body.cron, overlap: meta.overlap, misfirePolicy: meta.misfirePolicy });
     }
     if (req.method === 'PATCH') {
       const body = await readBody(req);
@@ -2403,6 +2432,10 @@ export function apply(ctx, config) {
       if (hasOwn(body, 'overlap')) {
         if (!['skip', 'parallel'].includes(body.overlap)) return json(res, 400, { error: 'overlap 仅支持 skip / parallel' });
         patch.overlap = body.overlap;
+      }
+      if (hasOwn(body, 'misfirePolicy')) {
+        if (!MISFIRE_POLICIES.includes(body.misfirePolicy)) return json(res, 400, { error: 'misfirePolicy 仅支持 ignore / catchUp' });
+        patch.misfirePolicy = body.misfirePolicy;
       }
       if (hasOwn(body, 'timezone')) {
         try { patch.timezone = normalizeTimezoneInput(body.timezone); } catch (error) { return json(res, 400, { error: error.message }); }

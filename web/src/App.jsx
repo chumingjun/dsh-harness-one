@@ -426,7 +426,9 @@ export default function App() {
       // 只跟随本画布发起的运行（手动/续跑/助手）；定时/webhook 触发不抢占视图
       if (!shouldFollowRunStart(p, { canvasId: canvasIdRef.current, workflowId: currentWfIdRef.current })) {
         if (belongsToCurrentCanvas(p) && p.workflowId === currentWfIdRef.current) {
-          const label = p.source === 'schedule' ? '⏰ 定时任务已触发' : '🪝 Webhook 已触发';
+          const label = p.source === 'schedule' ? '⏰ 定时任务已触发'
+            : p.source === 'catch-up' ? '⏱ 定时补跑已启动（停机错过触发点）'
+              : '🪝 Webhook 已触发';
           toast(`${label}「${p.workflowName || '当前工作流'}」，可在底部切换查看`, 'info', 3600);
         }
         return;

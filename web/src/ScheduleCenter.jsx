@@ -24,6 +24,8 @@ function ScheduleForm({ workflows, initial, onSubmit, onCancel, submitting }) {
   const [input, setInput] = useState(initial?.input || '');
   const [runInputsText, setRunInputsText] = useState(initial?.runInputs && Object.keys(initial.runInputs).length ? JSON.stringify(initial.runInputs, null, 2) : '');
   const [overlap, setOverlap] = useState(initial?.overlap || 'skip');
+  // 停机错过触发点：ignore 同旧现状；catchUp 重启后补跑最近一次
+  const [misfirePolicy, setMisfirePolicy] = useState(initial?.misfirePolicy || 'ignore');
   // timezone=null 跟随主机；时区候选按使用频率把常见区排前
   const [timezone, setTimezone] = useState(initial?.timezone || '');
   const [preview, setPreview] = useState({ state: 'idle' }); // idle | loading | ok | error
@@ -64,6 +66,7 @@ function ScheduleForm({ workflows, initial, onSubmit, onCancel, submitting }) {
       input,
       runInputs: runInputsCheck.value,
       overlap,
+      misfirePolicy,
       timezone: timezone || null,
     });
   };
@@ -138,6 +141,19 @@ function ScheduleForm({ workflows, initial, onSubmit, onCancel, submitting }) {
           <label className={`sch-radio ${overlap === 'parallel' ? 'sch-radio-on' : ''}`}>
             <input type="radio" name="sch-overlap" checked={overlap === 'parallel'} onChange={() => setOverlap('parallel')} />
             <span><strong>并行新开一轮</strong><em>与上一轮同时运行，互不干扰（消耗双份资源）</em></span>
+          </label>
+        </div>
+      </section>
+      <section className="panel-sec">
+        <h4>错过触发点 <span className="sec-hint">dsh 停机期间到期的周期怎么处理</span></h4>
+        <div className="sch-overlap">
+          <label className={`sch-radio ${misfirePolicy === 'ignore' ? 'sch-radio-on' : ''}`}>
+            <input type="radio" name="sch-misfire" checked={misfirePolicy === 'ignore'} onChange={() => setMisfirePolicy('ignore')} />
+            <span><strong>忽略（默认）</strong><em>停机期间错过的触发点跳过，只记一条 misfire 统计；重启后按下一周期继续</em></span>
+          </label>
+          <label className={`sch-radio ${misfirePolicy === 'catchUp' ? 'sch-radio-on' : ''}`}>
+            <input type="radio" name="sch-misfire" checked={misfirePolicy === 'catchUp'} onChange={() => setMisfirePolicy('catchUp')} />
+            <span><strong>补跑一次</strong><em>重启后立即补跑最近错过的那一次（多个触发点也只补一次，防雪崩）；来源标记为「补跑」</em></span>
           </label>
         </div>
       </section>
@@ -267,8 +283,9 @@ export function ScheduleCenter({ currentWorkflowId, onRan, onClose, toast }) {
                       <span title={row.cron}>{describeCron(row.cron) || row.cron}</span>
                       <span>下次 {formatNextInZone(row.nextAt, row.timezone)}</span>
                       <span>{row.timezone ? `时区 ${row.timezone}` : `跟随主机（${hostTimezone()}）`}</span>
-                      <span>已触发 {row.fireCount ?? 0} 次{row.skippedCount ? `（跳过 ${row.skippedCount} 次）` : ''}</span>
+                      <span>已触发 {row.fireCount ?? 0} 次{row.skippedCount ? `（跳过 ${row.skippedCount} 次）` : ''}{row.misfireCount ? `（停机错过 ${row.misfireCount} 次）` : ''}</span>
                       <span>{row.overlap === 'parallel' ? '重叠并行' : '重叠跳过'}</span>
+                      {row.misfirePolicy === 'catchUp' && <span>停机补跑</span>}
                     </div>
                   </div>
                   <div className="sch-row-actions">

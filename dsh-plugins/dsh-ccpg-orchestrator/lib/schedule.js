@@ -7,6 +7,10 @@ const parseCronExpression = cronParser.parseExpression?.bind(cronParser)
   ?? cronParser.default?.parseExpression?.bind(cronParser.default);
 
 export const OVERLAP_POLICIES = ['skip', 'parallel'];
+// 停机错过触发点（misfire）的处理策略：ignore 同旧现状；catchUp 重启恢复时补跑最近一次
+export const MISFIRE_POLICIES = ['ignore', 'catchUp'];
+// 恢复时判定 misfire 的最小过期阈值：nextAt 落后当下不足该值视为正常抖动（杀进程瞬间的竞态）
+export const MISFIRE_GRACE_MS = 60_000;
 // setTimeout 上限 2^31-1 ms（约 24.8 天）：远期任务链式分段等待，避免溢出成 1ms 风暴
 const MAX_WAIT = 2 ** 31 - 1;
 
@@ -70,7 +74,22 @@ export function hasLiveRunForWorkflow(runsMap, workspaceRoot, workflowId) {
   return false;
 }
 
-// 兼容旧 triggers.json：无新字段时补默认值（overlap=skip、enabled=true）。
+// 停机错过触发点（misfire）检测：恢复调度链前对比落盘 nextAt 与当下。
+// 计数与补跑的属主都是调用方（#37 教训）：这里只回传事实 { count, catchUp }。
+//   - nextAt 缺失/未过期（宽限内）/任务停用 → 无 misfire；一次停机无论错过几个触发点只计 1
+//   - count = 应补记的 misfire 次数（0 或 1）；catchUp = 是否按策略需要补跑一次
+//   - 停用任务不计：它本就不该触发，残留 nextAt 只是停用前的陈旧快照
+export function detectScheduleMisfire(meta, now = Date.now(), graceMs = MISFIRE_GRACE_MS) {
+  const nextAtMs = Date.parse(meta?.nextAt || '');
+  if (!Number.isFinite(nextAtMs)) return { count: 0, catchUp: false };
+  const overdueBy = now - nextAtMs;
+  if (overdueBy < graceMs) return { count: 0, catchUp: false };
+  if (meta?.enabled === false) return { count: 0, catchUp: false };
+  const catchUp = normalizeScheduleMeta(meta).misfirePolicy === 'catchUp';
+  return { count: 1, catchUp };
+}
+
+// 兼容旧 triggers.json：无新字段时补默认值（overlap=skip、misfirePolicy=ignore、enabled=true）。
 // timezone=null = 跟随主机时区（旧行为）；非法值回落 null，绝不带病起调度
 export function normalizeScheduleMeta(raw) {
   const overlap = OVERLAP_POLICIES.includes(raw?.overlap) ? raw.overlap : 'skip';
@@ -82,12 +101,14 @@ export function normalizeScheduleMeta(raw) {
     input: raw?.input || '',
     runInputs: raw?.runInputs && typeof raw?.runInputs === 'object' ? raw.runInputs : {},
     overlap,
+    misfirePolicy: MISFIRE_POLICIES.includes(raw?.misfirePolicy) ? raw.misfirePolicy : 'ignore',
     timezone: isValidTimezone(raw?.timezone) ? raw.timezone.trim() : null,
     enabled: raw?.enabled !== false,
     createdAt: raw?.createdAt || null,
     nextAt: raw?.nextAt || null,
     fireCount: Number.isFinite(raw?.fireCount) ? raw.fireCount : 0,
     skippedCount: Number.isFinite(raw?.skippedCount) ? raw.skippedCount : 0,
+    misfireCount: Number.isFinite(raw?.misfireCount) ? raw.misfireCount : 0,
   };
 }
 
@@ -101,12 +122,14 @@ export function persistableScheduleMeta(meta) {
     input: meta.input,
     runInputs: meta.runInputs || {},
     overlap: meta.overlap || 'skip',
+    misfirePolicy: meta.misfirePolicy || 'ignore',
     timezone: meta.timezone || null,
     enabled: meta.enabled !== false,
     createdAt: meta.createdAt,
     nextAt: meta.nextAt || null,
     fireCount: meta.fireCount || 0,
     skippedCount: meta.skippedCount || 0,
+    misfireCount: meta.misfireCount || 0,
   };
 }
 
