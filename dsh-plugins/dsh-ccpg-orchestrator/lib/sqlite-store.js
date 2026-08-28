@@ -180,6 +180,7 @@ export class WorkflowSqliteStore {
       deleteWorkflow: this.db.prepare('DELETE FROM workflows WHERE id = ?'),
       getRun: this.db.prepare('SELECT updated_at, document_json FROM runs WHERE run_id = ?'),
       listRuns: this.db.prepare('SELECT document_json FROM runs ORDER BY started_at DESC, run_id DESC LIMIT ?'),
+      listRunsForWorkflow: this.db.prepare('SELECT document_json FROM runs WHERE workflow_id = ? ORDER BY started_at DESC, run_id DESC LIMIT ?'),
       putRun: this.db.prepare(`
         INSERT INTO runs (run_id, workflow_id, status, started_at, finished_at, updated_at, document_json)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -255,9 +256,12 @@ export class WorkflowSqliteStore {
     return row ? { document: parseDocument(row, normalizeRunDocument), updatedAt: row.updated_at } : null;
   }
 
-  listRuns(limit = 50) {
+  listRuns(limit = 50, workflowId) {
     const count = Math.max(0, Math.floor(Number(limit) || 0));
-    return this.statements.listRuns.all(count).map((row) => parseDocument(row, normalizeRunDocument));
+    // workflowId 过滤命中 runs_workflow_started_at 索引；缺省（含 null/草稿）保持全量行为
+    const statement = workflowId ? this.statements.listRunsForWorkflow : this.statements.listRuns;
+    const rows = workflowId ? statement.all(String(workflowId), count) : statement.all(count);
+    return rows.map((row) => parseDocument(row, normalizeRunDocument));
   }
 
   putRun(value) {

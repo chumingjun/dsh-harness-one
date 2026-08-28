@@ -1677,7 +1677,7 @@ export default function App() {
           )}
         </Modal>
       )}
-      {historyOpen && <RunHistory onClose={() => setHistoryOpen(false)}
+      {historyOpen && <RunHistory onClose={() => setHistoryOpen(false)} workflowId={currentWf?.id || null}
         onResume={(runId, resumedNodes, rerunNodes) => {
           activeRunIdRef.current = runId;
           runningRef.current = true;

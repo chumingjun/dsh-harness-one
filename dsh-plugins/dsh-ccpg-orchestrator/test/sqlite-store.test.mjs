@@ -121,6 +121,34 @@ test('prunes runs by startedAt and keeps the newest rows', () => {
   }
 });
 
+test('filters runs by workflowId and keeps the unfiltered default', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wf1-sqlite-filter-'));
+  try {
+    const store = new WorkflowSqliteStore({
+      databaseFile: join(root, 'workflow-one.sqlite'),
+      workflowsDir: join(root, 'workflows'),
+      runsDir: join(root, 'runs'),
+    });
+    store.putRun(run('run_a1', '2026-08-01T00:00:00.000Z', 'success', 'wf_a'));
+    store.putRun(run('run_b1', '2026-08-02T00:00:00.000Z', 'success', 'wf_b'));
+    store.putRun(run('run_draft', '2026-08-03T00:00:00.000Z', 'success', null));
+    store.putRun(run('run_a2', '2026-08-04T00:00:00.000Z', 'success', 'wf_a'));
+    // 只看 wf_a：时间倒序且不含别的工作流/草稿
+    assert.deepEqual(store.listRuns(10, 'wf_a').map((row) => row.runId), ['run_a2', 'run_a1']);
+    // limit 在过滤内生效
+    assert.deepEqual(store.listRuns(1, 'wf_a').map((row) => row.runId), ['run_a2']);
+    // 无匹配返回空数组（不是 undefined/null）
+    assert.deepEqual(store.listRuns(10, 'wf_missing'), []);
+    // 缺省（undefined/null/空串）维持全量：草稿画布与既有调用不受影响
+    assert.deepEqual(store.listRuns(10).map((row) => row.runId), ['run_a2', 'run_draft', 'run_b1', 'run_a1']);
+    assert.deepEqual(store.listRuns(10, null).map((row) => row.runId), ['run_a2', 'run_draft', 'run_b1', 'run_a1']);
+    assert.deepEqual(store.listRuns(10, '').map((row) => row.runId), ['run_a2', 'run_draft', 'run_b1', 'run_a1']);
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('rolls back schema migration when the database is incompatible', () => {
   const root = mkdtempSync(join(tmpdir(), 'wf1-sqlite-rollback-'));
   try {
