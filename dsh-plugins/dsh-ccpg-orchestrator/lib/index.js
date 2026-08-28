@@ -15,7 +15,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, copyFileSync, cpSync, unlinkSync, renameSync, realpathSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, copyFileSync, cpSync, unlinkSync, renameSync, realpathSync, rmSync, constants as fsConstants } from 'node:fs';
 import { join, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -849,6 +849,34 @@ export function apply(ctx, config) {
       ...(recoveredStatus === 'interrupted' ? { error: run.error || '运行进程异常终止' } : {}),
     });
   };
+  // 断点续跑的可复用节点不重新执行，其工作区文件仍留在祖先运行的 runtime 目录；
+  // 先物化拷贝到本次运行目录，快照与 /artifact 路由按 runId 定位才能命中。
+  // 拷贝失败只记 issue 不阻塞持久化（祖先目录被清理时产物缺失属既成事实）。
+  const materializeResumedWorkspaces = (run) => {
+    if (!run.resumedFrom || !run.nodeStates) return;
+    const scope = { workflowId: run.workflowId || 'draft', runId: run.runId };
+    for (const [nodeId, state] of Object.entries(run.nodeStates)) {
+      if (state?.status !== 'success' || !Array.isArray(state.artifacts) || !state.artifacts.length) continue;
+      const sourceRoot = STORAGE.workspaceForNode({ workflowId: run.workflowId || 'draft', runId: run.resumedFrom, nodeId });
+      const targetRoot = STORAGE.workspaceForNode({ ...scope, nodeId });
+      for (const relativePath of state.artifacts) {
+        if (!relativePath || String(relativePath).endsWith('/')) continue;
+        try {
+          const source = resolveInside(sourceRoot, relativePath);
+          const target = resolveInside(targetRoot, relativePath);
+          if (!source || !target) continue;
+          if (existsSync(target)) continue;
+          if (!existsSync(source) || !statSync(source).isFile()) continue;
+          const realSource = realpathSync(source);
+          if (resolveInside(realpathSync(sourceRoot), realSource) !== realSource) continue;
+          mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+          copyFileSync(realSource, target, fsConstants.COPYFILE_EXCL);
+        } catch (error) {
+          ctx.logger?.warn?.(`[wf1] 续跑产物物化失败（${run.runId}/${nodeId}/${relativePath}）：${error.message}`);
+        }
+      }
+    }
+  };
   const persistRun = (run, graph, workflowName, workflowId) => {
     try {
       const light = { ...run, _resolved: true };
@@ -866,6 +894,7 @@ export function apply(ctx, config) {
         graph: graphSnapshot,
       });
       const scope = { workflowId: base.workflowId || 'draft', runId: base.runId };
+      materializeResumedWorkspaces(base);
       const snapshot = snapshotRunArtifacts(base, {
         workspaceForNode: ({ nodeId }) => STORAGE.workspaceForNode({ ...scope, nodeId }),
         artifactRunDir: STORAGE.artifactRunDir(scope),
@@ -1238,13 +1267,27 @@ export function apply(ctx, config) {
         const { turns, preview, turnEnded } = scanEvents();
         emit('agent-progress', {
           runId, nodeId: node.id, turns,
-          preview: outputConfig.mode === 'structured' ? '' : preview.slice(0, 200),
+          // 实时输出流（文稿视图消费）：assistant 全文拼接，4KB 截断——多工具轮 agent 生成期
+          // 前端可看文稿长大；带宽 = 4KB × 并发 agent ÷ 2s，量级安全
+          preview: outputConfig.mode === 'structured' ? '' : preview.slice(0, 4096),
           structured: outputConfig.mode === 'structured' || undefined,
           maxRounds: maxRounds || undefined,
         });
         if (maxRounds && turns > maxRounds) {
           try { agent.cancel({ kind: 'user' }); } catch { /* noop */ }
           return watchDone();
+        }
+        // 首个 turn/end 后延迟复查一次：多工具轮 agent 常在首轮文本后继续调用工具，
+        // 立即退出会漏报后续轮次；复查仍无新 turn 才确认结束（单轮 agent 语义不变）
+        if (turnEnded && !watchState.rechecking) {
+          watchState.rechecking = true;
+          watchState.timer = setTimeout(() => {
+            if (watchState.stop) return;
+            const next = scanEvents();
+            if (next.turns > turns) { watchState.rechecking = false; watchTick(); return; }
+            watchDone();
+          }, 2500);
+          return;
         }
         if (turnEnded) return watchDone();
         watchState.timer = setTimeout(watchTick, 2000);
@@ -2568,18 +2611,25 @@ export function apply(ctx, config) {
           file: resolved.file, filename: resolved.artifact.name, mediaType, preview,
         });
       }
-      // 运行中/试运行：运行文档还没有快照，直接从节点工作区解析
-      const ws = resolveInside(STORAGE.workspaceForNode({
-        workflowId: run?.workflowId || 'draft', runId, nodeId: nodeParam,
-      }), file);
-      if (ws && existsSync(ws) && statSync(ws).isFile()) {
+      // 运行中/试运行：运行文档还没有快照，直接从节点工作区解析；
+      // 断点续跑的节点产物物理上在祖先运行目录，沿 resumedFrom 链回退（有限深度防环）
+      const ancestorRunIds = [runId];
+      let cursor = readRun(runId);
+      for (let depth = 0; cursor?.resumedFrom && depth < 10; depth += 1) {
+        ancestorRunIds.push(cursor.resumedFrom);
+        cursor = readRun(cursor.resumedFrom);
+      }
+      for (const candidateRunId of ancestorRunIds) {
+        const ws = resolveInside(STORAGE.workspaceForNode({
+          workflowId: run?.workflowId || 'draft', runId: candidateRunId, nodeId: nodeParam,
+        }), file);
+        if (!ws || !existsSync(ws) || !statSync(ws).isFile()) continue;
         const realWsParent = realpathSync(dirname(ws));
         const realWs = realpathSync(ws);
-        if (resolveInside(realWsParent, realWs) === realWs) {
-          const mediaType = mediaTypeFor(file);
-          const preview = url.searchParams.get('preview') === '1' && isPreviewableMediaType(mediaType);
-          return streamArtifactResponse(req, res, { file: realWs, filename: file, mediaType, preview });
-        }
+        if (resolveInside(realWsParent, realWs) !== realWs) continue;
+        const mediaType = mediaTypeFor(file);
+        const preview = url.searchParams.get('preview') === '1' && isPreviewableMediaType(mediaType);
+        return streamArtifactResponse(req, res, { file: realWs, filename: file, mediaType, preview });
       }
       return json(res, 404, { error: '产物不存在' });
     }
