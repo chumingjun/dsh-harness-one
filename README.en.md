@@ -84,6 +84,15 @@ Workflow One lives inside the official dsh interface and is designed for creatin
 3. Confirm the generated graph on the canvas, save it, then start the run from chat or the canvas.
 4. During a run, the conversation shows each node's progress directly in cards. You can also configure a notification node to sync node status to a Feishu group or direct chat in real time. Canvas nodes expose actual input and execution details, while the result panel provides the timeline, final result, and artifacts.
 
+**`/workflow-one` skill command**: type `/` in the chat input to open the skill menu and pick `workflow-one` to load the operating guide, then build and steer long-running pipelines in natural language — multi-node chains, scheduled triggers, tens of minutes unattended:
+
+- "Build a workflow that pulls messages from our three Feishu groups every morning, extracts the highlights into a daily report, and posts it back" — describe it and it's created: the AI plans the multi-node chain (fetch → analyze → write → notify), wires the schedule trigger, and it runs automatically every day
+- "Where is it now? Which node is stuck?" — ask about progress anytime on a long run: node states and outputs, with error summaries and next-step suggestions for failures
+- "Add a human-confirmation branch to the competitor-monitoring workflow for data anomalies" — reads the graph, applies the edits, and lints the result in one pass
+- "Delete that throwaway scraper workflow" — deletes after confirmation, refusing (and listing) any runs, schedules, or webhooks still attached
+
+The skill is seeded into the native dsh skill root by the orchestrator on install and is shared by chat and canvas sessions. Canvas-bound sessions additionally get the `canvas_*` tool family for editing the currently open canvas.
+
 ![Workflow One switching from the full canvas to live node details](images/workflow-one-demo.gif)
 
 [View the full-resolution screenshot](images/workflow01.png)
