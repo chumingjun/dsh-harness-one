@@ -257,6 +257,8 @@
 .sch-err { color: var(--danger-fg, #ef4444); font-size: 11px; margin: 4px 0 0; }
 .sch-preview { margin: 6px 0 0; font-size: 11px; color: var(--fg-muted); }
 .sch-preview strong { color: var(--fg); margin-right: 8px; }
+.sch-tz { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.sch-tz-select { max-width: 360px; }
 .sch-overlap { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; }
 .sch-radio { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
 .sch-radio-on { border-color: var(--accent, #6d8cff); }

@@ -1,8 +1,8 @@
 // lib/schedule.js 单测：cron 计算、重叠判定、调度器策略（短真实等待驱动）。
 import { strict as assert } from 'node:assert';
 import {
-  computeNextDelay, createScheduler, hasLiveRunForWorkflow, isValidCron,
-  normalizeScheduleMeta, persistableScheduleMeta, upcomingFireTimes,
+  computeNextDelay, createScheduler, hasLiveRunForWorkflow, isValidCron, isValidTimezone,
+  normalizeScheduleMeta, normalizeTimezoneInput, persistableScheduleMeta, upcomingFireTimes,
 } from '../lib/schedule.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,6 +48,52 @@ await test('upcomingFireTimes：返回递增 ISO 时间、条数正确（本地�
   assert.deepEqual(times, expected);
 });
 
+await test('isValidTimezone：IANA 名与 UTC 合法、垃圾名/空值非法', () => {
+  assert.equal(isValidTimezone('Asia/Shanghai'), true);
+  assert.equal(isValidTimezone('UTC'), true);
+  assert.equal(isValidTimezone('America/New_York'), true);
+  assert.equal(isValidTimezone('Not/AZone'), false);
+  assert.equal(isValidTimezone(''), false);
+  assert.equal(isValidTimezone(null), false);
+  assert.equal(isValidTimezone(undefined), false);
+  assert.equal(isValidTimezone(42), false);
+});
+
+await test('normalizeTimezoneInput：空值归一为 null；非法名抛错；两侧空白裁剪', () => {
+  assert.equal(normalizeTimezoneInput(undefined), null);
+  assert.equal(normalizeTimezoneInput(null), null);
+  assert.equal(normalizeTimezoneInput(''), null);
+  assert.equal(normalizeTimezoneInput('   '), null);
+  assert.equal(normalizeTimezoneInput('Asia/Shanghai'), 'Asia/Shanghai');
+  assert.equal(normalizeTimezoneInput('  UTC  '), 'UTC');
+  assert.throws(() => normalizeTimezoneInput('Not/AZone'), /时区无效/);
+});
+
+await test('时区透传：tz=UTC 的 0 9 * * * 触发点是 09:00Z；与主机时区解释可不同', () => {
+  // 以 UTC 锚定：2026-01-01T00:00Z，UTC 时区下 0 9 * * * 首个触发是当天 09:00Z
+  const base = Date.parse('2026-01-01T00:00:00Z');
+  assert.equal(upcomingFireTimes('0 9 * * *', 1, base, 'UTC')[0], '2026-01-01T09:00:00.000Z');
+  // 同一时刻按纽约（1 月 EST=UTC-5）解释：本地 9 点 = 14:00Z
+  assert.equal(upcomingFireTimes('0 9 * * *', 1, base, 'America/New_York')[0], '2026-01-01T14:00:00.000Z');
+  // 不传 tz = 主机本地时区（旧行为）：按本地 9 点计算，可与 UTC 结果不同
+  const local = upcomingFireTimes('0 9 * * *', 1, base);
+  const hostTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (hostTz !== 'UTC') assert.notEqual(local[0], '2026-01-01T09:00:00.000Z');
+  // computeNextDelay 同样吃 tz：从 08:59Z 起 UTC 9 点 cron 下一跳约 60s
+  const delay = computeNextDelay('0 9 * * *', Date.parse('2026-01-01T08:59:00Z'), 'UTC');
+  assert.ok(Math.abs(delay - 60_000) < 50, `expect ~60000ms got ${delay}`);
+  // isValidCron 同样接受 tz 参数；非法 tz 在带 currentDate 时 cron-parser 直接抛错 → fail-closed 判非法
+  assert.equal(isValidCron('0 9 * * *', 'UTC'), true);
+  assert.equal(isValidCron('0 9 * * *', 'Not/AZone'), false);
+});
+
+await test('时区跨夏令时：纽约 3 月 DST 切换，本地 9 点绝对时间前移 1 小时', () => {
+  // 2026-03-08 02:00 EST → EDT：切换前本地 9 点 = 14:00Z，切换后 = 13:00Z
+  const times = upcomingFireTimes('0 9 * * *', 2, Date.parse('2026-03-07T12:00:00Z'), 'America/New_York');
+  assert.equal(times[0], '2026-03-07T14:00:00.000Z');
+  assert.equal(times[1], '2026-03-08T13:00:00.000Z');
+});
+
 await test('hasLiveRunForWorkflow：按 workflowId+workspaceRoot 匹配，其他工作区/工作流不算', () => {
   const runs = new Map([
     ['r1', { run: { workflowId: 'wf_a', workspaceRoot: '/ws1' } }],
@@ -70,27 +116,35 @@ await test('normalizeScheduleMeta：旧 triggers.json 字段补默认 skip/enabl
   assert.equal(legacy.fireCount, 0);
   assert.equal(legacy.skippedCount, 0);
 
-  const full = normalizeScheduleMeta({ key: 'sch_y', workflowId: 'wf', cron: '0 9 * * *', overlap: 'parallel', enabled: false, runInputs: { a: 1 }, fireCount: 3, skippedCount: 2 });
+  const full = normalizeScheduleMeta({ key: 'sch_y', workflowId: 'wf', cron: '0 9 * * *', overlap: 'parallel', enabled: false, runInputs: { a: 1 }, fireCount: 3, skippedCount: 2, timezone: 'Asia/Shanghai' });
   assert.equal(full.overlap, 'parallel');
   assert.equal(full.enabled, false);
   assert.deepEqual(full.runInputs, { a: 1 });
   assert.equal(full.fireCount, 3);
   assert.equal(full.skippedCount, 2);
+  assert.equal(full.timezone, 'Asia/Shanghai');
+
+  // 旧数据无 timezone = 跟随主机（null），非法值回落 null，不做迁移
+  assert.equal(legacy.timezone, null);
+  assert.equal(normalizeScheduleMeta({ cron: '0 9 * * *', timezone: 'Not/AZone' }).timezone, null);
 
   assert.equal(normalizeScheduleMeta({ overlap: 'whatever' }).overlap, 'skip');
 });
 
-await test('persistableScheduleMeta：落盘含全部统计与配置字段', () => {
+await test('persistableScheduleMeta：落盘含全部统计与配置字段（含 timezone）', () => {
   const disk = persistableScheduleMeta(normalizeScheduleMeta({
     key: 'sch_z', workflowId: 'wf', workflowName: 'n', cron: '0 9 * * *', input: 'x',
-    runInputs: { k: 'v' }, overlap: 'parallel', enabled: false, createdAt: 't',
+    runInputs: { k: 'v' }, overlap: 'parallel', timezone: 'UTC', enabled: false, createdAt: 't',
     nextAt: '2026-01-16T09:00:00.000Z', fireCount: 5, skippedCount: 1,
   }));
   assert.deepEqual(disk, {
     key: 'sch_z', workflowId: 'wf', workflowName: 'n', cron: '0 9 * * *', input: 'x',
-    runInputs: { k: 'v' }, overlap: 'parallel', enabled: false, createdAt: 't',
+    runInputs: { k: 'v' }, overlap: 'parallel', timezone: 'UTC', enabled: false, createdAt: 't',
     nextAt: '2026-01-16T09:00:00.000Z', fireCount: 5, skippedCount: 1,
   });
+  // 无 timezone 时落盘 null（不缺字段，便于下游区分「跟随主机」）
+  const noTz = persistableScheduleMeta(normalizeScheduleMeta({ key: 'sch_n', workflowId: 'wf', cron: '0 9 * * *' }));
+  assert.equal(noTz.timezone, null);
 });
 
 await test('createScheduler：每秒 cron 到点触发 fire 并回调 onFire', async () => {

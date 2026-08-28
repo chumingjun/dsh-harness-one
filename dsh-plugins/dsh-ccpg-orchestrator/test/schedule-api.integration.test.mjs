@@ -126,6 +126,42 @@ await test('POST /schedule/preview：返回 3 次触发时间；非法 cron 400'
   assert.equal(bad.status, 400);
 });
 
+await test('timezone：preview 按所选时区计算；创建落盘；非法名 400；PATCH 可改', async () => {
+  // preview 用真实「现在」起算，绝对值不定；验证接受 timezone 且返回 3 个合法 ISO
+  // （tz 对触发点的实际影响已在 schedule.test.mjs 用锚定时刻验证）
+  const utc = await call('POST', '/wf1/api/schedule/preview', { cron: '0 9 * * *', timezone: 'UTC' });
+  assert.equal(utc.status, 200);
+  for (const t of utc.body.times) assert.ok(!Number.isNaN(Date.parse(t)));
+  const badTz = await call('POST', '/wf1/api/schedule/preview', { cron: '0 9 * * *', timezone: 'Not/AZone' });
+  assert.equal(badTz.status, 400);
+  assert.match(badTz.body.error, /时区无效/);
+  // 空串/null = 跟随主机，不报错
+  const hostTz = await call('POST', '/wf1/api/schedule/preview', { cron: '0 9 * * *', timezone: '' });
+  assert.equal(hostTz.status, 200);
+
+  const created = await call('POST', '/wf1/api/schedule', { workflowId: 'wf_sch', cron: '0 9 * * *', timezone: 'UTC' });
+  assert.equal(created.status, 200);
+  const key = created.body.key;
+  let disk = readTriggers().schedules.find((s) => s.key === key);
+  assert.equal(disk.timezone, 'UTC', '创建时 timezone 应落盘');
+  const listed = await call('GET', '/wf1/api/schedule');
+  assert.equal(listed.body.schedules.find((s) => s.key === key).timezone, 'UTC');
+
+  const patched = await call('PATCH', '/wf1/api/schedule', { key, timezone: 'America/New_York' });
+  assert.equal(patched.status, 200);
+  disk = readTriggers().schedules.find((s) => s.key === key);
+  assert.equal(disk.timezone, 'America/New_York');
+
+  const badPatch = await call('PATCH', '/wf1/api/schedule', { key, timezone: 'Mars/Olympus' });
+  assert.equal(badPatch.status, 400);
+  const backToHost = await call('PATCH', '/wf1/api/schedule', { key, timezone: null });
+  assert.equal(backToHost.status, 200);
+  assert.equal(readTriggers().schedules.find((s) => s.key === key).timezone, null, 'null = 跟随主机');
+
+  const del = await call('DELETE', `/wf1/api/schedule?key=${key}`);
+  assert.equal(del.status, 200);
+});
+
 await test('POST /schedule/run：立即触发返回 runId 并计入 fireCount；来源为 schedule', async () => {
   const fired = await call('POST', '/wf1/api/schedule/run', { key: globalThis.__schKey });
   assert.equal(fired.status, 200);

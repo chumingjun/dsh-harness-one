@@ -10,28 +10,50 @@ export const OVERLAP_POLICIES = ['skip', 'parallel'];
 // setTimeout 上限 2^31-1 ms（约 24.8 天）：远期任务链式分段等待，避免溢出成 1ms 风暴
 const MAX_WAIT = 2 ** 31 - 1;
 
-export function isValidCron(cron) {
+export function isValidCron(cron, tz) {
   // cron-parser 宽松模式把空串/缺段当 *（空串 = 每分钟），先拒绝空值
   if (typeof cron !== 'string' || !cron.trim()) return false;
   try {
-    parseCronExpression(cron, { currentDate: new Date() });
+    parseCronExpression(cron, { currentDate: new Date(), tz: tz || undefined });
     return true;
   } catch {
     return false;
   }
 }
 
-// 距下次触发的毫秒数（≥1）；cron 无效抛错（空串同上视为无效）
-export function computeNextDelay(cron, now = Date.now()) {
+// 合法 IANA 时区名（含 UTC / 旧别名）；空值不算合法时区
+export function isValidTimezone(tz) {
+  if (typeof tz !== 'string' || !tz.trim()) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz.trim() });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 请求侧 timezone 归一化：空值 = null（跟随主机时区）；非法名抛错。
+// 必须在入口拦：cron-parser 对非法 tz 静默回退本地时区，不抛错。
+export function normalizeTimezoneInput(value) {
+  if (value === undefined || value === null) return null;
+  const tz = String(value).trim();
+  if (!tz) return null;
+  if (!isValidTimezone(tz)) throw new Error(`时区无效：${tz}`);
+  return tz;
+}
+
+// 距下次触发的毫秒数（≥1）；cron 无效抛错（空串同上视为无效）。
+// tz 为空按主机本地时区解释，等价旧行为
+export function computeNextDelay(cron, now = Date.now(), tz) {
   if (typeof cron !== 'string' || !cron.trim()) throw new Error('cron 表达式为空');
-  const interval = parseCronExpression(cron, { currentDate: new Date(now) });
+  const interval = parseCronExpression(cron, { currentDate: new Date(now), tz: tz || undefined });
   return Math.max(1, interval.next().getTime() - now);
 }
 
 // 接下来 count 次触发时间（ISO 字符串），供创建表单实时预览；cron 无效抛错
-export function upcomingFireTimes(cron, count = 3, now = Date.now()) {
+export function upcomingFireTimes(cron, count = 3, now = Date.now(), tz) {
   if (typeof cron !== 'string' || !cron.trim()) throw new Error('cron 表达式为空');
-  const interval = parseCronExpression(cron, { currentDate: new Date(now) });
+  const interval = parseCronExpression(cron, { currentDate: new Date(now), tz: tz || undefined });
   const times = [];
   for (let i = 0; i < count; i += 1) times.push(interval.next().toISOString());
   return times;
@@ -48,7 +70,8 @@ export function hasLiveRunForWorkflow(runsMap, workspaceRoot, workflowId) {
   return false;
 }
 
-// 兼容旧 triggers.json：无新字段时补默认值（overlap=skip、enabled=true）
+// 兼容旧 triggers.json：无新字段时补默认值（overlap=skip、enabled=true）。
+// timezone=null = 跟随主机时区（旧行为）；非法值回落 null，绝不带病起调度
 export function normalizeScheduleMeta(raw) {
   const overlap = OVERLAP_POLICIES.includes(raw?.overlap) ? raw.overlap : 'skip';
   return {
@@ -59,6 +82,7 @@ export function normalizeScheduleMeta(raw) {
     input: raw?.input || '',
     runInputs: raw?.runInputs && typeof raw?.runInputs === 'object' ? raw.runInputs : {},
     overlap,
+    timezone: isValidTimezone(raw?.timezone) ? raw.timezone.trim() : null,
     enabled: raw?.enabled !== false,
     createdAt: raw?.createdAt || null,
     nextAt: raw?.nextAt || null,
@@ -77,6 +101,7 @@ export function persistableScheduleMeta(meta) {
     input: meta.input,
     runInputs: meta.runInputs || {},
     overlap: meta.overlap || 'skip',
+    timezone: meta.timezone || null,
     enabled: meta.enabled !== false,
     createdAt: meta.createdAt,
     nextAt: meta.nextAt || null,
@@ -112,7 +137,7 @@ export function createScheduler({ meta, fire, isBusy, logger, now = () => Date.n
     if (state.stopped) return;
     let nextMs = 1;
     try {
-      nextMs = computeNextDelay(normalized.cron, now());
+      nextMs = computeNextDelay(normalized.cron, now(), normalized.timezone);
     } catch (error) {
       state.stopped = true;
       state.nextAt = null;
