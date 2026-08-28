@@ -28,8 +28,9 @@ function legacyArtifact(nodeLabel, file) {
   });
 }
 
-/** 新架构产物 URL：run + nodeId 定位节点工作区/运行快照（后端 /wf1/api/artifact） */
-function runArtifact(runId, nodeId, file) {
+/** 新架构产物 URL：run + nodeId 定位节点工作区/运行快照（后端 /wf1/api/artifact）。
+ *  导出给文稿视图复用——stateArtifacts 只有裸文件名，URL 必须走 apiUrl 带 sessionId。 */
+export function runArtifact(runId, nodeId, file) {
   const query = `run=${encodeURIComponent(runId)}&node=${encodeURIComponent(nodeId)}&file=${encodeURIComponent(file)}`;
   const base = apiUrl(`/artifact?${query}`);
   return normalizeArtifact({

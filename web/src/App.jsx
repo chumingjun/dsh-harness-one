@@ -36,6 +36,9 @@ import { TestRunModal } from './TestRunModal.jsx';
 import { NodeDetailModal } from './NodeDetailModal.jsx';
 import { VariableCenter } from './VariableCenter.jsx';
 import { ScheduleCenter } from './ScheduleCenter.jsx';
+import { DocWallView } from './DocWallView.jsx';
+import { adaptRunResults, loadRunResults } from './result-adapter.js';
+import './doc-wall.css';
 import { TEMPLATES, TemplateModal } from './templates.jsx';
 
 export default function App() {
@@ -46,7 +49,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState(null);
   const [logOpen, setLogOpen] = useState(true);
-  const [view, setView] = useState('canvas'); // 'canvas' | 'workflows'
+  const [view, setView] = useState('canvas'); // 'canvas' | 'docs' | 'workflows'
   const [historyOpen, setHistoryOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [currentWf, setCurrentWfRaw] = useState(null); // normalized workflow document, including id/name
@@ -76,6 +79,11 @@ export default function App() {
   const [dirty, setDirty] = useState(false);
   const [modal, setModal] = useState(null); // { type: 'confirm'|'prompt'|'rename', ... }
   const [progress, setProgress] = useState({}); // nodeId → { turns, preview }
+  // 文稿视图：run-results 投影（磁盘事实）+ SSE 叠加（progress 实时流）。
+  // 独立于 ResultPanel 的 remoteResults——两边加载时机不同，避免相互干扰。
+  const [docWallResults, setDocWallResults] = useState(undefined);
+  const [docWallLoading, setDocWallLoading] = useState(false);
+  const [docWallError, setDocWallError] = useState('');
   const [credOpen, setCredOpen] = useState(false);
   const [variableCenterOpen, setVariableCenterOpen] = useState(false);
   const [scheduleCenterOpen, setScheduleCenterOpen] = useState(false);
@@ -326,10 +334,61 @@ export default function App() {
     return () => clearInterval(timer);
   }, [hostSession.id, refreshRunList]);
 
+  // 文稿视图数据：切到 docs 或 inspectedRunId 变化时拉 run-results（磁盘投影）。
+  // 运行中先快速投影（不等 ready），run-end 后由 resultsReadyToken 触发重载拿最终产物。
+  const loadDocWall = useCallback(async (runId, { waitUntilReady = false } = {}) => {
+    if (!runId) { setDocWallResults(undefined); return; }
+    setDocWallLoading(true);
+    setDocWallError('');
+    try {
+      const data = await loadRunResults(
+        apiUrl(`/run-results?id=${encodeURIComponent(runId)}`),
+        { waitUntilReady },
+      );
+      setDocWallResults(data);
+    } catch (error) {
+      setDocWallError(error?.message || String(error));
+    } finally {
+      setDocWallLoading(false);
+    }
+  }, []);
+  const [docWallVisible, setDocWallVisible] = useState(false); // 只在 docs 视图挂载时拉数据
+  useEffect(() => {
+    setDocWallVisible(view === 'docs');
+    if (view === 'docs') loadDocWall(inspectedRunId);
+    // 切走不撤销数据：回画布再切回 docs 保留投影，避免重复拉取
+  }, [view, inspectedRunId, loadDocWall]);
+  // 运行结束（成果落盘）→ 文稿墙全量再投影（异常恢复原则：重新投影即可，不增量修补最终态）
+  const docWallReadyToken = resultsReadyByRunId[inspectedRunId] || 0;
+  const docWallReadyTokenRef = useRef(docWallReadyToken);
+  useEffect(() => {
+    if (!docWallVisible || !inspectedRunId) return;
+    if (docWallReadyToken && docWallReadyToken !== docWallReadyTokenRef.current) {
+      docWallReadyTokenRef.current = docWallReadyToken;
+      loadDocWall(inspectedRunId, { waitUntilReady: true });
+    }
+  }, [docWallReadyToken, docWallVisible, inspectedRunId, loadDocWall]);
+  // SSE 断线重连 → 文稿墙再投影。首次 open 不刷（数据刚拉过）：距上次加载 >10s 才认定是断线恢复
+  const docWallLastLoadRef = useRef(0);
+  useEffect(() => { if (docWallLoading) docWallLastLoadRef.current = Date.now(); }, [docWallLoading]);
+  useEffect(() => {
+    sseReconnectRef.current = () => {
+      if (!docWallVisible || !inspectedRunId) return;
+      if (Date.now() - docWallLastLoadRef.current < 10000) return;
+      loadDocWall(inspectedRunId);
+    };
+    return () => { sseReconnectRef.current = null; };
+  }, [docWallVisible, inspectedRunId, loadDocWall]);
+
   // SSE：事件 → 节点状态 + 进度 + 结构化日志
+  const sseReconnectRef = useRef(null); // 重连回调（文稿墙再投影等订阅方），定义在后段
   useEffect(() => {
     if (!canvasScopeReady) return undefined;
     const es = new EventSource(apiUrl('/events'));
+    // 断线重连：EventSource 自动重连，但断口事件已丢——通知订阅方全量再投影（文稿墙刷新）
+    es.addEventListener('open', () => {
+      if (sseReconnectRef.current) sseReconnectRef.current();
+    });
     // 结构化运行事件：实时运行经 ref 路由，历史检查态不参与 SSE 过滤。
     const pushEntry = (entry) => {
       const timed = { t: Date.now(), ...entry };
@@ -446,6 +505,7 @@ export default function App() {
       if (!appliesToActiveRun(p)) return;
       runningRef.current = false;
       setRunStatus((s) => (s.runId === p.runId ? { ...s, running: false, last: p.status } : s));
+      setProgress({}); // 文稿墙流卡随运行终止退场（落卡由 results-ready 重载投影接管）
       pushEntry({ kind: 'run', runId: p.runId, status: p.status, text: `运行结束：${STATUS_CN[p.status] || p.status}${p.durationMs ? ` · ${(p.durationMs / 1000).toFixed(1)}s` : ''}` });
       const completedScopeEpoch = workflowScopeEpochRef.current;
       const hydrateRunDetail = async () => {
@@ -500,6 +560,7 @@ export default function App() {
       if (!adopted) activeRunIdRef.current = p.runId;
       runningRef.current = false;
       setRunStatus((s) => ({ ...s, running: false, runId: p.runId || s.runId, last: 'error' }));
+      setProgress({}); // 启动失败的流卡同样要退场
       toast(`启动失败：${p.error}`, 'error');
       pushEntry({ kind: 'sys', runId: p.runId, status: 'error', text: p.error });
     });
@@ -1449,6 +1510,7 @@ export default function App() {
         <strong className="toolbar-brand">Workflow One</strong>
         <nav className="view-tabs">
           <button className={`view-tab ${view === 'canvas' ? 'view-tab-on' : ''}`} onClick={() => setView('canvas')}>画布</button>
+          <button className={`view-tab ${view === 'docs' ? 'view-tab-on' : ''}`} onClick={() => setView('docs')}>文稿</button>
           <button className={`view-tab ${view === 'workflows' ? 'view-tab-on' : ''}`} onClick={() => setView('workflows')}>工作流</button>
           <button className={`view-tab ${historyOpen ? 'view-tab-on' : ''}`} onClick={() => setHistoryOpen(true)}>历史</button>
         </nav>
@@ -1494,6 +1556,19 @@ export default function App() {
         {view === 'workflows' ? (
           <div className="wf-view">
             <WorkflowList currentId={currentWf?.id} onOpen={openWorkflow} onNew={newWorkflow} />
+          </div>
+        ) : view === 'docs' ? (
+          <div className="docwall-view">
+            <DocWallView
+              runResults={docWallResults ? adaptRunResults(docWallResults, { runDetail: runDetails[inspectedRunId], events: eventsByRunId[inspectedRunId] || [], status: inspectedRunId === runStatus.runId ? runStatus : runDetails[inspectedRunId], triggerInput }) : undefined}
+              progressByNode={progress}
+              nodeStates={runDetails[inspectedRunId]?.nodeStates || {}}
+              inspectedRunId={inspectedRunId}
+              loading={docWallLoading}
+              loadError={docWallError}
+              onRetry={() => loadDocWall(inspectedRunId)}
+              onRefresh={() => loadDocWall(inspectedRunId, { waitUntilReady: false })}
+            />
           </div>
         ) : (
           <>
