@@ -67,7 +67,8 @@ import {
   variableDefinitionsToValues,
 } from './variable-store.js';
 import {
-  createScheduler, hasLiveRunForWorkflow, isValidCron, normalizeScheduleMeta,
+  createScheduler, hasLiveRunForWorkflow, isValidCron,
+  normalizeScheduleMeta, normalizeTimezoneInput,
   persistableScheduleMeta, upcomingFireTimes,
 } from './schedule.js';
 
@@ -2231,7 +2232,7 @@ export function apply(ctx, config) {
   } }, { scoped: false });
 
   // ---- 定时触发 ----
-  // POST /wf1/api/schedule { workflowId, cron, input?, runInputs?, overlap? }
+  // POST /wf1/api/schedule { workflowId, cron, input?, runInputs?, overlap?, timezone? }
   // 调度核心在 lib/schedule.js（computeNextDelay + 链式 setTimeout + overlap 策略）
   const scheduleStoreRoot = () => currentStore().workspaceRoot;
   const scheduleBusy = (workflowId) => hasLiveRunForWorkflow(orch.runs, scheduleStoreRoot(), workflowId);
@@ -2336,6 +2337,8 @@ export function apply(ctx, config) {
       if (!wf) return json(res, 404, { error: '工作流不存在' });
       if (!body?.cron) return json(res, 400, { error: '需要 cron 表达式（5 段）' });
       if (!isValidCron(body.cron)) return json(res, 400, { error: 'cron 表达式无效' });
+      let timezone;
+      try { timezone = normalizeTimezoneInput(body?.timezone); } catch (error) { return json(res, 400, { error: error.message }); }
       let runInputs = {};
       try { runInputs = assertSafeContextObject(body?.runInputs, 'runInputs'); } catch (error) { return routeError(res, error); }
       if (body?.overlap && !['skip', 'parallel'].includes(body.overlap)) {
@@ -2350,6 +2353,7 @@ export function apply(ctx, config) {
         input: body.input || '',
         runInputs,
         overlap: body.overlap || 'skip',
+        timezone,
         enabled: true,
         createdAt: new Date().toISOString(),
       });
@@ -2373,6 +2377,9 @@ export function apply(ctx, config) {
       if (hasOwn(body, 'overlap')) {
         if (!['skip', 'parallel'].includes(body.overlap)) return json(res, 400, { error: 'overlap 仅支持 skip / parallel' });
         patch.overlap = body.overlap;
+      }
+      if (hasOwn(body, 'timezone')) {
+        try { patch.timezone = normalizeTimezoneInput(body.timezone); } catch (error) { return json(res, 400, { error: error.message }); }
       }
       if (hasOwn(body, 'runInputs')) {
         try { patch.runInputs = assertSafeContextObject(body?.runInputs, 'runInputs'); } catch (error) { return routeError(res, error); }
@@ -2405,13 +2412,15 @@ export function apply(ctx, config) {
     json(res, 405, { error: 'method' });
   } });
 
-  // cron 预览：创建/编辑表单实时显示接下来几次触发时间
+  // cron 预览：创建/编辑表单实时显示接下来几次触发时间（按请求所选时区）
   register({ kind: 'exact', path: '/wf1/api/schedule/preview', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
     if (!body?.cron) return json(res, 400, { error: '需要 cron 表达式' });
+    let tz;
+    try { tz = normalizeTimezoneInput(body?.timezone); } catch (error) { return json(res, 400, { error: error.message }); }
     try {
-      return json(res, 200, { ok: true, times: upcomingFireTimes(body.cron, 3) });
+      return json(res, 200, { ok: true, times: upcomingFireTimes(body.cron, 3, Date.now(), tz) });
     } catch (e) {
       return json(res, 400, { error: `cron 表达式无效：${e.message}` });
     }

@@ -95,3 +95,47 @@ export function describeCron(cron) {
 export function presetOfCron(cron) {
   return CRON_PRESETS.find((p) => p.cron === String(cron || '').trim()) || null;
 }
+
+// 主机时区名（浏览器端展示「跟随主机」选项时提示具体值）
+export function hostTimezone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || '本地时区';
+}
+
+// 时区选择器候选：完整 IANA 列表 + 字面量 UTC 去重置顶（ICU 列表常只有 Etc/UTC，
+// 而服务端/直觉都认 'UTC'）；旧浏览器没有 supportedValuesOf 时退到常见几个
+export function supportedTimezones() {
+  try {
+    const all = Intl.supportedValuesOf('timeZone');
+    return all.includes('UTC') ? all : ['UTC', ...all];
+  } catch {
+    return ['UTC', 'Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Tokyo', 'America/New_York', 'Europe/London'];
+  }
+}
+
+// 时区偏移提示：Asia/Shanghai → UTC+08:00（按当前时刻，DST 期偏移随之变化，仅作选择提示）。
+// 零偏移统一显示 UTC（部分 ICU 对字面量 UTC 返回 GMT+00:00）
+export function timezoneOffsetLabel(tz, now = new Date()) {
+  try {
+    const name = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'longOffset' })
+      .formatToParts(now)
+      .find((p) => p.type === 'timeZoneName')?.value;
+    if (!name) return '';
+    const label = name.replace(/^GMT/, 'UTC');
+    return label === 'UTC+00:00' ? 'UTC' : label;
+  } catch {
+    return '';
+  }
+}
+
+// 把 ISO 时间按指定 IANA 时区格式化；tz 为空按浏览器本地时区（与旧行为一致）。
+// 非法 tz 名（如手改数据塞入垃圾值）兜底回本地时区，不让面板渲染崩掉
+export function formatNextInZone(iso, tz) {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  try {
+    return date.toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: tz || undefined });
+  } catch {
+    return date.toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+}

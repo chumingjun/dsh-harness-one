@@ -1,16 +1,9 @@
 // 定时任务面板：列表（下次触发/触发统计/启停/立即运行/删除）+ 创建/编辑表单
 // （cron 预设 + 实时预览下 3 次触发 + 重叠策略）。风格对齐 VariableCenter 的 Modal。
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiUrl } from './api.js';
 import { Modal } from './ui.jsx';
-import { CRON_PRESETS, describeCron, presetOfCron } from './schedule-center.js';
-
-function formatNext(iso) {
-  if (!iso) return '—';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-}
+import { CRON_PRESETS, describeCron, formatNextInZone, hostTimezone, presetOfCron, supportedTimezones, timezoneOffsetLabel } from './schedule-center.js';
 
 function validateRunInputsJson(text) {
   if (!text.trim()) return { ok: true, value: {} };
@@ -31,9 +24,17 @@ function ScheduleForm({ workflows, initial, onSubmit, onCancel, submitting }) {
   const [input, setInput] = useState(initial?.input || '');
   const [runInputsText, setRunInputsText] = useState(initial?.runInputs && Object.keys(initial.runInputs).length ? JSON.stringify(initial.runInputs, null, 2) : '');
   const [overlap, setOverlap] = useState(initial?.overlap || 'skip');
+  // timezone=null 跟随主机；时区候选按使用频率把常见区排前
+  const [timezone, setTimezone] = useState(initial?.timezone || '');
   const [preview, setPreview] = useState({ state: 'idle' }); // idle | loading | ok | error
   const preset = presetOfCron(cron);
   const debounceRef = useRef(null);
+  const timezoneOptions = useMemo(() => {
+    const all = supportedTimezones();
+    const common = ['Asia/Shanghai', 'UTC', 'Asia/Hong_Kong', 'Asia/Taipei', 'Asia/Tokyo', 'America/New_York', 'Europe/London'];
+    const head = common.filter((tz) => all.includes(tz));
+    return [...head, ...all.filter((tz) => !head.includes(tz))];
+  }, []);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -42,14 +43,14 @@ function ScheduleForm({ workflows, initial, onSubmit, onCancel, submitting }) {
     debounceRef.current = setTimeout(() => {
       fetch(apiUrl('/schedule/preview'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cron }),
+        body: JSON.stringify({ cron, timezone: timezone || null }),
       })
         .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
         .then(({ ok, data }) => setPreview(ok ? { state: 'ok', times: data.times || [] } : { state: 'error', error: data.error || 'cron 表达式无效' }))
         .catch(() => setPreview({ state: 'error', error: '预览请求失败' }));
     }, 300);
     return () => clearTimeout(debounceRef.current);
-  }, [cron]);
+  }, [cron, timezone]);
 
   const runInputsCheck = validateRunInputsJson(runInputsText);
   const cronValid = preview.state === 'ok';
@@ -63,6 +64,7 @@ function ScheduleForm({ workflows, initial, onSubmit, onCancel, submitting }) {
       input,
       runInputs: runInputsCheck.value,
       overlap,
+      timezone: timezone || null,
     });
   };
 
@@ -93,9 +95,23 @@ function ScheduleForm({ workflows, initial, onSubmit, onCancel, submitting }) {
         {preview.state === 'ok' && (
           <p className="sch-preview">
             <strong>{describeCron(cron) || '自定义周期'}</strong>
-            接下来：{preview.times.map((t) => formatNext(t)).join('、')}
+            接下来：{preview.times.map((t) => formatNextInZone(t, timezone)).join('、')}
           </p>
         )}
+        <div className="sch-tz">
+          <select
+            className="sch-input sch-tz-select"
+            value={timezone}
+            onChange={(e) => setTimezone(e.target.value)}
+            title="cron 表达式按所选时区解释"
+          >
+            <option value="">跟随主机（{hostTimezone()}）</option>
+            {timezoneOptions.map((tz) => (
+              <option key={tz} value={tz}>{tz}（{timezoneOffsetLabel(tz)}）</option>
+            ))}
+          </select>
+          {timezone && <p className="sec-hint">cron 按所选时区 {timezone} 解释；改回「跟随主机」即恢复旧行为</p>}
+        </div>
       </section>
       <section className="panel-sec">
         <h4>触发输入 <span className="sec-hint">可选，模板里用 {'{{$trigger}}'} 引用</span></h4>
@@ -249,7 +265,8 @@ export function ScheduleCenter({ currentWorkflowId, onRan, onClose, toast }) {
                     </div>
                     <div className="sch-row-meta">
                       <span title={row.cron}>{describeCron(row.cron) || row.cron}</span>
-                      <span>下次 {formatNext(row.nextAt)}</span>
+                      <span>下次 {formatNextInZone(row.nextAt, row.timezone)}</span>
+                      <span>{row.timezone ? `时区 ${row.timezone}` : `跟随主机（${hostTimezone()}）`}</span>
                       <span>已触发 {row.fireCount ?? 0} 次{row.skippedCount ? `（跳过 ${row.skippedCount} 次）` : ''}</span>
                       <span>{row.overlap === 'parallel' ? '重叠并行' : '重叠跳过'}</span>
                     </div>
