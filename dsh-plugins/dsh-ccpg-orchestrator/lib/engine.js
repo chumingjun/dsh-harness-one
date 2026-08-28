@@ -286,7 +286,12 @@ export class Orchestrator {
         throw error;
       }
       result = normalizeExecutionResult(await kind.execute(execCtx), { meta: { nodeType: node.type } });
-      if (timedOut) throw new Error(`节点超时（${Math.round(timeoutMs / 1000)}s）`);
+      if (timedOut) {
+        // 超时但 execute 已产出结果：把轨迹等 extra 带进错误，详情弹窗超时后仍可复盘
+        const timeoutError = new Error(`节点超时（${Math.round(timeoutMs / 1000)}s）`);
+        if (result?.extra && typeof result.extra === 'object') timeoutError.nodeDetails = result.extra;
+        throw timeoutError;
+      }
       if (run.canceled) throw new Error('运行已取消');
       // 输出后处理（飞书写回等）：sink 结果增量合并，保留原节点 data/meta/extra。
       if (kind?.wantsSink && this.outputSink) {
