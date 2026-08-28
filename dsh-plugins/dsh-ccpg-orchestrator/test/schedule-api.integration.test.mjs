@@ -308,6 +308,54 @@ await test('并发回归：同图并发两个 run 同时 live、输出互不串�
   }
 });
 
+await test('GET /runs：workflowId 过滤按画布工作流隔离；缺省维持全量（#79）', async () => {
+  const originalFetch = globalThis.fetch;
+  const gates = new Map();
+  try {
+    globalThis.fetch = (url) => new Promise((resolve) => {
+      gates.set(String(url), () => resolve(new Response(String(url), { status: 200 })));
+    });
+    const graph = {
+      nodes: [
+        { id: 'hist_input', type: 'input', position: { x: 0, y: 0 }, data: { label: '输入', text: 'seed' } },
+        { id: 'hist_output', type: 'output', position: { x: 200, y: 0 }, data: { label: '输出' } },
+      ],
+      edges: [{ source: 'hist_input', target: 'hist_output' }],
+    };
+    // 两个已保存工作流各跑一次 + 一条草稿运行，形成跨工作区混合记录。
+    // 命名工作流运行须带匹配的 graphFingerprint（画布与库一致性的运行时校验）。
+    const wfA = await call('POST', '/wf1/api/workflows', { id: 'wf_hist_a', name: '历史工作流A', graph });
+    const wfB = await call('POST', '/wf1/api/workflows', { id: 'wf_hist_b', name: '历史工作流B', graph });
+    assert.equal(wfA.status, 200);
+    assert.equal(wfB.status, 200);
+    const runA = await call('POST', '/wf1/api/run', { workflowId: 'wf_hist_a', graphFingerprint: wfA.body.graphFingerprint });
+    const runB = await call('POST', '/wf1/api/run', { workflowId: 'wf_hist_b', graphFingerprint: wfB.body.graphFingerprint });
+    const runDraft = await call('POST', '/wf1/api/run', { graph });
+    assert.equal(runA.status, 200);
+    assert.equal(runB.status, 200);
+    assert.equal(runDraft.status, 200);
+    for (const release of gates.values()) release?.();
+
+    const scoped = await call('GET', '/wf1/api/runs?workflowId=wf_hist_a');
+    assert.equal(scoped.status, 200);
+    const scopedIds = scoped.body.runs.map((r) => r.runId);
+    assert.ok(scopedIds.includes(runA.body.runId), '过滤结果含本工作流运行');
+    assert.ok(!scopedIds.includes(runB.body.runId) && !scopedIds.includes(runDraft.body.runId), '过滤结果不含别的工作流/草稿运行');
+    assert.ok(scoped.body.runs.every((r) => r.workflowId === 'wf_hist_a'), '全部条目 workflowId 对齐');
+
+    const missing = await call('GET', '/wf1/api/runs?workflowId=wf_missing');
+    assert.equal(missing.status, 200);
+    assert.deepEqual(missing.body.runs, [], '无匹配返回空列表');
+
+    const all = await call('GET', '/wf1/api/runs');
+    const allIds = all.body.runs.map((r) => r.runId);
+    for (const id of [runA.body.runId, runB.body.runId, runDraft.body.runId]) assert.ok(allIds.includes(id), `全量列表含 ${id}`);
+  } finally {
+    for (const release of gates.values()) release?.();
+    globalThis.fetch = originalFetch;
+  }
+});
+
 for (const d of disposers) await d?.();
 rmSync(workspacesRoot, { recursive: true, force: true });
 rmSync(dshHome, { recursive: true, force: true });

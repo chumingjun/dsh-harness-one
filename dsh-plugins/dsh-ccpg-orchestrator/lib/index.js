@@ -928,7 +928,7 @@ export function apply(ctx, config) {
     const document = normalizeRunDocument(run);
     return currentDatabase().putRun(document);
   };
-  const recentRuns = (limit = 50) => currentDatabase().listRuns(limit).map((run) => (
+  const recentRuns = (limit = 50, workflowId) => currentDatabase().listRuns(limit, workflowId).map((run) => (
     run.status === 'running' && !pendingRunIds.has(run.runId) ? (readRun(run.runId) || run) : run
   ));
   const checkpointRun = (runId) => {
@@ -1808,10 +1808,13 @@ export function apply(ctx, config) {
   register({ kind: 'exact', path: '/wf1/api/runs', handler(req, res) {
     const url = new URL(req.url, 'http://x');
     const limit = Math.min(Number(url.searchParams.get('limit')) || 20, 100);
+    // 可选 workflowId 过滤：历史抽屉按画布打开的工作流隔离（与 workflow_runs 工具同语义）；
+    // 缺省维持工作区级全量（草稿画布 / RunSwitcher 等既有调用不受影响）
+    const workflowId = url.searchParams.get('workflowId') || undefined;
     const liveIds = new Set([...orch.runs.values()].filter((entry) => entry.run.workspaceRoot === currentStore().workspaceRoot).map((entry) => entry.run.runId));
     json(res, 200, {
       // 保持既有字段面（triggerInput/canvasId 等平铺），整形逻辑与 workflow_runs 工具同源
-      runs: recentRuns(limit).map((r) => {
+      runs: recentRuns(limit, workflowId).map((r) => {
         const { structuredOutputs, graph, ...summary } = r;
         const isLive = liveIds.has(r.runId);
         return {

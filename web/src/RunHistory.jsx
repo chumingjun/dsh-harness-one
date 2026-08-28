@@ -11,14 +11,17 @@ function progressText(r) {
   return `${p.done}/${p.total}`;
 }
 
-export function RunHistory({ onClose, onSelect, onResume }) {
+export function RunHistory({ onClose, onSelect, onResume, workflowId }) {
   const [runs, setRuns] = useState([]);
   const [resuming, setResuming] = useState('');
 
+  // 已保存工作流的画布只看该工作流的运行（后端按 workflowId 过滤）；
+  // 草稿画布没有 workflowId，维持工作区全量。
   const load = () => {
-    fetch(apiUrl('/runs')).then((r) => r.json()).then((d) => setRuns(d.runs || [])).catch(() => {});
+    const query = workflowId ? `?workflowId=${encodeURIComponent(workflowId)}` : '';
+    fetch(apiUrl(`/runs${query}`)).then((r) => r.json()).then((d) => setRuns(d.runs || [])).catch(() => {});
   };
-  useEffect(load, []);
+  useEffect(load, [workflowId]);
 
   const resumeRun = async (runId) => {
     if (resuming) return;
