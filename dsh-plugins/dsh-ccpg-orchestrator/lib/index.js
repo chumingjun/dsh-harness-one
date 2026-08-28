@@ -829,6 +829,7 @@ export function apply(ctx, config) {
 
   // ---- 运行历史（按工作区持久化 + 内存缓存）----
   const pendingRunIds = new Set();
+  const liveTracesByRun = new Map(); // 运行中节点的实时轨迹：runId → (nodeId → trace)；节点完成后落盘、运行结束释放
   const recoverInterruptedRun = (run, interruptedAt) => {
     const startedAtMs = run.startedAt ? new Date(run.startedAt).getTime() : NaN;
     const states = (run.graph?.nodes || []).map((node) => run.nodeStates?.[node.id]);
@@ -943,8 +944,11 @@ export function apply(ctx, config) {
   const onOrchestratorEvent = (event, payload) => {
     if (event === 'node-status' && TERMINAL_NODE_STATUSES.has(payload?.status)) {
       notifications.onNodeStatus(payload, orch?.runs.get(payload.runId)?.run);
+      liveTracesByRun.get(payload.runId)?.delete(payload.nodeId); // 完成轨迹已随 run 落盘，实时版即时释放
       try { checkpointRun(payload.runId); }
       catch (error) { ctx.logger?.error?.(`dsh-ccpg 运行检查点写入失败（${payload?.runId || 'unknown'}）：${error.message}`); }
+    } else if (event === 'run-end') {
+      liveTracesByRun.delete(payload?.runId);
     }
     broadcast(event, payload);
   };
@@ -1196,6 +1200,20 @@ export function apply(ctx, config) {
       let watchDone;
       const watchReady = new Promise((r) => { watchDone = r; });
       const watchState = { stop: false, timer: null };
+      // 实时轨迹：watchTick 逐事件扫描时同步折叠进 liveTracesByRun（详情弹窗运行中即可读）；
+      // 水位 lastSeqRef 只处理新到事件；完成后仍走 buildTrace 落盘路径，节点终态即释放。
+      let liveTrace = null;
+      if (runId) {
+        if (!liveTracesByRun.has(runId)) liveTracesByRun.set(runId, new Map());
+        const liveTraces = liveTracesByRun.get(runId);
+        if (!liveTraces.has(node.id)) {
+          liveTraces.set(node.id, { model: `${provider}:${model}`, entries: [{ kind: 'input', text: userPrompt }] });
+        }
+        liveTrace = liveTraces.get(node.id);
+      }
+      const metaHint = { input: userPrompt, model: `${provider}:${model}` };
+      const lastSeqRef = { value: firstSeq }; // 增量折叠水位：只处理新到事件
+      const pendingByCallId = new Map(); // callId → entries 下标（配对跨轮询到达的 tool/call 与 tool/result）
       const scanEvents = () => {
         let turns = 0; let preview = ''; let turnEnded = false;
         try {
@@ -1206,6 +1224,10 @@ export function apply(ctx, config) {
             if (ev.type === 'assistant/message') {
               const joined = (ev.data.message?.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
               if (joined) preview = joined;
+            }
+            if (liveTrace && ev.seq >= lastSeqRef.value) {
+              foldTraceEvent(liveTrace, ev, pendingByCallId, metaHint);
+              lastSeqRef.value = ev.seq + 1;
             }
           }
         } catch { /* session 已释放 */ }
@@ -1935,7 +1957,8 @@ export function apply(ctx, config) {
       schemaVersion: run.schemaVersion || 1,
       variables: run.graph?.nodes ? describeNodeOutput(node) : null,
       input: inputDetail,
-      trace: state?.trace ?? null,
+      // 运行中节点的实时轨迹（内存折叠，2s 刷新）；完成节点读落盘快照
+      trace: state?.status === 'running' ? (liveTracesByRun.get(runId)?.get(nodeId) ?? null) : state?.trace ?? null,
       sessionId: state?.sessionId || null,
     };
     if (!out.trace && state?.sessionId) {
@@ -2695,43 +2718,55 @@ function buildTrace(events, firstSeq, meta = {}) {
   try {
     for (const ev of events) {
       if (ev.seq < firstSeq) continue;
-      if (ev.type === 'user/message') {
-        // followup 之外还有 agent.inject 合成消息（技能加载/文件变更等），一并列出
-        const text = (ev.data?.message?.content || ev.data?.content || [])
-          .filter((b) => b?.type === 'text').map((b) => b.text).join('');
-        if (text && text !== meta.input) {
-          entries.push({ kind: 'inject', text: text.slice(0, 2000) });
-        }
-      } else if (ev.type === 'assistant/message') {
-        const text = (ev.data?.message?.content || [])
-          .filter((b) => b.type === 'text').map((b) => b.text).join('');
-        if (text) entries.push({ kind: 'assistant', text: text.slice(0, 6000), usage: ev.data?.usage });
-      } else if (ev.type === 'tool/call') {
-        pending.set(ev.data.callId, entries.length);
-        entries.push({
-          kind: 'tool', name: ev.data.name,
-          args: String(ev.data.arguments || '').slice(0, 4000),
-          turn: ev.data.turn, step: ev.data.step,
-        });
-      } else if (ev.type === 'tool/result') {
-        // ToolResultMessage.content = [{ type:'tool-result', toolCallId, content, isError }]
-        const blocks = ev.data?.message?.content || [];
-        for (const b of blocks) {
-          const i = pending.get(b?.toolCallId);
-          if (i !== undefined && entries[i]?.result === undefined) {
-            entries[i].result = {
-              ok: b.isError !== true && !ev.data?.error,
-              text: (b.content || []).filter((c) => c?.type === 'text').map((c) => c.text).join('').slice(0, 4000),
-              ...(ev.data?.error ? { error: `${ev.data.error.name}: ${ev.data.error.code}` } : {}),
-            };
-          }
-        }
-      } else if (ev.type === 'turn/end') {
-        entries.push({ kind: 'turn-end', reason: ev.data?.reason?.kind || String(ev.data?.reason || '') });
-      }
+      foldTraceEvent({ entries }, ev, pending, meta);
     }
   } catch { /* session 已释放时保留已折叠部分 */ }
-  // 旧会话回放没有 meta.input：第一条非系统注入就是实际用户输入，归位到 input。
+  finalizeTrace({ entries }, meta);
+  return { model: meta.model, entries };
+}
+
+// 折叠单个 session 事件进 entries（buildTrace 全量与实时轨迹增量共用同一套语义）
+export function foldTraceEvent(trace, ev, pending, meta = {}) {
+  const entries = trace.entries;
+  if (ev.type === 'user/message') {
+    // followup 之外还有 agent.inject 合成消息（技能加载/文件变更等），一并列出
+    const text = (ev.data?.message?.content || ev.data?.content || [])
+      .filter((b) => b?.type === 'text').map((b) => b.text).join('');
+    if (text && text !== meta.input) {
+      entries.push({ kind: 'inject', text: text.slice(0, 2000) });
+    }
+  } else if (ev.type === 'assistant/message') {
+    const text = (ev.data?.message?.content || [])
+      .filter((b) => b.type === 'text').map((b) => b.text).join('');
+    if (text) entries.push({ kind: 'assistant', text: text.slice(0, 6000), usage: ev.data?.usage });
+  } else if (ev.type === 'tool/call') {
+    pending.set(ev.data.callId, entries.length);
+    entries.push({
+      kind: 'tool', name: ev.data.name,
+      args: String(ev.data.arguments || '').slice(0, 4000),
+      turn: ev.data.turn, step: ev.data.step,
+    });
+  } else if (ev.type === 'tool/result') {
+    // ToolResultMessage.content = [{ type:'tool-result', toolCallId, content, isError }]
+    const blocks = ev.data?.message?.content || [];
+    for (const b of blocks) {
+      const i = pending.get(b?.toolCallId);
+      if (i !== undefined && entries[i]?.result === undefined) {
+        entries[i].result = {
+          ok: b.isError !== true && !ev.data?.error,
+          text: (b.content || []).filter((c) => c?.type === 'text').map((c) => c.text).join('').slice(0, 4000),
+          ...(ev.data?.error ? { error: `${ev.data.error.name}: ${ev.data.error.code}` } : {}),
+        };
+      }
+    }
+  } else if (ev.type === 'turn/end') {
+    entries.push({ kind: 'turn-end', reason: ev.data?.reason?.kind || String(ev.data?.reason || '') });
+  }
+}
+
+// 旧会话回放没有 meta.input：第一条非系统注入就是实际用户输入，归位到 input。
+export function finalizeTrace(trace, meta = {}) {
+  const { entries } = trace;
   if (!entries[0].text) {
     const i = entries.findIndex((e, idx) => idx > 0 && e.kind === 'inject' && !/^Current runtime context|^<system-reminder>/.test(e.text));
     if (i > 0) {
@@ -2739,7 +2774,6 @@ function buildTrace(events, firstSeq, meta = {}) {
       entries.splice(i, 1);
     }
   }
-  return { model: meta.model, entries };
 }
 
 // 旧运行记录（无 trace 快照）按 sessionId 从 dsh 会话存档现场回放轨迹

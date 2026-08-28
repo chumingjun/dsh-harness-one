@@ -1497,6 +1497,9 @@ body {
   margin-bottom: 10px; font-size: 12px; color: var(--fg-faint);
 }
 .detail-tol { color: var(--warn, #F59E0B); }
+.detail-live { display: inline-flex; align-items: center; gap: 5px; color: var(--accent, #8B5CF6); }
+.detail-live::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: log-pulse 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .detail-live::before { animation: none; } }
 .detail-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
 .detail-io, .detail-trace { display: flex; flex-direction: column; gap: 10px; }
 .detail-io-block { display: flex; flex-direction: column; gap: 6px; }

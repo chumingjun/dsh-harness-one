@@ -54,7 +54,8 @@ function useElapsedClock(startedAt, active) {
 
 function ProcessStep({ event, index, runId, onFocusNode, onOpenNodeDetail }) {
   const meta = stepStatusMeta(event.status);
-  const canOpenDetail = Boolean(event.nodeId && runId && !['running', 'queued', 'pending'].includes(event.status));
+  // running 节点也可打开：详情弹窗对运行中 agent 轮询实时轨迹（issue #52）
+  const canOpenDetail = Boolean(event.nodeId && runId && event.status !== 'queued');
   const openDetail = canOpenDetail ? () => onOpenNodeDetail?.(runId, event.nodeId) : undefined;
   const startClock = formatClock(event.startedAt);
   const liveElapsed = useElapsedClock(event.startedAt, event.status === 'running');
