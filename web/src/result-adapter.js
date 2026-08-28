@@ -195,6 +195,8 @@ function normalizeResultRow(row, nodes, runDetail) {
     durationMs: first(value.durationMs, state.durationMs),
     startedAt: first(value.startedAt, state.startedAt),
     legacyInferred: Boolean(value.legacyInferred),
+    usage: first(value.usage, state.usage) || null,
+    model: first(value.model, state.model) || null,
   };
 }
 
@@ -218,6 +220,32 @@ function timelineText(row) {
   if (row.status === 'skipped') return '本次流程未执行该节点';
   if (row.status === 'canceled') return '节点已取消';
   return `节点状态：${row.status}`;
+}
+
+// usage 四元组求和：输入列是未命中缓存部分（总输入读取 = input + cacheRead，
+// cache 单价与全价不同，不得直接乘单价算钱）；无任一 usage 时返回 null（≠ 0）
+export function sumUsageTotal(rowsOrTotal) {
+  if (!Array.isArray(rowsOrTotal)) {
+    const total = asObject(rowsOrTotal);
+    return total.inputTokens !== undefined ? {
+      inputTokens: Number(total.inputTokens) || 0,
+      outputTokens: Number(total.outputTokens) || 0,
+      cacheReadTokens: Number(total.cacheReadTokens) || 0,
+      cacheWriteTokens: Number(total.cacheWriteTokens) || 0,
+    } : null;
+  }
+  let has = false;
+  const total = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  for (const row of rowsOrTotal) {
+    const u = asObject(row?.usage ?? row);
+    if (u.inputTokens === undefined) continue;
+    has = true;
+    total.inputTokens += Number(u.inputTokens) || 0;
+    total.outputTokens += Number(u.outputTokens) || 0;
+    total.cacheReadTokens += Number(u.cacheReadTokens) || 0;
+    total.cacheWriteTokens += Number(u.cacheWriteTokens) || 0;
+  }
+  return has ? total : null;
 }
 
 // 面向普通用户的耗时文案：毫秒不直接暴露，统一换算成秒/分
@@ -369,6 +397,9 @@ export function adaptRunResults(payload, context = {}) {
     durationMs: first(source.durationMs, source.run?.durationMs, runDetail.durationMs),
     summary: textOf(first(source.summary, result.summary, source.description, result.description)),
     finalStatus,
+    // 运行级用量合计：后端 usageTotal 优先，旧响应无此字段时从节点行兜底求和；
+    // 全部节点都无 usage 时为 null（渲染「无记录」，不是 0）
+    usageTotal: sumUsageTotal(result.usageTotal || source.usageTotal) || sumUsageTotal(nodeTimeline) || null,
     outputResults: effectiveOutputs,
     processResults,
     coreText,

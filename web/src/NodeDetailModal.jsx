@@ -8,6 +8,7 @@ import { Modal } from './ui.jsx';
 import { apiUrl } from './api.js';
 import { ArtifactLinks } from './ArtifactPreview.jsx';
 import { nextPollDelayMs, shouldAutoSelectTrace } from './node-detail-polling.js';
+import { UsageMeta } from './UsageMeta.jsx';
 
 const ENTRY_ICON = { input: '↳', inject: '⊕', assistant: '✦', tool: '🔧', 'turn-end': '↩' };
 const ENTRY_LABEL = { input: '输入', inject: '注入上下文', assistant: '助手', tool: '工具调用', 'turn-end': '轮次结束' };
@@ -41,10 +42,11 @@ function TraceEntry({ en, i }) {
         <span className="trace-tag">{ENTRY_ICON.assistant} {ENTRY_LABEL.assistant}</span>
         <pre className="trace-text">{en.text}</pre>
         {en.usage && (
-          <span className="trace-usage">
-            {en.usage.outputTokens ? `${en.usage.outputTokens} tok` : ''}
-            {en.usage.inputTokens ? ` + ${en.usage.inputTokens} in` : ''}
-            {en.usage.cacheReadTokens ? ` (${en.usage.cacheReadTokens} cache)` : ''}
+          <span className="trace-usage" title="↑输出 ↓输入（未命中缓存部分，总输入读取 = 输入 + 缓存读）⇦缓存读 ⇨缓存写。缓存读写计价与全价不同，请勿按 token 数直接估算账单金额。">
+            {en.usage.outputTokens ? `↑${en.usage.outputTokens}` : ''}
+            {en.usage.inputTokens ? ` ↓${en.usage.inputTokens}` : ''}
+            {en.usage.cacheReadTokens ? ` ⇦${en.usage.cacheReadTokens}` : ''}
+            {en.usage.cacheWriteTokens ? ` ⇨${en.usage.cacheWriteTokens}` : ''}
           </span>
         )}
       </div>
@@ -132,6 +134,7 @@ export function NodeDetailModal({ runId, nodeId, onClose }) {
             {data.state?.turns != null && <span>{data.state.turns} 轮</span>}
             {toolCount > 0 && <span>{toolCount} 次工具调用</span>}
             {data.state?.model && <span>{data.state.model}</span>}
+            <UsageMeta usage={data.state?.usage} />
             {data.state?.toleratedError && <span className="detail-tol">失败后继续：{data.state.toleratedError}</span>}
           </div>
 
