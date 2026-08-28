@@ -14,6 +14,7 @@ import {
 } from './result-adapter.js';
 import { deriveRunViewState, RESULT_TABS } from './run-view-state.js';
 import ResultViewer, { ProcessArtifacts } from './ResultViewer.jsx';
+import { UsageMeta } from './UsageMeta.jsx';
 import './result-panel.css';
 
 function formatTime(value) {
@@ -82,10 +83,11 @@ function ProcessStep({ event, index, runId, onFocusNode, onOpenNodeDetail }) {
           </button>
           <span className={`result-step-pill result-step-pill-${meta.tone}`}>{meta.label}</span>
         </div>
-        {(startClock || duration) && (
+        {(startClock || duration || event.usage) && (
           <div className="result-step-meta">
             {startClock && <span><Clock3 size={11} />开始 {startClock}</span>}
             {duration && <span className={event.status === 'running' ? 'result-step-elapsed' : ''}><Timer size={11} />{event.status === 'running' ? `已运行 ${duration}` : `耗时 ${duration}`}</span>}
+            {event.usage && <UsageMeta usage={event.usage} />}
           </div>
         )}
         {event.error && <p className="result-step-text">{event.error}</p>}
@@ -267,6 +269,11 @@ export function ResultPanel({
           <span className={`result-status result-status-${viewState.status.tone}`}>{viewState.status.label}</span>
           <strong>{model.workflowName}</strong>
           {model.startedAt && <span className="result-run-time"><Clock3 size={12} />{formatTime(model.startedAt)}</span>}
+          {model.runId && model.usageTotal && (
+            <span className="result-run-usage" title="整次运行跨节点用量合计。输入为未命中缓存部分，总输入读取 = 输入 + 缓存读；缓存读写计价与全价不同，请勿按 token 数直接估算账单金额。">
+              <UsageMeta usage={model.usageTotal} title="整次运行跨节点用量合计。输入为未命中缓存部分；总输入读取 = 输入 + 缓存读。缓存读写计价与全价不同，请勿按 token 数直接估算账单金额。" />
+            </span>
+          )}
         </div>
         <div className="result-head-actions">
           <button className="btn-icon" title="刷新成果" aria-label="刷新成果" onClick={refresh} disabled={!runId || loading}><RefreshCw size={15} className={loading ? 'result-spin' : ''} /></button>

@@ -1522,6 +1522,13 @@ body {
   padding: 2px 0; letter-spacing: .06em;
 }
 .trace-usage { font-size: 11px; color: var(--fg-faint); margin-left: auto; }
+/* 用量分列展示（#64）：↑输出 ↓输入(未缓存) ⇦缓存读 ⇨缓存写；口径注释在 title */
+.usage-meta { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; cursor: help; }
+.usage-meta .usage-out { color: var(--type-agent, #8B5CF6); }
+.usage-meta .usage-in { color: var(--fg-faint); }
+.usage-meta .usage-cache { color: var(--fg-faint); opacity: .85; }
+.usage-meta.usage-none { cursor: default; opacity: .7; }
+.result-run-usage { display: inline-flex; align-items: center; margin-left: 4px; }
 .trace-tool-head {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 5px 8px;

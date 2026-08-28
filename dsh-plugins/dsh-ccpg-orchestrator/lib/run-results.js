@@ -307,6 +307,10 @@ function resultRow(run, node) {
     structuredOutput: run.structuredOutputs[node.id] || null,
     error: state.error || state.toleratedError || null,
     durationMs: state.durationMs ?? null,
+    // usage 四元组（input/output/cacheRead/cacheWrite）与节点模型标识原样透出：
+    // 供成果面板用量合计与 runs/export 离线对账；上游未回报时保持 undefined（≠ 0）
+    usage: state.usage || undefined,
+    model: state.model || undefined,
   };
 }
 
@@ -379,6 +383,23 @@ export function createRunResults(value, { apiBase = '/wf1/api', sessionId = '' }
       message: String(state.error || state.toleratedError),
     }] : []),
   ];
+  // 运行级用量合计：跨节点求和四元组；任一节点有 usage 即有合计，全部缺上报时保持
+  // undefined（前端显示「无记录」，绝不折算成 0）。口径：输入列是未命中缓存部分，
+  // 总输入读取 = input + cacheRead（cache 单价与全价不同，禁止直接乘单价算钱）。
+  const usageTotal = (() => {
+    let has = false;
+    const total = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    for (const row of rows) {
+      const u = row.usage;
+      if (!u) continue;
+      has = true;
+      total.inputTokens += u.inputTokens || 0;
+      total.outputTokens += u.outputTokens || 0;
+      total.cacheReadTokens += u.cacheReadTokens || 0;
+      total.cacheWriteTokens += u.cacheWriteTokens || 0;
+    }
+    return has ? total : undefined;
+  })();
   return {
     runId: run.runId,
     status: run.status,
@@ -387,6 +408,7 @@ export function createRunResults(value, { apiBase = '/wf1/api', sessionId = '' }
     finishedAt: run.finishedAt,
     durationMs: run.durationMs,
     finalStatus,
+    usageTotal,
     outputResults,
     processResults,
     nodeTimeline: rows.map((row) => ({ ...row, text: processText(row) })),

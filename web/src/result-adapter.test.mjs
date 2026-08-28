@@ -109,6 +109,35 @@ assert.equal(backendShape.finalFiles[0].url, '/artifact');
 assert.equal(backendShape.processFiles[0].url, '/debug');
 assert.equal(backendShape.input, '后端输入');
 
+// usage 透传与合计（#64）：后端 usageTotal 优先；节点行 usage 跟随；缺上报 = null（≠ 0）
+const withUsage = adaptRunResults({
+  runId: 'run-usage',
+  status: 'success',
+  finalStatus: 'available',
+  usageTotal: { inputTokens: 105, outputTokens: 42, cacheReadTokens: 900, cacheWriteTokens: 60 },
+  outputResults: [{ nodeId: 'output', nodeLabel: '最终交付', nodeType: 'output', status: 'success', output: 'ok' }],
+  nodeTimeline: [
+    { nodeId: 'agent', nodeLabel: '写报告', nodeType: 'agent', status: 'success', usage: { inputTokens: 100, outputTokens: 40, cacheReadTokens: 900, cacheWriteTokens: 60 }, model: 'p:m' },
+  ],
+}, { runDetail });
+assert.deepEqual(withUsage.usageTotal, { inputTokens: 105, outputTokens: 42, cacheReadTokens: 900, cacheWriteTokens: 60 });
+assert.deepEqual(withUsage.nodeTimeline[0].usage, { inputTokens: 100, outputTokens: 40, cacheReadTokens: 900, cacheWriteTokens: 60 });
+assert.equal(withUsage.nodeTimeline[0].model, 'p:m');
+// 旧后端响应无 usageTotal：从节点行兜底求和
+const legacyRows = adaptRunResults({
+  runId: 'run-legacy-usage',
+  status: 'success',
+  finalStatus: 'available',
+  outputResults: [{ nodeId: 'output', nodeLabel: '最终交付', nodeType: 'output', status: 'success', output: 'ok' }],
+  nodeTimeline: [
+    { nodeId: 'agent', nodeLabel: '写报告', nodeType: 'agent', status: 'success', usage: { inputTokens: 10, outputTokens: 4 } },
+    { nodeId: 'output', nodeLabel: '最终交付', nodeType: 'output', status: 'success', usage: { inputTokens: 1, outputTokens: 2, cacheReadTokens: 3 } },
+  ],
+}, { runDetail });
+assert.deepEqual(legacyRows.usageTotal, { inputTokens: 11, outputTokens: 6, cacheReadTokens: 3, cacheWriteTokens: 0 });
+// 全部节点都无 usage：null，前端渲染「无记录」
+assert.equal(fallback.usageTotal, null);
+
 const failedOutput = adaptRunResults({}, {
   runDetail: {
     ...runDetail,

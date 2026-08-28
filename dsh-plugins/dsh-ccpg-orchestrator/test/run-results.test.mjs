@@ -86,7 +86,7 @@ await test('run results use output nodes as final results and include every runt
   const result = createRunResults(run);
   assert.deepEqual(Object.keys(result), [
     'runId', 'status', 'workflowName', 'startedAt', 'finishedAt', 'durationMs',
-    'finalStatus', 'outputResults', 'processResults', 'nodeTimeline', 'primaryResult',
+    'finalStatus', 'usageTotal', 'outputResults', 'processResults', 'nodeTimeline', 'primaryResult',
     'results', 'artifacts', 'finalArtifacts', 'processArtifacts', 'links', 'inputs', 'issues',
   ]);
   assert.equal(result.finalStatus, 'available');
@@ -101,6 +101,31 @@ await test('run results use output nodes as final results and include every runt
   assert.equal(Object.hasOwn(result.artifacts[0], 'snapshot'), false);
   assert.equal(Object.hasOwn(result.artifacts[0], 'relativePath'), false);
   assert.equal(result.links[0].url, 'https://example.test/doc');
+});
+
+await test('usage passes through per node and totals across nodes; absent stays undefined (≠ 0)', () => {
+  const run = normalizeRunDocument({
+    ...baseRun(),
+    nodeStates: {
+      ...baseRun().nodeStates,
+      agent: {
+        status: 'success', artifacts: ['report.md'],
+        model: 'provider-a:model-x',
+        usage: { inputTokens: 100, outputTokens: 40, cacheReadTokens: 900, cacheWriteTokens: 60 },
+      },
+      output: { status: 'success', writeback: { ok: true }, usage: { inputTokens: 5, outputTokens: 2 } },
+    },
+  });
+  const result = createRunResults(run);
+  const agentRow = result.results.find((row) => row.nodeId === 'agent');
+  assert.deepEqual(agentRow.usage, { inputTokens: 100, outputTokens: 40, cacheReadTokens: 900, cacheWriteTokens: 60 });
+  assert.equal(agentRow.model, 'provider-a:model-x');
+  // 运行级合计跨节点求和；input 节点无 usage 不贡献也不影响
+  assert.deepEqual(result.usageTotal, { inputTokens: 105, outputTokens: 42, cacheReadTokens: 900, cacheWriteTokens: 60 });
+  // 全部节点都无上报 → undefined（前端显示「无记录」，不得是 0 值对象）
+  const bare = createRunResults(normalizeRunDocument(baseRun()));
+  assert.equal(bare.usageTotal, undefined);
+  assert.equal(bare.results.every((row) => row.usage === undefined), true);
 });
 
 await test('artifact URLs inherit sessionId so scoped routes can resolve the workspace', () => {
