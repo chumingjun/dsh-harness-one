@@ -33,7 +33,7 @@ for (const name of sources) {
   assert.equal(pkg.private, false, `${name} must be publishable`);
   assert.equal(pkg.license, 'MIT');
   assert.equal(pkg.repository?.directory, `dsh-plugins/${name}`);
-  assert.equal(pkg.engines?.node, name === 'dsh-ccpg-orchestrator' ? '>=22.15.0' : '>=20');
+  assert.equal(pkg.engines?.node, '>=22.15.0');
   assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml');
   for (const path of required[name] || []) {
     assert(existsSync(join(dir, path)), `${name} is missing ${path}`);

@@ -10,7 +10,7 @@
     "directory": "dsh-plugins/dsh-ccpg-document-preview"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.15.0"
   },
   "type": "module",
   "main": "./src/host.js",

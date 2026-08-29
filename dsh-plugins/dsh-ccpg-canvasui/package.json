@@ -12,7 +12,7 @@
     "directory": "dsh-plugins/dsh-ccpg-canvasui"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.15.0"
   },
   "scripts": {
     "prepack": "sh ../build-canvasui.sh"
