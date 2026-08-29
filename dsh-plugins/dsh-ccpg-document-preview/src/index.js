@@ -5,7 +5,7 @@ export const MIME_BY_EXTENSION = Object.freeze({
   json: 'application/json', log: 'text/plain', md: 'text/markdown', mdown: 'text/markdown',
   pdf: 'application/pdf', png: 'image/png', ppt: 'application/vnd.ms-powerpoint',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', txt: 'text/plain',
-  webp: 'image/webp', xls: 'application/vnd.ms-excel',
+  univer: 'application/x-univer', webp: 'image/webp', xls: 'application/vnd.ms-excel',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 });
 
@@ -16,6 +16,7 @@ const KIND_BY_MIME = Object.freeze({
   'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'sheet',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/x-univer': 'univer',
   'text/csv': 'csv',
   'text/html': 'html',
   'text/markdown': 'markdown',
