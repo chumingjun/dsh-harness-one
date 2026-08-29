@@ -7,7 +7,7 @@
 | `dsh-ccpg-tools` | 默认 | feishu_doc_read / feishu_doc_write 注册 `ctx.tools` |
 | `dsh-ccpg-orchestrator` | 默认 | DAG 编排 + 节点级 `ctx.agents` 进程内 agent + QuickJS 脚本节点 + `/wf1/api/*` HTTP/SSE |
 | `dsh-ccpg-web` | 默认 | 画布静态托管 `/wf1/` |
-| `dsh-ccpg-canvasui` | 默认 | 官方 dsh Web UI 输入框工作流按钮 + better-sidebar「工作流」画布（iframe 载 /wf1/，软依赖） |
+| `dsh-ccpg-canvasui` | 默认 | 官方 dsh Web UI 输入框工作流按钮 + `/workflow-one` 触发源（对话里弹工作流库直达运行/打开）+ better-sidebar「工作流」画布（iframe 载 /wf1/，软依赖） |
 | `dsh-ccpg-document-preview` | 默认 | PDF/DOCX/XLS(X)/PPTX 本地全屏预览（pdfjs/docx-preview/sheetjs/@file-viewer/pptx，inline workers、无第三方上传）；旧 DOC/PPT 走下载 |
 | `dsh-ccpg-larkauth` | 默认 | 飞书账号扫码登录（lark-cli Device Flow）；启动自举安装 lark-cli、user token 后台续约、feishu-cli 技能种子 |
 | `dsh-ccpg-llm-guard` | 默认 | 拦截模型返回的空 id/name/arguments 工具调用，自动重试且不污染会话 |
