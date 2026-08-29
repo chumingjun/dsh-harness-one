@@ -12,7 +12,7 @@
     "directory": "dsh-plugins/dsh-ccpg-llm-guard"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.15.0"
   },
   "exports": {
     ".": "./lib/index.js",

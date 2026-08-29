@@ -12,7 +12,7 @@
     "directory": "dsh-plugins/dsh-ccpg-tools"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.15.0"
   },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "*",
