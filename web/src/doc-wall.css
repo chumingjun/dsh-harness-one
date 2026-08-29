@@ -85,3 +85,25 @@
 .docwall-card-missing { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; color: var(--fg-faint); font-size: 12px; min-height: 60px; justify-content: center; }
 .docwall-card-missing p { margin: 0; }
 .docwall-card-missing a { color: var(--accent); font-size: 12px; }
+
+/* toolbar 搜索/过滤/导出 */
+.docwall-search { width: 150px; font-size: 12px; padding: 3px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-raised); color: var(--fg); font-family: inherit; }
+.docwall-search:focus { outline: none; border-color: var(--accent); }
+.docwall-kind { font-size: 12px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-raised); color: var(--fg-muted); font-family: inherit; }
+.docwall-only-on { color: var(--accent); border-color: var(--accent); }
+.docwall-filter-empty { margin: 24px auto; min-width: 280px; }
+.docwall-empty-runs { display: flex; flex-direction: column; gap: 2px; width: 100%; max-width: 420px; }
+
+/* 窄面板（dsh 侧边小面板 <720px）：侧栏收成横向 chip 条，卡片收窄 */
+@media (max-width: 720px) {
+  .docwall { flex-direction: column; }
+  .docwall-side { width: 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden; border-right: none; border-bottom: 1px solid var(--border); padding: 6px 10px; align-items: center; }
+  .docwall-side-label { display: none; }
+  .docwall-row { flex: none; border-left: none; border: 1px solid var(--border); border-radius: 999px; padding: 3px 11px; font-size: 12px; max-width: 200px; }
+  .docwall-row-on { border-color: var(--primary); background: color-mix(in srgb, var(--primary-strong) 12%, transparent); }
+  .docwall-row-cnt { line-height: 13px; }
+  .docwall-strip { padding: 10px 12px 2px; }
+  .docwall-card, .docwall-card-image, .docwall-card-video { width: 300px; }
+  .docwall-card-body { height: 220px; }
+  .docwall-search { width: 110px; }
+}

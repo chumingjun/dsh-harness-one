@@ -15,8 +15,8 @@
 
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, copyFileSync, cpSync, unlinkSync, renameSync, realpathSync, rmSync, constants as fsConstants } from 'node:fs';
-import { join, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, copyFileSync, cpSync, unlinkSync, renameSync, realpathSync, rmSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
+import { join, dirname, extname, isAbsolute, relative, resolve, sep, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import z from '@deepseek-ai/schemastery';
@@ -1262,6 +1262,32 @@ export function apply(ctx, config) {
         } catch { /* session 已释放 */ }
         return { turns, preview, turnEnded };
       };
+      // 真·流式生成文稿：扫节点输出目录里最新的文本产物，附其尾部到 agent-progress，
+      // 前端流卡直接渲染「正在写的文件」而非 agent 对话文本。只 tail 一个文件，
+      // 2KB 尾部 + 轮询期读盘，开销可忽略；无文本产物时为 undefined（前端回退对话文本）
+      const DOC_TAIL_BYTES = 2048;
+      const scanDocTail = () => {
+        try {
+          const root = realpathSync(ws);
+          let newest = null;
+          for (const entry of readdirSync(root, { recursive: true })) {
+            if (!/\.(md|markdown|txt|csv)$/i.test(String(entry))) continue;
+            const full = resolveInside(root, entry);
+            if (!full || !existsSync(full) || !statSync(full).isFile()) continue;
+            const mtime = statSync(full).mtimeMs;
+            if (!newest || mtime > newest.mtime) newest = { full, mtime };
+          }
+          if (!newest) return undefined;
+          const stat = statSync(newest.full);
+          const start = Math.max(0, stat.size - DOC_TAIL_BYTES);
+          const fd = openSync(newest.full, 'r');
+          try {
+            const buf = Buffer.alloc(stat.size - start);
+            readSync(fd, buf, 0, buf.length, start);
+            return { name: basename(String(newest.full)), size: stat.size, tail: buf.toString('utf8'), growing: true };
+          } finally { closeSync(fd); }
+        } catch { return undefined; }
+      };
       const watchTick = () => {
         if (watchState.stop) return;
         const { turns, preview, turnEnded } = scanEvents();
@@ -1270,6 +1296,8 @@ export function apply(ctx, config) {
           // 实时输出流（文稿视图消费）：assistant 全文拼接，4KB 截断——多工具轮 agent 生成期
           // 前端可看文稿长大；带宽 = 4KB × 并发 agent ÷ 2s，量级安全
           preview: outputConfig.mode === 'structured' ? '' : preview.slice(0, 4096),
+          // 真·流式：正在写的目标文稿尾部（2KB）。有则前端优先渲染它
+          docTail: outputConfig.mode === 'structured' ? undefined : scanDocTail(),
           structured: outputConfig.mode === 'structured' || undefined,
           maxRounds: maxRounds || undefined,
         });
@@ -2645,6 +2673,53 @@ export function apply(ctx, config) {
     const mediaType = mediaTypeFor(file);
     const preview = url.searchParams.get('preview') === '1' && isPreviewableMediaType(mediaType);
     return streamArtifactResponse(req, res, { file: realFull, filename: file, mediaType, preview });
+  } });
+
+  // 文稿墙批量正文：一次请求返回运行内多个产物的文本截断稿，替代逐卡 fetch（37 卡 = 37 请求）。
+  // POST { runId, items: [{ node, file }] } → { files: { "<node>\u0000<file>": { content, truncated } } }；
+  // 总字节预算 1.5MB，超预算的条目返回 { omitted: true }，前端回退单卡惰性拉取。仅文本类产物。
+  register({ kind: 'exact', path: '/wf1/api/artifacts/content', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    const body = await readBody(req);
+    const runId = String(body?.runId || '');
+    const items = Array.isArray(body?.items) ? body.items.slice(0, 200) : [];
+    if (!runId || !items.length) return json(res, 400, { error: '需要 runId 和 items' });
+    const run = readRun(runId);
+    // 与 /artifact 兜底同款：沿 resumedFrom 祖先链回退定位节点工作区
+    const ancestorRunIds = [runId];
+    let cursor = run;
+    for (let depth = 0; cursor?.resumedFrom && depth < 10; depth += 1) {
+      ancestorRunIds.push(cursor.resumedFrom);
+      cursor = readRun(cursor.resumedFrom);
+    }
+    const BUDGET = 1.5 * 1024 * 1024;
+    const CLIP = 4096;
+    const files = {};
+    let used = 0;
+    for (const item of items) {
+      const nodeId = String(item?.node || '');
+      const file = String(item?.file || '');
+      if (!nodeId || !file) continue;
+      const ext = extname(file).toLowerCase();
+      if (!['.md', '.markdown', '.txt', '.csv'].includes(ext)) continue;
+      let content = null;
+      for (const candidateRunId of ancestorRunIds) {
+        const ws = resolveInside(STORAGE.workspaceForNode({
+          workflowId: run?.workflowId || 'draft', runId: candidateRunId, nodeId,
+        }), file);
+        if (!ws || !existsSync(ws) || !statSync(ws).isFile()) continue;
+        const realWs = realpathSync(ws);
+        if (resolveInside(realpathSync(dirname(realWs)), realWs) !== realWs) continue;
+        if (used > BUDGET) { files[`${nodeId}\u0000${file}`] = { omitted: true }; break; }
+        const raw = readFileSync(realWs, 'utf8');
+        used += Buffer.byteLength(raw);
+        content = raw.length > CLIP ? { content: `${raw.slice(0, CLIP)}…`, truncated: true } : { content: raw, truncated: false };
+        break;
+      }
+      if (content) files[`${nodeId}\u0000${file}`] = content;
+      else if (!files[`${nodeId}\u0000${file}`]) files[`${nodeId}\u0000${file}`] = { omitted: true };
+    }
+    return json(res, 200, { files });
   } });
 
   // ---- 技能目录：dsh 原生 ctx.skills（skill-filesystem 发现 ~/.dsh/skills 等根）----

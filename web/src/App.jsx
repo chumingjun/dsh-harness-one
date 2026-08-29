@@ -49,7 +49,18 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState(null);
   const [logOpen, setLogOpen] = useState(true);
-  const [view, setView] = useState('canvas'); // 'canvas' | 'docs' | 'workflows'
+  // 视图三态（canvas | docs | workflows）+ 所看运行进 URL hash：刷新保持、可分享定位
+  const initialHash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '') : '';
+  const [view, setView] = useState(() => {
+    const [head] = initialHash.split('/');
+    return head === 'docs' || head === 'workflows' ? head : 'canvas';
+  });
+  useEffect(() => {
+    if (initialHash.startsWith('docs/')) {
+      const runId = initialHash.split('/')[1] || '';
+      if (runId) setInspectedRunId(runId);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [historyOpen, setHistoryOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [currentWf, setCurrentWfRaw] = useState(null); // normalized workflow document, including id/name
@@ -67,6 +78,14 @@ export default function App() {
   const runDetailsRef = useRef({});
   useEffect(() => { runDetailsRef.current = runDetails; }, [runDetails]);
   const [inspectedRunId, setInspectedRunId] = useState(null);
+  // 文稿视图状态同步 URL hash（#docs/<runId>）：换运行/换视图即写，其余视图清掉
+  useEffect(() => {
+    const next = view === 'docs' && inspectedRunId ? `#docs/${inspectedRunId}` : '';
+    if (window.location.hash !== next) {
+      const url = `${window.location.pathname}${window.location.search}${next}`;
+      window.history.replaceState(null, '', url);
+    }
+  }, [view, inspectedRunId]);
   const [resultsReadyByRunId, setResultsReadyByRunId] = useState({});
   const [hostSession, setHostSession] = useState({ id: null, canSaveToWorkspace: false });
   const terminalNodesByRunRef = useRef(new Map());
@@ -379,6 +398,20 @@ export default function App() {
     };
     return () => { sseReconnectRef.current = null; };
   }, [docWallVisible, inspectedRunId, loadDocWall]);
+  // 运行中增量落卡：文稿墙可见且该运行进行中时，轻量轮询 runs/detail 刷新 nodeStates，
+  // 已完成节点的产物卡随跑随铺（run-end 仍由 results-ready 全量再投影兜底终态）
+  useEffect(() => {
+    if (!docWallVisible || !inspectedRunId) return undefined;
+    if (!runStatus.running || runStatus.runId !== inspectedRunId) return undefined;
+    const poll = () => {
+      fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(inspectedRunId)}`))
+        .then((response) => response.ok ? response.json() : Promise.reject(new Error('detail unavailable')))
+        .then((detail) => setRunDetails((current) => ({ ...current, [inspectedRunId]: detail })))
+        .catch(() => {});
+    };
+    const timer = setInterval(poll, 8000);
+    return () => clearInterval(timer);
+  }, [docWallVisible, inspectedRunId, runStatus.running, runStatus.runId]);
 
   // SSE：事件 → 节点状态 + 进度 + 结构化日志
   const sseReconnectRef = useRef(null); // 重连回调（文稿墙再投影等订阅方），定义在后段
@@ -1568,6 +1601,9 @@ export default function App() {
               loadError={docWallError}
               onRetry={() => loadDocWall(inspectedRunId)}
               onRefresh={() => loadDocWall(inspectedRunId, { waitUntilReady: false })}
+              onRunHere={() => { setView('canvas'); }}
+              recentRuns={runList.filter((run) => run.runId !== inspectedRunId)}
+              onInspectRun={(runId) => { setInspectedRunId(runId); loadDocWall(runId); }}
             />
           </div>
         ) : (
