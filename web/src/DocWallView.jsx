@@ -5,7 +5,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Check, ChevronRight, Clock3, FileText, Film, ImageIcon, Loader2, RefreshCw } from 'lucide-react';
 import { buildDocWallModel } from './doc-wall-data.js';
 import MarkdownDocument from './MarkdownDocument.jsx';
-import { ArtifactPreviewButton, runArtifact } from './ArtifactPreview.jsx';
+import { ArtifactPreviewButton, ArtifactPreviewModal, runArtifact } from './ArtifactPreview.jsx';
 import { apiUrl } from './api.js';
 
 const STATUS_ICON = {
@@ -145,7 +145,7 @@ function NodeStrip({ node, liveProgress, onOpen }) {
         <span className="docwall-strip-meta">{strip.length + dataFiles.length} 个文件</span>
         {node.error && <span className="docwall-strip-error" title={node.error}>{node.error}</span>}
       </header>
-      <div className="docwall-strip-cards">
+      <div className={`docwall-strip-cards ${strip.length > 0 && strip.length <= 2 ? 'docwall-strip-cards-sparse' : ''}`}>
         {live && <LiveCard progress={liveProgress} structured={liveProgress?.structured} />}
         {strip.map((doc) => <LazyMount key={doc.id}><DocCard doc={doc} onOpen={onOpen} /></LazyMount>)}
         {strip.length === 0 && !dataFiles.length && !live && (
@@ -185,11 +185,10 @@ export function DocWallView({
     [runResults, progressByNode, nodeStates],
   );
   const [selected, setSelected] = useState('overview'); // 'overview' | 'finals' | nodeId
+  const [previewDoc, setPreviewDoc] = useState(null); // 点卡页内预览（ArtifactPreviewModal），不跳浏览器
   useEffect(() => { setSelected('overview'); }, [inspectedRunId]);
 
-  const onOpen = (doc) => {
-    if (doc?.downloadUrl || doc?.previewUrl) window.open(doc.previewUrl || doc.downloadUrl, '_blank');
-  };
+  const onOpen = (doc) => { if (doc?.name) setPreviewDoc(doc); };
 
   if (loadError) {
     return (
@@ -257,6 +256,7 @@ export function DocWallView({
           ))
         )}
       </div>
+      {previewDoc && <ArtifactPreviewModal artifact={previewDoc} onClose={() => setPreviewDoc(null)} />}
     </div>
   );
 }
