@@ -103,8 +103,9 @@ test('univer-core: resolveEndpointOf/fileKeyOf/pickWorktree 纯函数', async ()
   );
   assert.equal(resolveEndpointOf('http://x/other?file=a.univer'), '');
   assert.equal(resolveEndpointOf(''), '');
-  // fileKeyOf 与 host 侧 fileKeyOf 同语义：utf8 base64url
+  // fileKeyOf 与 host 侧 fileKeyOf 同语义：utf8 base64url（纯 Web API，浏览器可用）
   assert.equal(fileKeyOf('/tmp/a.univer'), Buffer.from('/tmp/a.univer', 'utf8').toString('base64url'));
+  assert.equal(fileKeyOf('/tmp/中文名.univer'), Buffer.from('/tmp/中文名.univer', 'utf8').toString('base64url'));
   // worktree 选择：最新 draft 优先 → 无 draft 取最新 → 空列表 null
   assert.equal(pickWorktree([]), null);
   assert.equal(pickWorktree(null), null);

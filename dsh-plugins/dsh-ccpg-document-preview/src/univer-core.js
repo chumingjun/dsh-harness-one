@@ -13,9 +13,14 @@ export function resolveEndpointOf(downloadUrl) {
 }
 
 // Viewer 的 fileKeyOf：utf8 → base64url（gateway-app 与 host 两侧一致）。
+// 纯 Web API 实现（TextEncoder + btoa）：本文件同时被浏览器 renderer 与 node --test 引用，
+// 不能用 Node 的 Buffer——Vite 不注入，浏览器运行时 ReferenceError。
 export function fileKeyOf(absolutePath) {
   try {
-    return Buffer.from(String(absolutePath), 'utf8').toString('base64url');
+    const bytes = new TextEncoder().encode(String(absolutePath));
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   } catch {
     return '';
   }

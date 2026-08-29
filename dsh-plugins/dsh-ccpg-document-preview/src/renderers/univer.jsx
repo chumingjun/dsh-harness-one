@@ -6,8 +6,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fileKeyOf, pickWorktree, resolveEndpointOf } from '../univer-core.js';
 
-async function fetchJson(url, signal) {
-  const res = await fetch(url, { credentials: 'same-origin', signal });
+async function fetchJson(url, options = {}) {
+  const signal = options.signal;
+  const res = await fetch(url, { credentials: 'same-origin', ...options });
   if (!res.ok) {
     const error = new Error(`HTTP ${res.status}`);
     error.status = res.status;
@@ -18,14 +19,14 @@ async function fetchJson(url, signal) {
 
 async function buildViewerUrl(resolveUrl, signal) {
   const resolved = await fetchJson(resolveUrl, signal);
-  // /univer-api/status 是 dsh 宿主同源路由（univer-office 注册）；Gateway 端口
-  // 被占会逐次递增，所以每次现查不缓存。
-  const status = await fetchJson('/univer-api/status', signal);
-  const gateway = String(status?.gateway || '').replace(/\/$/, '');
-  if (!gateway) throw new Error('univer-office Gateway 未运行');
+  // Gateway 随 dsh 重启即停：先显式拉起（幂等，运行中 reused=true），再查地址；
+  // 端口被占会逐次递增，所以每次现查不缓存。
+  const started = await fetchJson('/univer-api/gateway/start', { method: 'POST', signal });
+  const gateway = String(started?.gateway || '').replace(/\/$/, '');
+  if (!gateway) throw new Error('univer-office Gateway 启动失败');
   const fileKey = fileKeyOf(resolved.file);
   if (!fileKey) throw new Error('文件路径编码失败');
-  const listing = await fetchJson(`${gateway}/uf/${fileKey}/worktrees`, signal);
+  const listing = await fetchJson(`${gateway}/uf/${fileKey}/worktrees`, { signal });
   const worktree = pickWorktree(listing?.worktrees);
   const params = new URLSearchParams({ file: fileKey, mode: 'embedded' });
   if (worktree) params.set('worktree', worktree);
