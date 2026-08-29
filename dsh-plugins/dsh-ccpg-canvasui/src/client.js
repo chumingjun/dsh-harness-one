@@ -1289,6 +1289,162 @@ window.__ModuleLoader__.load({
       new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
     }
 
+    // ---- /workflow-one 触发源（#63）----
+    // 官方聊天输入 `/workflow-one` 弹出实时工作流库，Pick 后草稿认领为
+    // `/workflow-one <id>`，Enter 提交执行。动作二段式在候选 description 里引导：
+    // 直接 Enter=打开（绑定画布时）或运行；追加 ` run`=强制运行、` open`=强制打开。
+    // 契约面（@deepseek-ai/dsh-client-ui-input-trigger，仅类型概念、零值导入）：
+    // 候选 = { name, description, icon, section, value }；onPick 返回
+    // { claim:{ token, hint, submit(args, actx, images) } }，success/error outcome
+    // 由官方 input 机结算（成功清草稿、错误保留 + notice）。
+    // 自包含：只 fetch 本插件自有路由，类型契约不产生运行时依赖；老运行时无
+    // inputTriggers 服务时软跳过，不影响其余功能。
+    var WF_TRIGGER_NAME = "workflow-one";
+    var wfLexiconListeners = new Set();
+    var wfLexiconNames = null; // 热快照：null=未 warm；数组=当前工作流名集
+
+    function wfScopedApi(path, sessionId) {
+      var url = "/wf1/api" + path;
+      if (sessionId) url += (url.indexOf("?") >= 0 ? "&" : "?") + "sessionId=" + encodeURIComponent(sessionId);
+      return url;
+    }
+
+    function wfTriggerAction(sessionId, workflowId, action) {
+      return fetch(wfScopedApi("/trigger", sessionId), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workflowId: workflowId, action: action }),
+      })
+        .then(function (r) {
+          return r.json().catch(function () { return {}; }).then(function (data) {
+            return { ok: r.ok && data.ok !== false, data: data };
+          });
+        })
+        .catch(function () { return { ok: false, data: {} }; });
+    }
+
+    function wfTriggerOutcomeText(result, action) {
+      if (result.ok) {
+        var done = result.data.action || action; // auto 回退后以服务端实际动作为准
+        return done === "open"
+          ? "画布已打开：" + (result.data.name || result.data.workflowId || "")
+          : "已发起运行：" + (result.data.name || result.data.runId || "");
+      }
+      return result.data.error || (action === "open" ? "打开失败" : "运行发起失败");
+    }
+
+    function registerWorkflowTriggerSource(ctx) {
+      var inputTriggers = ctx.get("inputTriggers");
+      if (!inputTriggers || !inputTriggers.registerSource) return;
+
+      var fetchWorkflows = function (sessionId) {
+        return fetch(wfScopedApi("/workflows", sessionId))
+          .then(function (r) { return r.ok ? r.json() : { workflows: [] }; })
+          .then(function (data) { return data.workflows || []; })
+          .catch(function () { return []; });
+      };
+
+      var source = {
+        trigger: "/",
+        name: WF_TRIGGER_NAME,
+        order: 3, // skill=2 之后，避免挤占官方目录首位
+        warm: function (session) {
+          fetchWorkflows(session.sessionId).then(function (workflows) {
+            wfLexiconNames = workflows.map(function (wf) { return wf.name; });
+            wfLexiconListeners.forEach(function (listener) {
+              try { listener(); } catch (e) { /* 单个监听器失败不影响其他 */ }
+            });
+          });
+        },
+        lexicon: function () {
+          return wfLexiconNames;
+        },
+        subscribeLexicon: function (_session, listener) {
+          wfLexiconListeners.add(listener);
+          return function () { wfLexiconListeners.delete(listener); };
+        },
+        candidates: function (session, req) {
+          return fetchWorkflows(session.sessionId).then(function (workflows) {
+            if (req.signal && req.signal.aborted) return [];
+            var query = (req.query || "").toLowerCase();
+            // 选源阶段：query 仍是源名前缀时把工作流全部列出（live picker），
+            // 越过源名后按余下文本过滤；带 run/open 前缀时定动作、余下按名过滤。
+            var selectingSource = WF_TRIGGER_NAME.indexOf(query) === 0;
+            var tail = "";
+            if (!selectingSource) {
+              tail = query.indexOf(WF_TRIGGER_NAME + " ") === 0
+                ? query.slice(WF_TRIGGER_NAME.length + 1).trim()
+                : query.trim();
+            }
+            var forced = tail === "run" || tail === "open" ? tail : null;
+            if (tail === "run " || tail === "open ") forced = null;
+            var nameQuery = tail;
+            if (forced) nameQuery = "";
+            else if (nameQuery.indexOf("run ") === 0) nameQuery = nameQuery.slice(4).trim();
+            else if (nameQuery.indexOf("open ") === 0) nameQuery = nameQuery.slice(5).trim();
+            return workflows
+              .filter(function (wf) {
+                return selectingSource || !nameQuery || wf.name.toLowerCase().indexOf(nameQuery) >= 0;
+              })
+              .map(function (wf) {
+                return {
+                  name: wf.name,
+                  description: forced === "run"
+                    ? "运行该工作流（Workflow One）"
+                    : forced === "open"
+                      ? "在绑定画布打开（Workflow One）"
+                      : "Enter 打开/运行 · 追加 run 或 open 定动作（Workflow One）",
+                  icon: "⇥",
+                  section: "Workflow One",
+                  value: wf.id,
+                };
+              });
+          });
+        },
+        onPick: function (pick) {
+          // 二段式：Pick 工作流 → 草稿认领 '/workflow-one '，Enter 提交执行。
+          // 优先 pick 的 candidate.value（工作流 id）；用户越过 token 另输入时以 args 覆盖。
+          var workflowId = pick.candidate && pick.candidate.value;
+          var claim = {
+            token: "/" + WF_TRIGGER_NAME + " ",
+            hint: "Enter 执行 · 追加 run/open 定动作",
+            submit: function (args) {
+              var sessionId = (pick.session && pick.session.sessionId) || currentDshSessionId(null);
+              var text = String(args || "").trim();
+              var id = workflowId && !text ? workflowId : text;
+              var action = "auto";
+              var m = /^(run|open)\s+/.exec(text);
+              if (m) {
+                action = m[1];
+                id = text.slice(m[0].length).trim() || workflowId;
+              } else if (text === "run" || text === "open") {
+                action = text;
+                id = workflowId;
+              }
+              if (!id) {
+                return Promise.resolve({ kind: "error", text: "缺少工作流 id 或名称" });
+              }
+              var exec = action === "auto"
+                ? wfTriggerAction(sessionId, id, "run").then(function (runResult) {
+                    if (runResult.ok) return runResult;
+                    if (runResult.data.code !== "canvas-not-bound") return runResult;
+                    return wfTriggerAction(sessionId, id, "open");
+                  })
+                : wfTriggerAction(sessionId, id, action);
+              return exec.then(function (result) {
+                return { kind: result.ok ? "success" : "error", text: wfTriggerOutcomeText(result, action) };
+              });
+            },
+          };
+          return { claim: claim };
+        },
+      };
+
+      ctx.effect(function () {
+        return inputTriggers.registerSource(source);
+      }, "canvasui: /workflow-one trigger source");
+    }
+
     // 「Workflow One」导航图标：三节点流水线（与侧栏「工作流」tab 图标同族）
     var WF_NAV_ICON_SVG =
       '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
@@ -1324,6 +1480,14 @@ window.__ModuleLoader__.load({
           WorkflowOpenButton,
         );
       });
+
+      // ---- /workflow-one 第一方触发源（#63）----
+      // inputTriggers 服务不存在（老运行时/关闭）时静默跳过，不影响其余功能。
+      try {
+        registerWorkflowTriggerSource(ctx);
+      } catch (e) {
+        /* 老运行时无 inputTriggers：跳过触发源 */
+      }
 
       // 消息流工具卡：按工具名接管官方 UI 的 tool.call.toolview keyed slot
       //（官方 ask_user_question / cordis_run 同款机制）。未注册的 canvas_* 工具
@@ -1411,7 +1575,7 @@ window.__ModuleLoader__.load({
 
     exports.apply = apply;
     exports.name = "dsh-ccpg-canvasui/client";
-    exports.inject = ["slots"];
+    exports.inject = ["slots", "inputTriggers"];
     exports.__test = {
       currentDshSessionId: currentDshSessionId,
       openWorkflowSidebar: openWorkflowSidebar,
