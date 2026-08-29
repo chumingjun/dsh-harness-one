@@ -247,7 +247,9 @@ export function compareSemver(a, b) {
 
 function run(cmd, args, cwd) {
   return new Promise((res) => {
-    execFile(cmd, args, { cwd, encoding: 'utf8', timeout: 10 * 60_000 }, (err, stdout, stderr) => {
+    // maxBuffer 必须远超默认 1MB：build-web.sh 的 vite/npm 输出轻松超限，
+    // 超限会把「构建成功」误判成失败（exit 0 也拿不到）。
+    execFile(cmd, args, { cwd, encoding: 'utf8', timeout: 10 * 60_000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
       res({ ok: !err, out: `${stdout || ''}${stderr || ''}`.trim(), err: err ? String(err.message || err) : null });
     });
   });
@@ -255,6 +257,13 @@ function run(cmd, args, cwd) {
 
 async function sh(script, cwd) {
   return run('/bin/sh', ['-c', script], cwd);
+}
+
+// ✗ 日志只留关键信息（首段），整段构建输出不进 UI 横幅。
+function clip(text) {
+  const s = String(text || '').trim();
+  if (!s) return '（无输出）';
+  return s.length > 300 ? s.slice(0, 300) + '…' : s;
 }
 
 // 顺序执行计划；每步产出一行日志。失败不中断整体（后续步骤按各自前置再判），
@@ -278,18 +287,18 @@ export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh } = {
         continue;
       }
       const pulled = await runCmd('git', ['pull', '--ff-only'], action.root);
-      push(pulled.ok ? `  ${pulled.out.split('\n').pop() || '已是最新'}` : `  ✗ pull 失败：${pulled.out || pulled.err}`);
+      push(pulled.ok ? `  ${pulled.out.split('\n').pop() || '已是最新'}` : `  ✗ pull 失败：${clip(pulled.out || pulled.err)}`);
       if (!pulled.ok) continue;
       const webBuild = await runSh('./build-web.sh', action.pluginsDir);
-      if (!webBuild.ok) push(`  ✗ build-web.sh：${webBuild.out}`);
+      if (!webBuild.ok) push(`  ✗ build-web.sh：${clip(webBuild.err || webBuild.out)}`);
       else push('  ✓ 画布双构建完成');
       const canvasBuild = await runSh('./build-canvasui.sh --check || ./build-canvasui.sh', action.pluginsDir);
-      push(canvasBuild.ok ? '  ✓ canvasui bundle 就绪' : `  ✗ canvasui bundle：${canvasBuild.out}`);
+      push(canvasBuild.ok ? '  ✓ canvasui bundle 就绪' : `  ✗ canvasui bundle：${clip(canvasBuild.err || canvasBuild.out)}`);
       const orchDeps = await runSh(
         '[ -d dsh-ccpg-orchestrator/node_modules/quickjs-emscripten ] || npm install --no-audit --no-fund --prefix dsh-ccpg-orchestrator',
         action.pluginsDir,
       );
-      if (!orchDeps.ok) push(`  ✗ orchestrator 依赖：${orchDeps.out}`);
+      if (!orchDeps.ok) push(`  ✗ orchestrator 依赖：${clip(orchDeps.err || orchDeps.out)}`);
       else push('  ✓ orchestrator 依赖就绪');
     } else if (action.type === 'npm-migrate' || action.type === 'npm-reinstall') {
       const dsh = dshBin || await resolveDshBin(runCmd);
@@ -311,7 +320,7 @@ export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh } = {
         // 装新在前：失败则老包仍在位，可整段重试。
         const add = await runCmd(dsh, ['plugin', '--profile', action.profile, 'add', `${PACKAGE}@${latest}`]);
         if (!add.ok) {
-          push(`  ✗ 安装 ${PACKAGE} 失败：${add.out}（旧安装未动，可重试）`);
+          push(`  ✗ 安装 ${PACKAGE} 失败：${clip(add.out)}（旧安装未动，可重试）`);
           continue;
         }
         push(`  ✓ ${PACKAGE}@${latest} 已安装`);
@@ -324,7 +333,7 @@ export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh } = {
         for (const legacy of LEGACY_PACKAGES) {
           if (!readDep(action.profilePath, legacy)) continue;
           const rm = await runCmd(dsh, ['plugin', '--profile', action.profile, 'remove', legacy]);
-          push(rm.ok ? `  ✓ 已移除旧包 ${legacy}` : `  ✗ 移除 ${legacy} 失败：${rm.out}（可手动 remove）`);
+          push(rm.ok ? `  ✓ 已移除旧包 ${legacy}` : `  ✗ 移除 ${legacy} 失败：${clip(rm.out)}（可手动 remove）`);
         }
         push(`  ✓ 迁移完成：${PACKAGE}@${latest}`);
       } else {
@@ -335,7 +344,7 @@ export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh } = {
         const currentSpec = readDep(action.profilePath, PACKAGE);
         const verb = currentSpec ? 'up' : 'add';
         const up = await runCmd(dsh, ['plugin', '--profile', action.profile, verb, `${PACKAGE}@${latest}`]);
-        push(up.ok ? `  ✓ ${PACKAGE} → ${latest}（${verb === 'up' ? '原地更新' : '重装落表'}）` : `  ✗ ${verb} 失败：${up.out}`);
+        push(up.ok ? `  ✓ ${PACKAGE} → ${latest}（${verb === 'up' ? '原地更新' : '重装落表'}）` : `  ✗ ${verb} 失败：${clip(up.out)}`);
       }
       // sidebar bundle 注册兜底：dsh reconcile 只认 profile 直接依赖，sidebar 作为
       // 本包传递依赖即使解析到实体也不进 bundles 层——纯净安装（依赖表只有本包）
