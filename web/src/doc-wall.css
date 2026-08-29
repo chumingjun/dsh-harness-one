@@ -120,8 +120,8 @@
 .docwall-density-s .docwall-card, .docwall-density-s .docwall-card-image, .docwall-density-s .docwall-card-video { width: 300px; }
 .docwall-density-l .docwall-card, .docwall-density-l .docwall-card-image, .docwall-density-l .docwall-card-video { width: 520px; }
 
-/* 预览弹窗辅助工具条（复制全文/链接）：挂在弹窗背层之上、右下角 */
-.docwall-preview-extra { position: fixed; right: 22px; bottom: 22px; z-index: 10001; display: flex; gap: 8px; align-items: center; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: 999px; padding: 6px 10px; box-shadow: var(--shadow-2, 0 4px 16px rgba(0,0,0,.25)); }
+/* 预览弹窗辅助工具条（复制全文/链接）：弹窗背层 z-index 高达 2147483000，须压过它 */
+.docwall-preview-extra { position: fixed !important; right: 22px; bottom: 22px; z-index: 2147483647 !important; display: flex; gap: 8px; align-items: center; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: 999px; padding: 6px 10px; box-shadow: var(--shadow-2, 0 4px 16px rgba(0,0,0,.25)); }
 .docwall-copy-err { color: var(--danger-fg); font-size: 12px; }
 
 /* 文稿 tab 新文稿圆点（画布视图期间成果落盘提示） */
