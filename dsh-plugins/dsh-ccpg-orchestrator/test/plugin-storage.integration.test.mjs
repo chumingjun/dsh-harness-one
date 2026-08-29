@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { apply } from '../lib/index.js';
 import { graphFingerprint } from '../lib/run-scope.js';
+import { hashedKey } from '../lib/storage-paths.js';
 
 function responseCapture() {
   const listeners = new Map();
@@ -373,6 +374,20 @@ try {
     nodeStates: { resume_input: { status: 'success' }, resume_output: { status: 'running' } },
     outputs: { resume_input: 'hello' }, structuredOutputs: {}, nodeOrder: ['resume_input', 'resume_output'],
   });
+  // 续跑物化前置：祖先运行的可复用节点在工作区留了文件，新 run 目录初始为空
+  const resumeSeedWorkspace = join(
+    workspaceB, '.workflow-one', 'runtime',
+    hashedKey('wf_resume_named'), hashedKey('run_resume_named_seed'),
+    'nodes', hashedKey('resume_input'), 'workspace',
+  );
+  mkdirSync(resumeSeedWorkspace, { recursive: true });
+  writeFileSync(join(resumeSeedWorkspace, '底稿.md'), '# 祖先产物\n');
+  // 同步进 seed 的 nodeStates.artifacts（真实运行里 success 节点都会带清单）
+  {
+    const seedDoc = readStoredRun(workspaceB, 'run_resume_named_seed');
+    seedDoc.nodeStates.resume_input.artifacts = ['底稿.md'];
+    seedStoredRun(workspaceB, seedDoc);
+  }
   const namedMismatch = responseCapture();
   await route('/wf1/api/runs/resume')(request('POST', withSession('/wf1/api/runs/resume', 'session-b'), {
     runId: 'run_resume_named_seed', graph: resumeGraph,
@@ -391,6 +406,29 @@ try {
   }), namedResume);
   assert.equal(namedResume.status, 200);
   assert.equal(namedResume.json().resumedFrom, 'run_resume_named_seed');
+
+  // 续跑物化：可复用节点的祖先工作区文件必须拷进新 run 目录，
+  // 且 /artifact 兜底沿 resumedFrom 链也能命中（祖先目录被清后仍可读）
+  const resumedRunId = namedResume.json().runId;
+  let resumedRunDoc;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    resumedRunDoc = readStoredRun(workspaceB, resumedRunId);
+    if (resumedRunDoc && resumedRunDoc.status !== 'running') break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(resumedRunDoc?.status, 'success', `续跑运行未完成：${resumedRunDoc?.status}`);
+  const resumedWorkspaceFile = join(
+    workspaceB, '.workflow-one', 'runtime',
+    hashedKey('wf_resume_named'), hashedKey(resumedRunId),
+    'nodes', hashedKey('resume_input'), 'workspace', '底稿.md',
+  );
+  assert.equal(readFileSync(resumedWorkspaceFile, 'utf8'), '# 祖先产物\n');
+  const resumedArtifact = responseCapture();
+  await route('/wf1/api/artifact')(request('GET', withSession(
+    `/wf1/api/artifact?run=${resumedRunId}&node=resume_input&file=${encodeURIComponent('底稿.md')}&preview=1`, 'session-b',
+  )), resumedArtifact);
+  assert.equal(resumedArtifact.status, 200);
+  assert.match(resumedArtifact.headers['Content-Type'] || '', /text\/markdown/);
 
   const missingSession = responseCapture();
   await route('/wf1/api/graph')(request('GET', '/wf1/api/graph'), missingSession);
