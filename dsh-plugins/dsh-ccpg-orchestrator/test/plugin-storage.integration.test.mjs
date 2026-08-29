@@ -201,6 +201,60 @@ try {
   assert.equal(readStoredWorkflow(workspaceB, 'wf_utf8'), null);
   assert.equal(existsSync(join(workspaceB, '.workflow-one', 'state', 'tombstones', 'workflows', 'wf_utf8')), true);
 
+  // ---- /wf1/api/trigger（#63 /workflow-one 触发源执行端）----
+  // run：无画布绑定也可发起；工作区按 sessionId 解析（跨工作区隔离）。
+  const seedTriggerWf = responseCapture();
+  await route('/wf1/api/workflows')(request('POST', withSession('/wf1/api/workflows', 'session-a'), {
+    id: 'wf_trigger', name: '触发源工作流',
+    graph: { nodes: [{ id: 'trig_in', type: 'input', position: { x: 0, y: 0 }, data: { label: '输入', text: 'x' } }], edges: [] },
+  }), seedTriggerWf);
+  assert.equal(seedTriggerWf.status, 200);
+  const triggerRunRes = responseCapture();
+  await route('/wf1/api/trigger')(request('POST', withSession('/wf1/api/trigger', 'session-a'), {
+    workflowId: 'wf_trigger', action: 'run',
+  }), triggerRunRes);
+  assert.equal(triggerRunRes.status, 200);
+  assert.equal(triggerRunRes.json().ok, true);
+  const triggerRunId = triggerRunRes.json().runId;
+  let triggerRun;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    triggerRun = readStoredRun(workspaceA, triggerRunId);
+    if (triggerRun && triggerRun.status !== 'running') break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(triggerRun?.status, 'success', 'trigger run 落在 session-a 工作区且成功');
+  assert.equal(triggerRun.source, 'trigger');
+  assert.equal(readStoredRun(workspaceB, triggerRunId), null, 'trigger run 不串工作区');
+
+  // run：不存在的工作流 → 404
+  const triggerMissing = responseCapture();
+  await route('/wf1/api/trigger')(request('POST', withSession('/wf1/api/trigger', 'session-a'), {
+    workflowId: 'wf_nope', action: 'run',
+  }), triggerMissing);
+  assert.equal(triggerMissing.status, 404);
+
+  // open：未绑定画布 → 409 + code
+  const triggerOpenUnbound = responseCapture();
+  await route('/wf1/api/trigger')(request('POST', withSession('/wf1/api/trigger', 'session-a'), {
+    workflowId: 'wf_trigger', action: 'open',
+  }), triggerOpenUnbound);
+  assert.equal(triggerOpenUnbound.status, 409);
+  assert.equal(triggerOpenUnbound.json().code, 'canvas-not-bound');
+
+  // open：绑定画布后成功，且画布切到目标工作流
+  const bindCapture = responseCapture();
+  await route('/wf1/api/assistant/bind')(request('POST', withSession('/wf1/api/assistant/bind', 'session-a'), {
+    sessionId: 'session-a', canvasId: 'canvas-trigger',
+  }), bindCapture);
+  assert.equal(bindCapture.status, 200);
+  const triggerOpen = responseCapture();
+  await route('/wf1/api/trigger')(request('POST', withSession('/wf1/api/trigger', 'session-a'), {
+    workflowId: 'wf_trigger', action: 'open',
+  }), triggerOpen);
+  assert.equal(triggerOpen.status, 200);
+  assert.equal(triggerOpen.json().canvasId, 'canvas-trigger');
+  assert.equal(triggerOpen.json().workflowId, 'wf_trigger');
+
   const runRes = responseCapture();
   await route('/wf1/api/run')(request('POST', withSession('/wf1/api/run', 'session-b'), {
     graph: {

@@ -2722,6 +2722,55 @@ export function apply(ctx, config) {
     return json(res, 200, { files });
   } });
 
+  // ---- /workflow-one 触发源执行端（#63）----
+  // 官方聊天输入 `/workflow-one` 选择工作流后的两个动作落点：
+  //   action=open：把该会话绑定的画布切到目标工作流（workflow_open 工具同语义）；
+  //               未绑定画布返回 409 + code，由前端引导先绑定。
+  //   action=run ：直接发起一次运行（workflow_run 工具同语义，startWorkflowRun 共享），
+  //               不依赖画布绑定——对话框里随手起跑是触发源的主场景。
+  // 工作区按 sessionId 解析（requestStore 同口径），body.sessionId 兼容画布侧调用。
+  register({ kind: 'exact', path: '/wf1/api/trigger', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    const body = await readBody(req);
+    const url = new URL(req.url, 'http://wf1.local');
+    const sessionId = url.searchParams.get('sessionId') || String(body?.sessionId || '');
+    const action = String(body?.action || 'open');
+    const wf = readWf(String(body?.workflowId || ''));
+    if (!wf) return json(res, 404, { error: '工作流不存在' });
+    let store;
+    try {
+      store = sessionId ? sessionStore(sessionId) : requestStore(req);
+    } catch (error) {
+      return json(res, 409, { error: `工作区不可用：${String(error.message || error)}` });
+    }
+    if (action === 'open') {
+      // 画布键含工作区根（canvasKey），解析与写图都要落在会话工作区作用域里。
+      const opened = workspaceContext.run(store, () => {
+        const canvasId = sessionCanvas.get(sessionId);
+        if (!canvasId) return { code: 'canvas-not-bound' };
+        const cv = canvasOf(canvasId);
+        cv.workflowId = wf.id;
+        cv.graph = { nodes: wf.graph.nodes.map((n) => ({ ...n, data: { ...n.data } })), edges: wf.graph.edges.map((e) => ({ ...e })) };
+        cv.version += 1;
+        broadcast('assistant-open-workflow', { canvasId, workflowId: wf.id });
+        return { canvasId };
+      });
+      if (opened.code === 'canvas-not-bound') {
+        return json(res, 409, {
+          error: '此会话未绑定工作流画布，无法打开（可在画布「工作流」标签页打开后重试，或改用运行）',
+          code: 'canvas-not-bound',
+        });
+      }
+      return json(res, 200, { ok: true, action, canvasId: opened.canvasId, workflowId: wf.id, name: wf.name });
+    }
+    if (action === 'run') {
+      const started = workspaceContext.run(store, () => startWorkflowRun(wf, { triggerInput: String(body?.triggerInput ?? ''), runInputs: body?.runInputs && typeof body.runInputs === 'object' ? body.runInputs : {}, source: 'trigger' }));
+      if (!started.ok) return json(res, 400, { error: started.error });
+      return json(res, 200, { ok: true, action, runId: started.runId, workflowId: wf.id, name: wf.name });
+    }
+    return json(res, 400, { error: 'action 须为 open 或 run' });
+  } });
+
   // ---- 技能目录：dsh 原生 ctx.skills（skill-filesystem 发现 ~/.dsh/skills 等根）----
   register({ kind: 'exact', path: '/wf1/api/skills', async handler(_req, res) {
     try {

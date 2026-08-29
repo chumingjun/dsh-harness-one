@@ -48,7 +48,7 @@ vm.runInNewContext(bundle, context, {
   filename: "dsh-ccpg-canvasui/src/client.js",
 });
 
-assert.deepEqual([...client.inject], ["slots"]);
+assert.deepEqual([...client.inject], ["slots", "inputTriggers"]);
 assert.equal(bundle.includes('name: "conversation.view"'), false);
 assert.equal(
   bundle.includes('title: function () { return "对话记录"; }'),
@@ -77,16 +77,15 @@ const sidebarService = {
     return function () {};
   },
 };
-client.apply({
-  inject(dependencies, callback) {
-    assert.deepEqual([...dependencies], ["betterSidebar"]);
-    callback({
-      betterSidebar: sidebarService,
-      effect(effect) {
-        effect();
-      },
-    });
+// inputTriggers 软依赖：老运行时 ctx.get 抛错/返回 null 都不炸 apply。
+const registeredSources = [];
+const inputTriggersService = {
+  registerSource(src) {
+    registeredSources.push(src);
+    return function () {};
   },
+};
+client.apply({
   slots: {
     inject(name, register) {
       injectedSlots.push(name);
@@ -95,6 +94,22 @@ client.apply({
     register() {
       return function () {};
     },
+  },
+  get(name) {
+    if (name === "inputTriggers") return inputTriggersService;
+    throw new Error(`unexpected service: ${name}`);
+  },
+  effect(fn) {
+    fn();
+  },
+  inject(dependencies, callback) {
+    assert.deepEqual([...dependencies], ["betterSidebar"]);
+    callback({
+      betterSidebar: sidebarService,
+      effect(effect) {
+        effect();
+      },
+    });
   },
 });
 assert.deepEqual(injectedSlots, [
@@ -108,6 +123,7 @@ assert.deepEqual(
   registeredTabs.map((tab) => tab.id),
   ["ccpg:workflow"],
 );
+assert.deepEqual(registeredSources.map((s) => s.name), ["workflow-one"]);
 
 const opened = [];
 client.__test.setBetterSidebarService({
@@ -501,6 +517,142 @@ for (const [body, expected] of [
   assert.equal(sent.length, 2);
   assert.equal(sent[1].msg.theme, "light");
   stop();
+}
+
+// /workflow-one 触发源（#63）：注册、候选过滤、submit 动作路由
+{
+  const fetchCalls = [];
+  const workflows = [
+    { id: "wf_a", name: "工程手册编制" },
+    { id: "wf_b", name: "报修工单整理" },
+  ];
+  const fetchImpl = (url, init) => {
+    fetchCalls.push({ url, init });
+    const body = url.includes("/trigger")
+      ? { ok: true, action: JSON.parse(init.body).action }
+      : { workflows };
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve(body),
+    });
+  };
+  const sources = [];
+  const scoped = loadClientInContext({ globals: { fetch: fetchImpl } });
+  const registered = [];
+  const service = {
+    registerSource(src) {
+      registered.push(src);
+      return function () {};
+    },
+  };
+  // apply 全流程需要 slots/document 等完整宿主面；scoped client 只驱动
+  // registerWorkflowTriggerSource 的等价注册路径：ctx.get + ctx.effect。
+  assert.deepEqual(
+    [...scoped.inject],
+    ["slots", "inputTriggers"],
+    "inject 必须声明 inputTriggers，缺声明时 ctx.get 抛错被吞、source 静默不注册",
+  );
+  scoped.apply({
+    slots: {
+      inject() {},
+      register() {
+        return function () {};
+      },
+    },
+    get(name) {
+      if (name === "inputTriggers") return service;
+      throw new Error(`unexpected service: ${name}`);
+    },
+    effect(fn) {
+      fn();
+    },
+    inject(dependencies, callback) {
+      callback({ betterSidebar: sidebarService, effect(fn) { fn(); } });
+      void dependencies;
+    },
+  });
+  assert.equal(registered.length, 1, "inputTriggers 服务在场时 source 注册");
+  const source = registered[0];
+  assert.equal(source.trigger, "/");
+  assert.equal(source.name, "workflow-one");
+
+  // candidates：选源阶段（query=源名前缀）列全部；越过源名后按名过滤；run/open 尾缀
+  const session = { sessionId: "sess_test" };
+  const list = await source.candidates(session, { query: "workflow-one" });
+  assert.equal(list.length, 2, "选源阶段列全部工作流");
+  assert.equal(list[0].value, "wf_a");
+  const filtered = await source.candidates(session, { query: "工程手册" });
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].value, "wf_a");
+  const none = await source.candidates(session, { query: "不存在的名字" });
+  assert.equal(none.length, 0);
+
+  // onPick→claim.submit：args 为空时用 pick 的工作流 id，默认 auto（run 优先）
+  const pick = { candidate: { value: "wf_a" }, session };
+  const { claim } = source.onPick(pick);
+  assert.equal(claim.token, "/workflow-one ");
+  const out1 = await claim.submit("");
+  assert.equal(out1.kind, "success");
+  const triggerCall = fetchCalls.find((c) => c.url.includes("/trigger"));
+  assert.ok(triggerCall, "submit 走 /wf1/api/trigger");
+  assert.ok(triggerCall.url.includes("sessionId=sess_test"));
+  assert.deepEqual(JSON.parse(triggerCall.init.body), { workflowId: "wf_a", action: "run" });
+
+  // args=「open」：强制 open 动作
+  const out2 = await claim.submit("open");
+  assert.equal(out2.kind, "success");
+  const openCall = fetchCalls.filter((c) => c.url.includes("/trigger")).pop();
+  assert.deepEqual(JSON.parse(openCall.init.body), { workflowId: "wf_a", action: "open" });
+
+  // args=「run <name>」：动作前缀 + 覆盖目标
+  await claim.submit("run wf_z");
+  const runCall = fetchCalls.filter((c) => c.url.includes("/trigger")).pop();
+  assert.deepEqual(JSON.parse(runCall.init.body), { workflowId: "wf_z", action: "run" });
+
+  // 服务端报错（409 canvas-not-bound + auto 回退 open 也失败）→ error outcome 带服务端文案
+  const errFetch = (url, init) => {
+    if (url.includes("/trigger")) {
+      return Promise.resolve({
+        ok: false,
+        json: () => Promise.resolve({ error: "此会话未绑定工作流画布，无法打开", code: "canvas-not-bound" }),
+      });
+    }
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ workflows }) });
+  };
+  const scoped2 = loadClientInContext({ globals: { fetch: errFetch } });
+  scoped2.apply({
+    slots: {
+      inject() {},
+      register() {
+        return function () {};
+      },
+    },
+    get(name) {
+      if (name === "inputTriggers") return service;
+      throw new Error(`unexpected service: ${name}`);
+    },
+    effect(fn) {
+      fn();
+    },
+    inject(dependencies, callback) {
+      callback({ betterSidebar: sidebarService, effect(fn) { fn(); } });
+      void dependencies;
+    },
+  });
+  // 第二个 scoped client 往同一 service 注册第二个 source（闭包绑定 errFetch）
+  const secondSource = registered[registered.length - 1];
+  const { claim: claim2 } = secondSource.onPick(pick);
+  const out3 = await claim2.submit("");
+  assert.equal(out3.kind, "error");
+  assert.match(out3.text, /未绑定工作流画布/);
+
+  // 缺目标 id → 结构化错误，不发请求
+  const before = fetchCalls.length;
+  const { claim: claimNoTarget } = source.onPick({ candidate: null, session });
+  const out4 = await claimNoTarget.submit("");
+  assert.equal(out4.kind, "error");
+  assert.match(out4.text, /缺少工作流/);
+  assert.equal(fetchCalls.length, before, "缺目标不发请求");
 }
 
 console.log("canvasui client tests: passed");
