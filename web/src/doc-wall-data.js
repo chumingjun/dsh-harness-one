@@ -38,6 +38,7 @@ function fileRow(file) {
     previewUrl: file.previewUrl || null,
     downloadUrl: file.downloadUrl || file.url || null,
     content: kind === 'doc' ? clipDocContent(file.content || '') : '',
+    finishedAt: file.finishedAt || null, // 新卡高亮：完成时间晚于上次已读即标新
   };
 }
 
@@ -115,6 +116,8 @@ export function buildDocWallModel({ runResults, progressByNode = {}, nodeStates 
         // 节点工作区产物走 scoped artifact 路由（run + node + file 定位）；不可预览的类型 DocumentPreviewButton 自行隐藏
         previewUrl: `${artifactUrlFor(nodeId, String(path))}&preview=1`,
         downloadUrl: artifactUrlFor(nodeId, String(path)),
+        // 新卡高亮用：stateArtifacts 无单文件时间，继承运行完成时间（比上次已读晚即视为新）
+        finishedAt: run.finishedAt || null,
       });
     }
   }

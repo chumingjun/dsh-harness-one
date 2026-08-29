@@ -101,6 +101,7 @@ function normalizeFile(file, fallback = {}) {
     nodeLabel: first(value.nodeLabel, value.node, fallback.nodeLabel),
     size: value.size,
     mimeType: first(value.mimeType, value.mediaType, value.contentType),
+    finishedAt: first(value.finishedAt, fallback.finishedAt), // 文稿墙新卡高亮
   };
 }
 
@@ -325,7 +326,9 @@ export function adaptRunResults(payload, context = {}) {
     .map((file) => normalizeFile(file)).filter(Boolean);
   const stateFiles = Object.entries(asObject(runDetail.nodeStates)).flatMap(([nodeId, state]) => {
     const nodeLabel = nodes.get(nodeId)?.data?.label || nodeId;
-    return asArray(state?.artifacts).map((file) => normalizeFile(file, { nodeId, nodeLabel })).filter(Boolean);
+    return asArray(state?.artifacts).map((file) => normalizeFile(file, {
+      nodeId, nodeLabel, finishedAt: runDetail.finishedAt || null, // 新卡高亮：节点产物继承运行完成时间
+    })).filter(Boolean);
   });
   const allFiles = uniqueBy([...explicitFiles, ...stateFiles], (file) => `${file.nodeId || file.nodeLabel || ''}:${file.path}`);
   const explicitFinalFiles = asArray(source.finalArtifacts).map((file) => normalizeFile(file)).filter(Boolean);

@@ -107,3 +107,22 @@
   .docwall-card-body { height: 220px; }
   .docwall-search { width: 110px; }
 }
+
+/* 新卡高亮：完成时间晚于上次已读的卡，左边一条 accent 竖线 + 文件名点标 */
+.docwall-card-fresh { border-left: 3px solid var(--accent); }
+.docwall-card-fresh .docwall-card-name::after { content: 'NEW'; font-size: 9px; color: var(--accent); margin-left: 6px; letter-spacing: .5px; }
+
+/* 密度档位：S/M/L 三档卡宽（数据存 localStorage） */
+.docwall-density { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.docwall-density-btn { border: none; background: var(--bg-raised); color: var(--fg-faint); font-size: 10.5px; font-weight: 700; padding: 4px 8px; cursor: pointer; font-family: inherit; }
+.docwall-density-btn + .docwall-density-btn { border-left: 1px solid var(--border); }
+.docwall-density-on { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.docwall-density-s .docwall-card, .docwall-density-s .docwall-card-image, .docwall-density-s .docwall-card-video { width: 300px; }
+.docwall-density-l .docwall-card, .docwall-density-l .docwall-card-image, .docwall-density-l .docwall-card-video { width: 520px; }
+
+/* 预览弹窗辅助工具条（复制全文/链接）：挂在弹窗背层之上、右下角 */
+.docwall-preview-extra { position: fixed; right: 22px; bottom: 22px; z-index: 10001; display: flex; gap: 8px; align-items: center; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: 999px; padding: 6px 10px; box-shadow: var(--shadow-2, 0 4px 16px rgba(0,0,0,.25)); }
+.docwall-copy-err { color: var(--danger-fg); font-size: 12px; }
+
+/* 文稿 tab 新文稿圆点（画布视图期间成果落盘提示） */
+.view-tab .docs-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 6px; vertical-align: 2px; box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent); }

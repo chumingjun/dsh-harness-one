@@ -380,6 +380,10 @@ export default function App() {
   // 运行结束（成果落盘）→ 文稿墙全量再投影（异常恢复原则：重新投影即可，不增量修补最终态）
   const docWallReadyToken = resultsReadyByRunId[inspectedRunId] || 0;
   const docWallReadyTokenRef = useRef(docWallReadyToken);
+  // 文稿 tab 徽标：画布视图期间任意所看运行成果新落盘（ready 晚于上次进过文稿）→ 挂圆点提示
+  const [docsSeenAt, setDocsSeenAt] = useState(0);
+  const latestReadyAt = useMemo(() => Math.max(0, ...Object.values(resultsReadyByRunId).map(Number)), [resultsReadyByRunId]);
+  const docsBadge = view !== 'docs' && latestReadyAt > docsSeenAt;
   useEffect(() => {
     if (!docWallVisible || !inspectedRunId) return;
     if (docWallReadyToken && docWallReadyToken !== docWallReadyTokenRef.current) {
@@ -1543,7 +1547,7 @@ export default function App() {
         <strong className="toolbar-brand">Workflow One</strong>
         <nav className="view-tabs">
           <button className={`view-tab ${view === 'canvas' ? 'view-tab-on' : ''}`} onClick={() => setView('canvas')}>画布</button>
-          <button className={`view-tab ${view === 'docs' ? 'view-tab-on' : ''}`} onClick={() => setView('docs')}>文稿</button>
+          <button className={`view-tab ${view === 'docs' ? 'view-tab-on' : ''}`} onClick={() => { setView('docs'); setDocsSeenAt(Date.now()); }}>文稿{docsBadge ? <span className="docs-dot" aria-label="有新文稿" /> : null}</button>
           <button className={`view-tab ${view === 'workflows' ? 'view-tab-on' : ''}`} onClick={() => setView('workflows')}>工作流</button>
           <button className={`view-tab ${historyOpen ? 'view-tab-on' : ''}`} onClick={() => setHistoryOpen(true)}>历史</button>
         </nav>
