@@ -79,3 +79,44 @@ test('apply tolerates a missing webServer', () => {
   assert.doesNotThrow(() => apply({ logger: { info() {} } }));
 });
 
+
+// ---- univer 渲染器纯函数 ----
+
+test('univer: .univer maps to univer kind and previewable', () => {
+  assert.equal(documentPreviewKind('报表.univer'), 'univer');
+  assert.equal(documentMimeType('报表.univer'), 'application/x-univer');
+  assert.equal(canPreviewDocument({ name: '报表.univer' }), true);
+});
+
+
+
+test('univer-core: resolveEndpointOf/fileKeyOf/pickWorktree 纯函数', async () => {
+  const { resolveEndpointOf, fileKeyOf, pickWorktree } = await import('../src/univer-core.js');
+  // resolve 端点推导：run 形态与 legacy 形态都取同基址；非 artifact 路径拒绝
+  assert.equal(
+    resolveEndpointOf('http://x/wf1/api/artifact?run=r1&node=n1&file=a.univer'),
+    'http://x/wf1/api/univer/resolve?run=r1&node=n1&file=a.univer',
+  );
+  assert.equal(
+    resolveEndpointOf('/wf1/api/artifact?node=数据节点&file=%E6%8A%A5%E8%A1%A8.univer'),
+    '/wf1/api/univer/resolve?node=数据节点&file=%E6%8A%A5%E8%A1%A8.univer',
+  );
+  assert.equal(resolveEndpointOf('http://x/other?file=a.univer'), '');
+  assert.equal(resolveEndpointOf(''), '');
+  // fileKeyOf 与 host 侧 fileKeyOf 同语义：utf8 base64url（纯 Web API，浏览器可用）
+  assert.equal(fileKeyOf('/tmp/a.univer'), Buffer.from('/tmp/a.univer', 'utf8').toString('base64url'));
+  assert.equal(fileKeyOf('/tmp/中文名.univer'), Buffer.from('/tmp/中文名.univer', 'utf8').toString('base64url'));
+  // worktree 选择：最新 draft 优先 → 无 draft 取最新 → 空列表 null
+  assert.equal(pickWorktree([]), null);
+  assert.equal(pickWorktree(null), null);
+  assert.equal(pickWorktree([{ worktreeId: 'a', status: 'merged', createdAt: '2026-01-01' }]), 'a');
+  assert.equal(pickWorktree([
+    { worktreeId: 'old', status: 'draft', createdAt: '2026-01-01' },
+    { worktreeId: 'new', status: 'draft', createdAt: '2026-02-01' },
+    { worktreeId: 'm', status: 'merged', createdAt: '2026-03-01' },
+  ]), 'new');
+  assert.equal(pickWorktree([
+    { worktreeId: 'm1', status: 'merged', createdAt: '2026-01-01' },
+    { worktreeId: 'm2', status: 'merged', createdAt: '2026-05-01' },
+  ]), 'm2');
+});

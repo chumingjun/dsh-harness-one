@@ -2675,6 +2675,57 @@ export function apply(ctx, config) {
     return streamArtifactResponse(req, res, { file: realFull, filename: file, mediaType, preview });
   } });
 
+  // .univer 产物解析：给 document-preview 的 Univer Viewer 渲染器返回文件系统绝对路径
+  //（Viewer 以绝对路径 base64url 为 file key，且要求路径以 .univer 结尾、落在 workspace 内）。
+  // 因此不走内容寻址的快照目录（无后缀），统一解析节点工作区里的原始 .univer：
+  // 已结束运行沿 artifactIndex 的 relativePath 定位（断点续跑产物在祖先运行目录，沿 resumedFrom 回退），
+  // 运行中直接按 file 名在工作区解析。安全约束与 /wf1/api/artifact 同款。
+  register({ kind: 'exact', path: '/wf1/api/univer/resolve', async handler(req, res) {
+    if (req.method !== 'GET') return json(res, 405, { error: 'method' });
+    const url = new URL(req.url, 'http://x');
+    const runId = url.searchParams.get('run') || '';
+    const file = url.searchParams.get('file') || '';
+    const nodeParam = url.searchParams.get('node') || '';
+    if (!runId && !nodeParam) return json(res, 400, { error: '需要 node 和 file' });
+    if (!file) return json(res, 400, { error: '需要 node 和 file' });
+    if (extname(file).toLowerCase() !== '.univer') return json(res, 400, { error: '仅支持 .univer 文件' });
+    const hit = (absolutePath) => json(res, 200, { file: absolutePath });
+    const run = runId ? readRun(runId) : null;
+    const ancestors = [];
+    if (run) {
+      ancestors.push(runId);
+      let cursor = run;
+      for (let depth = 0; cursor?.resumedFrom && depth < 10; depth += 1) {
+        ancestors.push(cursor.resumedFrom);
+        cursor = readRun(cursor.resumedFrom);
+      }
+    }
+    // 已结束运行：artifactIndex 记录了 relativePath（相对节点工作区），按它精确解析；
+    // 请求的 file 名与索引对不上时回退到按名匹配（同名即认，运行中写入与索引时点差异）。
+    const indexed = (run?.artifactIndex || []).filter((a) => a?.relativePath?.toLowerCase().endsWith('.univer'));
+    const candidates = [];
+    if (indexed.length) {
+      const exact = indexed.find((a) => a.nodeId === nodeParam && (a.relativePath === file || a.name === file));
+      const byName = indexed.filter((a) => a.name === file);
+      for (const a of [exact, ...byName]) {
+        if (a && !candidates.some((c) => c.nodeId === a.nodeId && c.relativePath === a.relativePath)) candidates.push(a);
+      }
+    }
+    for (const candidateRunId of ancestors.length ? ancestors : [runId]) {
+      const rels = candidates.filter((a) => a.nodeId === nodeParam).map((a) => a.relativePath);
+      for (const rel of rels.length ? rels : (runId ? [] : [file])) {
+        const ws = resolveInside(STORAGE.workspaceForNode({
+          workflowId: run?.workflowId || 'draft', runId: candidateRunId, nodeId: nodeParam,
+        }), rel);
+        if (!ws || !existsSync(ws) || !statSync(ws).isFile()) continue;
+        const realWs = realpathSync(ws);
+        if (resolveInside(realpathSync(dirname(realWs)), realWs) !== realWs) continue;
+        return hit(realWs);
+      }
+    }
+    return json(res, 404, { error: '产物不存在' });
+  } });
+
   // 文稿墙批量正文：一次请求返回运行内多个产物的文本截断稿，替代逐卡 fetch（37 卡 = 37 请求）。
   // POST { runId, items: [{ node, file }] } → { files: { "<node>\u0000<file>": { content, truncated } } }；
   // 总字节预算 1.5MB，超预算的条目返回 { omitted: true }，前端回退单卡惰性拉取。仅文本类产物。

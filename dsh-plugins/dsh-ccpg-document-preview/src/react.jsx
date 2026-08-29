@@ -10,6 +10,7 @@ const PdfRenderer = lazy(() => import('./renderers/pdf.jsx'));
 const DocxRenderer = lazy(() => import('./renderers/docx.jsx'));
 const SheetRenderer = lazy(() => import('./renderers/sheet.jsx'));
 const PptxRenderer = lazy(() => import('./renderers/pptx.jsx'));
+const UniverRenderer = lazy(() => import('./renderers/univer.jsx'));
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 function Loading() {
@@ -92,6 +93,7 @@ function PreviewContent({ document, kind, maxTextBytes }) {
   if (kind === 'docx') return <DocxRenderer document={document} />;
   if (kind === 'sheet') return <SheetRenderer document={document} />;
   if (kind === 'pptx') return <PptxRenderer document={document} />;
+  if (kind === 'univer') return <UniverRenderer document={document} />;
   return <div className="dsh-doc-preview-message">该文件类型暂不支持预览，旧 DOC 和 PPT 请下载后查看。</div>;
 }
 
