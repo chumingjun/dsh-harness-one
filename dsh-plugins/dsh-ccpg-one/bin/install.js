@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// dsh-ccpg-one 安装入口（npx dsh-ccpg-one / npm exec dsh-ccpg-one）。
+// dsh-harness-one 安装入口（聚合源目录 dsh-plugins/dsh-ccpg-one 的 bin）（npx dsh-harness-one / npm exec dsh-harness-one）。
 //
-// 为什么存在：`dsh plugin --profile X add dsh-ccpg-one` 是 profile 目录里裸跑
-// pnpm 11 的薄转发器，而聚合依赖链 dsh-ccpg-one → dsh-better-sidebar → node-pty
+// 为什么存在：`dsh plugin --profile X add dsh-harness-one` 是 profile 目录里裸跑
+// pnpm 11 的薄转发器，而聚合依赖链 dsh-harness-one → dsh-better-sidebar → node-pty
 // 带原生构建脚本。pnpm 11 的 strict-dep-builds 在 allowBuilds 未声明时直接
 // ERR_PNPM_IGNORED_BUILDS 非零退出——dsh 跳过 bundle 注册，且 pnpm 已往 profile
 // 的 pnpm-workspace.yaml 写入非法占位符（`node-pty: set this to true or false`），
@@ -17,15 +17,15 @@ import { spawnSync } from 'node:child_process';
 
 const DSH_HOME = process.env.DSH_HOME || join(process.env.HOME, '.dsh');
 const PROFILE = process.argv[2] || 'dsh-ccpg';
-const PKG = 'dsh-ccpg-one';
+const PKG = 'dsh-harness-one';
 const SUBPLUGINS = ['dsh-ccpg-canvasui', 'dsh-ccpg-document-preview', 'dsh-ccpg-larkauth',
   'dsh-ccpg-llm-guard', 'dsh-ccpg-orchestrator', 'dsh-ccpg-tools', 'dsh-ccpg-web'];
 
 const trailingNewline = (s) => (s.endsWith('\n') ? '' : '\n');
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const say = (msg) => console.log(`[dsh-ccpg-one] ${msg}`);
-const die = (msg) => { console.error(`[dsh-ccpg-one] ${msg}`); process.exit(1); };
+const say = (msg) => console.log(`[dsh-harness-one] ${msg}`);
+const die = (msg) => { console.error(`[dsh-harness-one] ${msg}`); process.exit(1); };
 
 if (process.argv.includes('-h') || process.argv.includes('--help')) {
   console.log(`用法：npx ${PKG} [profile] [--prewrite]
@@ -71,7 +71,7 @@ if (process.argv.includes('--prewrite')) process.exit(0);
 say(`dsh plugin --profile ${PROFILE} add ${PKG} …`);
 const add = spawnSync(dsh, ['plugin', '--profile', PROFILE, 'add', PKG], { stdio: 'inherit' });
 if (add.status !== 0) {
-  console.error(`[dsh-ccpg-one] 安装失败（exit ${add.status}）。
+  console.error(`[dsh-harness-one] 安装失败（exit ${add.status}）。
 若上面有 ERR_PNPM_IGNORED_BUILDS：重试无效（pnpm 会反复拦截）——重跑本命令即可，
 它会先把 profile pnpm-workspace.yaml 的放行修正（allowBuilds: node-pty: true）再安装。`);
   process.exit(add.status ?? 1);
@@ -83,7 +83,7 @@ if (add.status !== 0) {
 if (process.env.CCPG_NO_SIDEBAR || process.env.CCPG_ONLY_CORE) {
   say('CCPG_NO_SIDEBAR/CCPG_ONLY_CORE 生效：移除 dsh-better-sidebar …');
   const rm = spawnSync(dsh, ['plugin', '--profile', PROFILE, 'remove', 'dsh-better-sidebar'], { stdio: 'inherit' });
-  if (rm.status !== 0) console.error('[dsh-ccpg-one] better-sidebar 移除失败（可手动：dsh plugin --profile ' + PROFILE + ' remove dsh-better-sidebar）');
+  if (rm.status !== 0) console.error('[dsh-harness-one] better-sidebar 移除失败（可手动：dsh plugin --profile ' + PROFILE + ' remove dsh-better-sidebar）');
 }
 say('安装完成，重启 dsh 生效。独立画布: http://127.0.0.1:4021/wf1/');
 

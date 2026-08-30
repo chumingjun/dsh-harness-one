@@ -1,5 +1,5 @@
 {
-  "name": "dsh-ccpg-one",
+  "name": "dsh-harness-one",
   "version": "0.7.1",
   "description": "Workflow One - Visual AI workflow orchestrator for DeepSeek Harness (dsh), with multi-agent DAGs, live execution, recovery, and Feishu integration",
   "license": "MIT",
@@ -34,7 +34,7 @@
   "private": false,
   "main": "lib/index.js",
   "bin": {
-    "dsh-ccpg-one": "./bin/install.js"
+    "dsh-harness-one": "./bin/install.js"
   },
   "exports": {
     ".": "./lib/index.js",
