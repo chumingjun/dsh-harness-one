@@ -46,7 +46,7 @@ try {
   assert.match(allowBlock, /^  node-pty: true$/m);
   assert.match(allowBlock, /^  protobufjs: true$/m);
   assert.match(out, /minimumReleaseAgeExclude:\n  - dsh-better-sidebar@0\.16\.1\n/);
-  for (const p of ['dsh-ccpg-one', 'dsh-ccpg-canvasui', 'dsh-ccpg-orchestrator', 'dsh-ccpg-tools', 'dsh-ccpg-web']) {
+  for (const p of ['dsh-harness-one', 'dsh-ccpg-canvasui', 'dsh-ccpg-orchestrator', 'dsh-ccpg-tools', 'dsh-ccpg-web']) {
     assert.match(out, new RegExp(`^  - ${p}$`, 'm'), `${p} 应在 minimumReleaseAgeExclude`);
   }
   // 顶级键顺序不乱：packages 仍在最前
@@ -70,7 +70,7 @@ try {
   });
   const out2 = readFileSync(join(p2, 'pnpm-workspace.yaml'), 'utf8');
   assert.match(out2, /allowBuilds:\n  node-pty: true\n  protobufjs: true\n/);
-  assert.match(out2, /minimumReleaseAgeExclude:\n  - dsh-ccpg-one\n/);
+  assert.match(out2, /minimumReleaseAgeExclude:\n  - dsh-harness-one\n/);
 } finally {
   rmSync(home, { recursive: true, force: true });
 }
@@ -78,4 +78,4 @@ try {
 function mkdirTree(p) { execFileSync('/bin/mkdir', ['-p', p]); }
 function writeFileSyncUTF8(p, t) { execFileSync('/bin/sh', ['-c', `cat > ${JSON.stringify(p)} << 'EOF'\n${t}\nEOF`]); }
 
-console.log('✓ dsh-ccpg-one bin/install --prewrite：占位符归位 / 幂等 / 空白 profile 三组通过');
+console.log('✓ dsh-harness-one bin/install --prewrite：占位符归位 / 幂等 / 空白 profile 三组通过');
