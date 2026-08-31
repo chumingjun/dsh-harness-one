@@ -584,6 +584,11 @@ export default function App() {
         .then((detail) => setRunDetails((current) => ({ ...current, [p.runId]: detail })))
         .catch(() => {});
     });
+    es.addEventListener('revision-ready', (e) => {
+      const p = JSON.parse(e.data);
+      if (!p.runId || !appliesToActiveRun(p)) return;
+      setResultsReadyByRunId((current) => ({ ...current, [p.runId]: Date.now() }));
+    });
     es.addEventListener('run-persist-error', (e) => {
       const p = JSON.parse(e.data);
       if (!appliesToActiveRun(p)) return;
@@ -1601,6 +1606,7 @@ export default function App() {
               progressByNode={progress}
               nodeStates={runDetails[inspectedRunId]?.nodeStates || {}}
               inspectedRunId={inspectedRunId}
+              resultsReadyToken={resultsReadyByRunId[inspectedRunId] || 0}
               loading={docWallLoading}
               loadError={docWallError}
               onRetry={() => loadDocWall(inspectedRunId)}

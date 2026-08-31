@@ -126,3 +126,37 @@
 
 /* 文稿 tab 新文稿圆点（画布视图期间成果落盘提示） */
 .view-tab .docs-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 6px; vertical-align: 2px; box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent); }
+
+/* ---- 评论与修订（issue #97）---- */
+/* 卡头评论按钮：与预览按钮同几何，有评论时高亮 */
+.docwall-card-cmt { position: relative; }
+.docwall-card-cmt-n { position: absolute; top: -4px; right: -4px; min-width: 13px; height: 13px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 9px; line-height: 13px; text-align: center; padding: 0 3px; }
+.docwall-card-cmt-on { color: var(--accent); }
+.docwall-card-badge { flex: none; font-size: 10px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 999px; padding: 1px 6px; }
+.docwall-card-commenting { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+
+/* 评论/版本链抽屉：文稿视图右侧固定栏 */
+.docwall-fb { position: fixed; top: 0; right: 0; bottom: 0; width: 340px; z-index: 60; display: flex; flex-direction: column; gap: 10px; background: var(--bg-raised); border-left: 1px solid var(--border-strong); box-shadow: var(--shadow-2, -4px 0 16px rgba(0,0,0,.2)); padding: 12px 14px; overflow-y: auto; }
+.docwall-fb-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.docwall-fb-head strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docwall-fb-sec { display: flex; flex-direction: column; gap: 8px; }
+.docwall-fb-label { font-size: 11.5px; font-weight: 700; color: var(--fg-faint); display: flex; align-items: center; gap: 6px; }
+.docwall-fb-cnt { background: var(--accent); color: #fff; border-radius: 999px; font-size: 10px; padding: 0 6px; line-height: 15px; }
+.docwall-fb-list { display: flex; flex-direction: column; gap: 6px; }
+.docwall-fb-item { border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; font-size: 12.5px; }
+.docwall-fb-item p { margin: 0 0 5px; white-space: pre-wrap; word-break: break-word; }
+.docwall-fb-meta { display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: var(--fg-faint); }
+.docwall-fb-del { border: none; background: none; color: var(--fg-faint); font-size: 10.5px; cursor: pointer; padding: 0; font-family: inherit; }
+.docwall-fb-del:hover { color: var(--danger-fg); }
+.docwall-fb-empty { font-size: 12px; color: var(--fg-faint); margin: 0; }
+.docwall-fb-empty-inline { font-size: 11px; color: var(--fg-faint); }
+.docwall-fb-input { resize: vertical; min-height: 58px; font-size: 12.5px; font-family: inherit; }
+.docwall-fb-err { color: var(--danger-fg); font-size: 12px; margin: 0; }
+.docwall-fb-actions { display: flex; gap: 8px; }
+.docwall-fb-pending { font-size: 11.5px; color: var(--accent); margin: 0; }
+.docwall-fb-vers { display: flex; flex-wrap: wrap; gap: 6px; }
+.docwall-fb-ver { border: 1px solid var(--border); background: var(--bg-raised); border-radius: 999px; font-size: 11px; padding: 2px 9px; cursor: pointer; font-family: inherit; }
+.docwall-fb-ver-on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.docwall-fb-preview { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.docwall-fb-summary { font-size: 11.5px; color: var(--fg-faint); margin: 0 0 6px; }
+.docwall-fb-content { max-height: 40vh; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word; margin: 0; }

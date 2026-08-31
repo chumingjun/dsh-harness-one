@@ -56,6 +56,7 @@ import { listFeishuCreds, addFeishuCred, removeFeishuCred, setDefaultFeishuCred,
 import { Orchestrator, lintGraph, getKind } from './engine.js';
 import { createWorkflowExportManifest, importWorkflowDocument, normalizeWorkflowDocument } from './workflow-document.js';
 import { saveArtifactsToWorkspace } from './artifact-save.js';
+import { buildRevisionGraph, extractRevision, revisionAgentNodeId } from './artifact-feedback.js';
 import { createStoragePaths } from './storage-paths.js';
 import { WorkflowSqliteStore } from './sqlite-store.js';
 import {
@@ -920,9 +921,10 @@ export function apply(ctx, config) {
     }
   };
   // 保留策略：SQLite 提交删除后，再清理对应运行产物目录。
+  // 改写 run（source='revision'）不受该窗口挤压：仍在版本链里的修订引用其产物正文。
   const pruneRuns = () => {
     try {
-      for (const run of currentDatabase().pruneRuns(RUNS_KEEP)) {
+      for (const run of currentDatabase().pruneRuns(RUNS_KEEP, { keepRevisionRuns: currentDatabase().revisionRunIds() })) {
         try {
           rmSync(STORAGE.runRoot({ workflowId: run.workflowId || 'draft', runId: run.runId }), { recursive: true, force: true });
         } catch (error) {
@@ -957,9 +959,12 @@ export function apply(ctx, config) {
     const document = normalizeRunDocument(run);
     return currentDatabase().putRun(document);
   };
-  const recentRuns = (limit = 50, workflowId) => currentDatabase().listRuns(limit, workflowId).map((run) => (
-    run.status === 'running' && !pendingRunIds.has(run.runId) ? (readRun(run.runId) || run) : run
-  ));
+  const recentRuns = (limit = 50, workflowId) => currentDatabase().listRuns(limit, workflowId)
+    // 改写 run（source='revision'）归组到被修产物的版本链下展示，不作为独立运行条目
+    .filter((run) => run.source !== 'revision')
+    .map((run) => (
+      run.status === 'running' && !pendingRunIds.has(run.runId) ? (readRun(run.runId) || run) : run
+    ));
   const checkpointRun = (runId) => {
     const live = orch?.runs.get(runId);
     if (!live || live.run.workspaceRoot !== currentStore().workspaceRoot) return;
@@ -1061,7 +1066,7 @@ export function apply(ctx, config) {
 
   const startRun = (graph, {
     triggerInput, workflowName, workflowId, canvasId, source,
-    globalVariables = {}, workflowVariables = {}, runInputs = {}, runId: providedRunId, replayOf, resume,
+    globalVariables = {}, workflowVariables = {}, runInputs = {}, runId: providedRunId, replayOf, resume, revises,
   } = {}) => {
     const store = currentStore();
     const runId = providedRunId || `run_${Date.now().toString(36)}_${++runIdSeq}`;
@@ -1074,6 +1079,7 @@ export function apply(ctx, config) {
         runId, status: 'running', startedAt: new Date().toISOString(),
         triggerInput: triggerInput ?? '', workflowName: workflowName || null, workflowId: workflowId || null,
         canvasId: canvasId || null, source: source || null, replayOf: replayOf || null,
+        revises: revises || null,
         ...(resume ? { resumedFrom: resume.runId || null } : {}),
         nodeStates: {}, outputs: {}, structuredOutputs: {}, issues: [],
         graph: graph ? { nodes: graph.nodes.map((n) => ({ id: n.id, type: n.type, position: n.position, data: n.data })), edges: graph.edges } : undefined,
@@ -1081,12 +1087,13 @@ export function apply(ctx, config) {
       }));
     } catch { /* 快照写失败不阻塞运行；最终 persistRun 仍会落盘 */ }
     const promise = workspaceContext.run(store, () => Promise.resolve().then(() => orch.run(graph, {
-      triggerInput, workflowName, workflowId, canvasId, source, runId,
+      triggerInput, workflowName, workflowId, canvasId, source, runId, revises,
       workspaceRoot: store.workspaceRoot,
       globalVariables, workflowVariables, runInputs,
       resume,
     })).then(async (run) => {
       if (replayOf) run.replayOf = replayOf;
+      if (revises) run.revises = revises;
       try { await notifications.complete(runId, run); }
       catch (error) {
         notifications.discard(runId);
@@ -1155,7 +1162,7 @@ export function apply(ctx, config) {
     const rendered = renderTemplate(d.inputTemplate || '', tctx);
     let userPrompt = rendered.text || '(无上游输入)';
     const attachments = (s.graph?.nodes || []).filter((n) => n.type === 'input').flatMap((n) => n.data?.attachments || []);
-    const inputFiles = [];
+    const inputFiles = Array.isArray(d.inputFiles) ? d.inputFiles.map((file) => safeFilename(file)).filter(Boolean) : [];
     if (attachments.length) {
       for (const att of attachments) {
         try {
@@ -2771,6 +2778,127 @@ export function apply(ctx, config) {
       else if (!files[`${nodeId}\u0000${file}`]) files[`${nodeId}\u0000${file}`] = { omitted: true };
     }
     return json(res, 200, { files });
+  } });
+
+  // ---- 产物评论与修订（issue #97 轻通道）----
+  // 评论/修订存独立表（run 文档之外的用户数据，run 历史保持不可变）。
+  // GET /wf1/api/comments?runId= → { comments, revisions }：一次拉全 run 的评论与版本链，前端按卡归组
+  register({ kind: 'exact', path: '/wf1/api/comments', async handler(req, res) {
+    const url = new URL(req.url, 'http://x');
+    const runId = url.searchParams.get('runId') || '';
+    if (!runId) return json(res, 400, { error: '缺少 runId' });
+    const db = currentDatabase();
+    const comments = req.method === 'GET' ? db.listArtifactComments(runId) : [];
+    const revisions = db.listArtifactRevisions(runId);
+    return json(res, 200, { comments, revisions });
+  } });
+
+  // POST /wf1/api/comments { runId, nodeId, artifactId, body } → { comment }；DELETE ?id=
+  register({ kind: 'exact', path: '/wf1/api/comments/add', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    const body = await readBody(req);
+    const runId = String(body?.runId || '');
+    const nodeId = String(body?.nodeId || '');
+    const artifactId = String(body?.artifactId || '');
+    const text = String(body?.body || '').trim();
+    if (!runId || !nodeId || !artifactId) return json(res, 400, { error: '需要 runId、nodeId、artifactId' });
+    if (!text) return json(res, 400, { error: '评论内容不能为空' });
+    if (!readRun(runId)) return json(res, 404, { error: '运行记录不存在' });
+    const comment = currentDatabase().addArtifactComment({ runId, nodeId, artifactId, body: text });
+    return json(res, 200, { ok: true, comment });
+  } });
+
+  register({ kind: 'exact', path: '/wf1/api/comments/delete', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    const body = await readBody(req);
+    const id = Number(body?.id);
+    if (!Number.isInteger(id) || id <= 0) return json(res, 400, { error: '需要有效 id' });
+    const removed = currentDatabase().deleteArtifactComment(id);
+    return json(res, 200, { ok: removed });
+  } });
+
+  // POST /wf1/api/artifacts/revise：按评论改写这一篇（轻通道）。
+  // 动态合成单 agent 微图，原稿复制进改写节点输出目录，以 source='revision' 走引擎正常起跑
+  // （超时/重试/llm-guard/usage 免费复用）；完成后修订正文入版本链表，不写回原 run。
+  register({ kind: 'exact', path: '/wf1/api/artifacts/revise', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    const body = await readBody(req);
+    const runId = String(body?.runId || '');
+    const nodeId = String(body?.nodeId || '');
+    const artifactId = String(body?.artifactId || '');
+    const instruction = String(body?.instruction || '').trim();
+    if (!runId || !nodeId || !artifactId) return json(res, 400, { error: '需要 runId、nodeId、artifactId' });
+    const run = readRun(runId);
+    if (!run) return json(res, 404, { error: '运行记录不存在' });
+    if (run.source === 'revision') return json(res, 400, { error: '改写稿不能再次发起改写' });
+    // 产物定位：先按 artifactIndex id，未命中回退按 name（文稿卡前端两形态都可能传）
+    let resolved = resolveRunArtifact(artifactLocationsForRun(run), run, artifactId);
+    if (!resolved) {
+      const byName = (run.artifactIndex || []).find((item) => item.name === artifactId);
+      if (byName) resolved = resolveRunArtifact(artifactLocationsForRun(run), run, byName.id);
+    }
+    if (!resolved) return json(res, 404, { error: '产物不存在或已被清理' });
+    const comments = currentDatabase().listArtifactComments(runId)
+      .filter((row) => row.node_id === nodeId && row.artifact_id === resolved.artifact.name);
+    if (!comments.length && !instruction) return json(res, 400, { error: '没有可用的评论或补充要求' });
+
+    const revisionRunId = `run_${Date.now().toString(36)}_rev${++runIdSeq}`;
+    // 原稿复制进改写节点输出目录：prompt 与文档长度解耦，agent 用 read 工具自取
+    const revisionWs = STORAGE.workspaceForNode({
+      workflowId: run.workflowId || 'draft', runId: revisionRunId, nodeId: revisionAgentNodeId(),
+    });
+    const fileName = safeFilename(resolved.artifact.name);
+    const sourceFileName = `__wf1_original__${fileName}`;
+    try {
+      mkdirSync(revisionWs, { recursive: true, mode: 0o700 });
+      copyFileSync(resolved.file, resolveInside(revisionWs, sourceFileName) || join(revisionWs, sourceFileName));
+    } catch (error) {
+      return json(res, 500, { error: `原稿复制失败：${error.message}` });
+    }
+    const graph = buildRevisionGraph({
+      comments,
+      originalName: resolved.artifact.name,
+      fileName,
+      sourceFileName,
+      instruction,
+    });
+    const { runId: startedId, promise } = startRun(graph, {
+      workflowId: run.workflowId || null,
+      workflowName: `${run.workflowName || run.runId} · 按评论修订`,
+      source: 'revision',
+      runId: revisionRunId,
+      revises: { runId, nodeId, artifactId: resolved.artifact.name },
+    });
+    // 路由即刻返回；修订落库在 run 收尾后异步执行。
+    // .then 已脱离路由的 workspaceContext（AsyncLocalStorage），须以路由捕获的 store 重入
+    const routeStore = currentStore();
+    // 评论/修订统一以产物 name 为键（与前端卡片键一致；artifactId 参数可能是索引 id）
+    const artifactKey = resolved.artifact.name;
+    promise.then((revisionRun) => {
+      if (!revisionRun) return;
+      workspaceContext.run(routeStore, () => {
+        const persisted = readRun(startedId);
+        const record = persisted && extractRevision({
+          run: persisted,
+          fileName,
+          readFile: (artifact) => {
+            const found = resolveRunArtifact(artifactLocationsForRun(persisted), persisted, artifact.id);
+            if (!found) throw new Error('快照文件缺失');
+            return readFileSync(found.file, 'utf8');
+          },
+        });
+        if (!record) return;
+        currentDatabase().addArtifactRevision({
+          targetRunId: runId, nodeId, artifactId: artifactKey,
+          revisionRunId: record.revisionRunId,
+          name: record.name, summary: record.summary, fileName: record.fileName, content: record.content,
+        });
+        broadcast('revision-ready', { runId, nodeId, artifactId: artifactKey, revisionRunId: startedId });
+      });
+    }).catch((error) => {
+      ctx.logger?.error?.(`[wf1] 修订落库失败（${runId}/${artifactKey} → ${startedId}）：${error.message}`);
+    });
+    return json(res, 200, { ok: true, revisionRunId: startedId });
   } });
 
   // ---- /workflow-one 触发源执行端（#63）----

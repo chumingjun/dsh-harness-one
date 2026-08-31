@@ -2,10 +2,11 @@
 // 数据原则 = 磁盘事实（run-results）投影 + SSE 实时叠加；异常恢复一律「重新投影」。
 // 性能红线（方案 v1.1 §四）：卡内 ≤2000 字符截断、懒挂载、视频不预载、React.memo 隔离重渲。
 import { memo, createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Check, ChevronRight, Clock3, FileText, Film, ImageIcon, Loader2, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Check, ChevronRight, Clock3, FileText, Film, ImageIcon, Loader2, MessageSquare, RefreshCw } from 'lucide-react';
 import { buildDocWallModel, clipDocContent } from './doc-wall-data.js';
 import MarkdownDocument from './MarkdownDocument.jsx';
 import { ArtifactPreviewButton, ArtifactPreviewModal, runArtifact } from './ArtifactPreview.jsx';
+import { FeedbackDrawer, feedbackKey, useArtifactFeedback } from './docwall-feedback.jsx';
 import { apiUrl } from './api.js';
 
 const STATUS_ICON = {
@@ -80,7 +81,7 @@ function useDocBody(doc) {
 }
 
 /* ---------- 文档卡（md 可读卡 / 图片 / 视频占位 / data chip 由 Strip 渲染） ---------- */
-const DocCard = memo(function DocCard({ doc, onOpen, fresh }) {
+const DocCard = memo(function DocCard({ doc, onOpen, fresh, onComment, commentCount, revisionCount, commenting }) {
   const open = () => onOpen?.(doc);
   const files = useContext(FilesContext);
   const { state, body: bodyText } = useDocBody(doc);
@@ -114,10 +115,20 @@ const DocCard = memo(function DocCard({ doc, onOpen, fresh }) {
   }
   const Icon = doc.kind === 'image' ? ImageIcon : doc.kind === 'video' ? Film : FileText;
   return (
-    <article className={`docwall-card docwall-card-${doc.kind} ${fresh ? 'docwall-card-fresh' : ''}`}>
+    <article className={`docwall-card docwall-card-${doc.kind} ${fresh ? 'docwall-card-fresh' : ''} ${commenting ? 'docwall-card-commenting' : ''}`}>
       <header className="docwall-card-head" onClick={open}>
         <Icon size={14} aria-hidden="true" />
         <span className="docwall-card-name" title={doc.name}>{doc.name}</span>
+        {revisionCount > 0 && <span className="docwall-card-badge" title={`${revisionCount} 个修订版本`}>✎{revisionCount}</span>}
+        {onComment && (
+          <button type="button"
+            className={`btn btn-icon docwall-card-cmt ${commentCount ? 'docwall-card-cmt-on' : ''}`}
+            title="评论 / 修改建议" aria-label={`评论 ${doc.name}`}
+            onClick={(e) => { e.stopPropagation(); onComment(doc); }}>
+            <MessageSquare size={13} />
+            {commentCount > 0 && <span className="docwall-card-cmt-n">{commentCount}</span>}
+          </button>
+        )}
         <ArtifactPreviewButton artifact={doc} className="docwall-card-pv">⤢</ArtifactPreviewButton>
       </header>
       {body}
@@ -151,11 +162,20 @@ function LiveCard({ progress, structured }) {
 }
 
 /* ---------- 单节点条带 ---------- */
-function NodeStrip({ node, liveProgress, onOpen, registerRef, freshIds }) {
+function NodeStrip({ node, liveProgress, onOpen, registerRef, freshIds, feedback, onComment, commentingKey }) {
   const [chipOpen, setChipOpen] = useState(false);
   const dataFiles = node.dataFiles || [];
   const strip = node.docs || [];
   const live = node.live && liveProgress !== undefined;
+  const cardProps = (doc) => {
+    const entry = feedback?.byArtifact.get(feedbackKey(doc));
+    return {
+      onComment,
+      commentCount: entry?.comments.length || 0,
+      revisionCount: entry?.revisions.length || 0,
+      commenting: commentingKey === feedbackKey(doc),
+    };
+  };
   return (
     <section className="docwall-strip" aria-label={node.nodeLabel} ref={registerRef}>
       <header className="docwall-strip-head">
@@ -167,7 +187,7 @@ function NodeStrip({ node, liveProgress, onOpen, registerRef, freshIds }) {
       </header>
       <div className={`docwall-strip-cards ${strip.length > 0 && strip.length <= 2 ? 'docwall-strip-cards-sparse' : ''}`}>
         {live && <LiveCard progress={liveProgress} structured={liveProgress?.structured} />}
-        {strip.map((doc) => <LazyMount key={doc.id}><DocCard doc={doc} onOpen={onOpen} fresh={freshIds?.has(doc.id)} /></LazyMount>)}
+        {strip.map((doc) => <LazyMount key={doc.id}><DocCard doc={doc} onOpen={onOpen} fresh={freshIds?.has(doc.id)} {...cardProps(doc)} /></LazyMount>)}
         {strip.length === 0 && !dataFiles.length && !live && (
           <div className="docwall-strip-empty">本节点无文件产物</div>
         )}
@@ -191,7 +211,7 @@ function NodeStrip({ node, liveProgress, onOpen, registerRef, freshIds }) {
 
 /* ---------- 主组件：模型计算 + 左右布局 ---------- */
 export function DocWallView({
-  runResults, progressByNode = {}, nodeStates = {}, inspectedRunId,
+  runResults, progressByNode = {}, nodeStates = {}, inspectedRunId, resultsReadyToken = 0,
   loading = false, loadError = '', onRetry, onRefresh,
   onRunHere, recentRuns = [], onInspectRun,
 }) {
@@ -208,6 +228,11 @@ export function DocWallView({
   const [selected, setSelected] = useState('overview'); // 'overview' | 'finals' | nodeId
   const [previewDoc, setPreviewDoc] = useState(null); // 点卡页内预览（ArtifactPreviewModal），不跳浏览器
   useEffect(() => { setSelected('overview'); }, [inspectedRunId]);
+
+  // 评论与修订（issue #97）：换 run 重置抽屉；revision-ready SSE 到达时经 refreshToken 重拉
+  const feedback = useArtifactFeedback(model.runId, resultsReadyToken);
+  const [commentDoc, setCommentDoc] = useState(null);
+  useEffect(() => { setCommentDoc(null); }, [model.runId]);
 
   // 批量预取：一次请求拉全 run 的 doc 产物截断正文（替代 37 卡 37 请求）。
   // 只对「无内联正文」的 doc 卡发起；key = `${nodeId}\u0000${name}`，与数据层去重键一致。
@@ -472,7 +497,14 @@ export function DocWallView({
           <section className="docwall-strip" aria-label="成果">
             <header className="docwall-strip-head docwall-strip-head-final"><strong>◆ 成果</strong><span className="docwall-strip-meta">{model.finals.docs.length} 文档 · {model.finals.links.length} 链接</span></header>
             <div className="docwall-strip-cards">
-              {model.finals.docs.map((doc) => <LazyMount key={doc.id}><DocCard doc={doc} onOpen={onOpen} fresh={freshIds.has(doc.id)} /></LazyMount>)}
+              {model.finals.docs.map((doc) => {
+                const entry = feedback.byArtifact.get(feedbackKey(doc));
+                return <LazyMount key={doc.id}><DocCard doc={doc} onOpen={onOpen} fresh={freshIds.has(doc.id)}
+                  onComment={setCommentDoc}
+                  commentCount={entry?.comments.length || 0}
+                  revisionCount={entry?.revisions.length || 0}
+                  commenting={commentDoc && feedbackKey(commentDoc) === feedbackKey(doc)} /></LazyMount>;
+              })}
               {model.finals.links.map((link) => (
                 <a key={link.url} className="docwall-card docwall-card-link" href={link.url} target="_blank" rel="noreferrer">🔗 {link.label}</a>
               ))}
@@ -483,6 +515,9 @@ export function DocWallView({
           visibleNodes.map((node) => (
             <NodeStrip key={node.nodeId} node={node} liveProgress={progressByNode[node.nodeId]} onOpen={onOpen}
               freshIds={freshIds}
+              feedback={feedback}
+              onComment={setCommentDoc}
+              commentingKey={commentDoc ? feedbackKey(commentDoc) : ''}
               registerRef={(el) => stripRefs.current.set(node.nodeId, el)} />
           ))
         )}
@@ -491,6 +526,7 @@ export function DocWallView({
         )}
       </div>
       {previewDoc && <PreviewExtra artifact={previewDoc} onClose={() => setPreviewDoc(null)} />}
+      {commentDoc && <FeedbackDrawer doc={commentDoc} runId={model.runId} feedback={feedback} onClose={() => setCommentDoc(null)} />}
     </div>
     </FilesContext.Provider>
     </BulkContext.Provider>
