@@ -81,6 +81,7 @@ const legacyDataDir = () => (process.env.WF1_LEGACY_DATA_DIR
   : join(__dirname, '..', 'data'));
 const RUNS_KEEP = 100; // 运行历史保留条数（按开始时间新→旧）
 const REQUEST_BODY_LIMIT = 8_000_000;
+const MAX_MANUAL_REVISION_CONTENT = 400 * 1024; // 手工编辑正文上限（字符），防超大写入库表
 const TERMINAL_NODE_STATUSES = new Set(['success', 'error', 'canceled', 'skipped']);
 let runIdSeq = 0;
 let ctxRef = null;
@@ -2921,6 +2922,40 @@ export function apply(ctx, config) {
       ctx.logger?.error?.(`[wf1] 修订落库失败（${runId}/${artifactKey} → ${startedId}）：${error.message}`);
     });
     return json(res, 200, { ok: true, revisionRunId: startedId });
+  } });
+
+  // POST /wf1/api/artifacts/save：手工编辑落版本链（issue #97 补充通道）。
+  // 用户在文稿视图直接改文本类产物并保存：不覆盖原稿文件（run 历史不可变），
+  // 写成一条 origin='manual' 的修订进版本链，与 AI 改写版本同链展示、可继续迭代。
+  register({ kind: 'exact', path: '/wf1/api/artifacts/save', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    const body = await readBody(req);
+    const runId = String(body?.runId || '');
+    const nodeId = String(body?.nodeId || '');
+    const artifactId = String(body?.artifactId || '');
+    const content = typeof body?.content === 'string' ? body.content : '';
+    if (!runId || !nodeId || !artifactId) return json(res, 400, { error: '需要 runId、nodeId、artifactId' });
+    if (!content.trim()) return json(res, 400, { error: '内容不能为空' });
+    if (content.length > MAX_MANUAL_REVISION_CONTENT) {
+      return json(res, 413, { error: `内容超过上限（${MAX_MANUAL_REVISION_CONTENT} 字符）` });
+    }
+    const run = readRun(runId);
+    if (!run) return json(res, 404, { error: '运行记录不存在' });
+    // 手工编辑只写版本链、不读原文件：按索引定位即可（快照被清理也能编辑存版本）
+    const artifact = (run.artifactIndex || []).find((item) => item.id === artifactId)
+      || (run.artifactIndex || []).find((item) => item.name === artifactId);
+    if (!artifact) return json(res, 404, { error: '产物不存在或已被清理' });
+    const ext = extname(artifact.name).toLowerCase();
+    if (!['.md', '.markdown', '.txt', '.csv'].includes(ext)) {
+      return json(res, 415, { error: '仅支持文本类文稿的直接编辑' });
+    }
+    const id = currentDatabase().addArtifactRevision({
+      targetRunId: runId, nodeId, artifactId: artifact.name,
+      revisionRunId: null, name: artifact.name,
+      summary: '手工编辑', fileName: artifact.name, content,
+    });
+    broadcast('revision-ready', { runId, nodeId, artifactId: artifact.name, revisionId: id, manual: true });
+    return json(res, 200, { ok: true, revisionId: id });
   } });
 
   // ---- /workflow-one 触发源执行端（#63）----

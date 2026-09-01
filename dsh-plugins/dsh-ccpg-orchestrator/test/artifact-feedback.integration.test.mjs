@@ -233,6 +233,44 @@ try {
     const res = await call('POST', '/wf1/api/artifacts/revise', { runId: revisionRunId, nodeId: 'revision_agent', artifactId: 'art_report' });
     assert.equal(res.status, 400);
   }
+  // 手工编辑：非文本产物拒绝（造一个 .png 索引项）
+  {
+    const db = new DatabaseSync(databaseFile(workspace));
+    try {
+      const doc = JSON.parse(db.prepare('SELECT document_json FROM runs WHERE run_id = ?').get('run_fb_src').document_json);
+      doc.artifactIndex.push({ id: 'art_pic', nodeId: 'n_input', name: '现场照片.png', snapshot: 'run_fb_src/art_pic', relativePath: '现场照片.png', previewable: false, size: 5, mediaType: 'image/png' });
+      db.prepare('UPDATE runs SET document_json = ? WHERE run_id = ?').run(JSON.stringify(doc), 'run_fb_src');
+    } finally { db.close(); }
+    const res = await call('POST', '/wf1/api/artifacts/save', { runId: 'run_fb_src', nodeId: 'n_input', artifactId: 'art_pic', content: 'not text' });
+    assert.equal(res.status, 415);
+  }
+  // 手工编辑 happy path：落 origin=manual 修订进版本链，revision_run_id 为空
+  {
+    const res = await call('POST', '/wf1/api/artifacts/save', {
+      runId: 'run_fb_src', nodeId: 'n_input', artifactId: 'art_report',
+      content: '# 巡检报告（手工修订）\n用户直接补充的内容。',
+    });
+    assert.equal(res.status, 200);
+    assert.ok(res.body.revisionId > 0);
+    const list = await call('GET', '/wf1/api/comments?runId=run_fb_src');
+    const manual = list.body.revisions.find((r) => r.revision_run_id == null);
+    assert.ok(manual, '手工修订已入版本链');
+    assert.equal(manual.summary, '手工编辑');
+    assert.equal(manual.content, '# 巡检报告（手工修订）\n用户直接补充的内容。');
+    assert.equal(manual.artifact_id, '巡检报告.md');
+  }
+  // 手工编辑校验：空内容 400 / 产物不存在 404 / run 不存在 404
+  {
+    assert.equal((await call('POST', '/wf1/api/artifacts/save', { runId: 'run_fb_src', nodeId: 'n_input', artifactId: 'art_report', content: '  ' })).status, 400);
+    assert.equal((await call('POST', '/wf1/api/artifacts/save', { runId: 'run_fb_src', nodeId: 'n_input', artifactId: '不存在.md', content: 'x' })).status, 404);
+    assert.equal((await call('POST', '/wf1/api/artifacts/save', { runId: 'run_nope', nodeId: 'n_input', artifactId: 'art_report', content: 'x' })).status, 404);
+  }
+  // 手工修订不改 run 文档（不可变红线）：源 run 快照仍只有原始索引（去掉测试注入的 png 前）
+  {
+    const src = readStoredRun(workspace, 'run_fb_src');
+    assert.equal(src.artifactIndex.some((a) => a.id === 'art_report'), true);
+    assert.equal(src.source == null || src.source !== 'revision', true);
+  }
   // 删除评论（清空全部两条）
   {
     const list = await call('GET', '/wf1/api/comments?runId=run_fb_src');
