@@ -66,10 +66,36 @@ export function normalizePreviewDocument(document) {
   };
 }
 
+export function previewErrorMessage(reason) {
+  if (reason?.name === 'AbortError') return '';
+  if (reason?.status === 404) return '文件不存在或已随运行历史清理。';
+  if (reason?.status === 409) return '当前工作区会话已失效，请刷新页面后重试。';
+  if (reason?.status >= 500) return '文档服务暂时不可用，请稍后重试。';
+  const raw = String(reason?.message || reason || '');
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(raw)) {
+    return '文档加载失败，请检查连接后重试。';
+  }
+  return raw || '文档加载失败，请稍后重试。';
+}
+
 export async function fetchPreviewResponse(url, options = {}) {
-  if (!url) throw new Error('Preview URL is missing');
-  const response = await fetch(url, { credentials: 'same-origin', ...options });
-  if (!response.ok) throw new Error(`Failed to load document (HTTP ${response.status})`);
+  if (!url) throw new Error('预览地址缺失，无法加载文档。');
+  let response;
+  try {
+    response = await fetch(url, { credentials: 'same-origin', ...options });
+  } catch (reason) {
+    if (reason?.name === 'AbortError') throw reason;
+    const error = new Error(previewErrorMessage(reason));
+    error.code = 'preview-network-error';
+    error.cause = reason;
+    throw error;
+  }
+  if (!response.ok) {
+    const error = new Error(previewErrorMessage({ status: response.status }));
+    error.status = response.status;
+    error.code = response.status === 404 ? 'preview-not-found' : response.status === 409 ? 'preview-session-required' : 'preview-http-error';
+    throw error;
+  }
   return response;
 }
 

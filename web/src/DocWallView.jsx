@@ -2,10 +2,11 @@
 // 数据原则 = 磁盘事实（run-results）投影 + SSE 实时叠加；异常恢复一律「重新投影」。
 // 性能红线（方案 v1.1 §四）：卡内 ≤2000 字符截断、懒挂载、视频不预载、React.memo 隔离重渲。
 import { memo, createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Check, ChevronRight, Clock3, FileText, Film, ImageIcon, Loader2, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Check, ChevronRight, Clock3, FileText, Film, ImageIcon, Loader2, MessageSquare, RefreshCw } from 'lucide-react';
 import { buildDocWallModel, clipDocContent } from './doc-wall-data.js';
 import MarkdownDocument from './MarkdownDocument.jsx';
 import { ArtifactPreviewButton, ArtifactPreviewModal, runArtifact } from './ArtifactPreview.jsx';
+import { FeedbackDrawer, feedbackKey, useArtifactFeedback } from './docwall-feedback.jsx';
 import { apiUrl } from './api.js';
 
 const STATUS_ICON = {
@@ -46,44 +47,93 @@ function LazyMount({ children, placeholderHeight = 320 }) {
    优先消费批量预取缓存（BULK context，一次请求拉全条带），缓存未命中再单卡惰性拉取；
    拉取失败（运行被清理/历史 resume 目录已删）渲染占位，不白屏不报错 ---------- */
 const BulkContext = createContext(null);
-// run 级产物清单（卡内引用互链）：正文行内 code 引用的文件名命中清单即变预览链接
+// run 级产物清单（卡内引用互链）：正文行内 code 引用的产物文件名命中清单即变预览链接
 const FilesContext = createContext([]);
+const DOC_FETCH_TIMEOUT_MS = 15000;
+
+function hasOwn(value, key) {
+  return value != null && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function docBodyErrorMessage(reason, timedOut = false) {
+  if (timedOut) return '正文读取超时，请重试。';
+  if (reason?.status === 404) return '正文文件不存在，可能已随运行历史清理。';
+  if (reason?.status === 409) return '当前工作区会话已失效，请刷新页面后重试。';
+  if (reason?.status >= 500) return '正文服务暂时不可用，请稍后重试。';
+  const raw = String(reason?.message || reason || '');
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(raw)) return '正文读取失败，请检查连接后重试。';
+  return '正文暂不可读，请重试。';
+}
 
 function useDocBody(doc) {
   const bulk = useContext(BulkContext);
-  const cached = bulk?.get(`${doc.nodeId || ''}\u0000${doc.name}`);
-  const [body, setBody] = useState(() => doc.content || cached?.content || '');
+  const key = `${doc.nodeId || ''}\u0000${doc.name}`;
+  const cached = bulk?.files?.get(key);
+  const inline = doc.hasContent || Boolean(doc.content);
+  const cachedContent = cached && hasOwn(cached, 'content');
+  const hasBody = inline || cachedContent;
+  const bulkPending = Boolean(bulk?.status === 'pending' && !cached);
+  const shouldFallback = !hasBody && !bulkPending && (
+    cached?.omitted || bulk?.status === 'failed' || bulk?.status === 'ready' || !bulk
+  );
+  const [body, setBody] = useState(() => (inline ? doc.content : cachedContent ? cached.content : ''));
+  const [error, setError] = useState('');
+  const [retry, setRetry] = useState(0);
   const [state, setState] = useState(() => {
-    if (doc.content || cached?.content) return 'ready';
-    if (cached?.omitted) return 'idle'; // 批量时超预算被省略，回退单卡拉取
-    return doc.downloadUrl ? 'idle' : 'missing';
+    if (hasBody) return 'ready';
+    if (bulkPending || shouldFallback) return shouldFallback ? 'loading' : 'loading';
+    return doc.downloadUrl ? 'loading' : 'missing';
   });
-  const startedRef = useRef(false);
+
   useEffect(() => {
-    // startedRef 防重入：状态只在完成时翻转，避免 setState 触发 effect 重跑
-    // 把在途 fetch 的结果用 alive 丢弃（会永远卡在 loading）
-    if (state !== 'idle' || startedRef.current || !doc.downloadUrl) return undefined;
-    startedRef.current = true;
-    let alive = true;
-    fetch(doc.downloadUrl).then(async (res) => {
-      if (!res.ok) throw new Error(String(res.status));
+    if (hasBody) {
+      setBody(inline ? doc.content : cached.content);
+      setError('');
+      setState('ready');
+      return undefined;
+    }
+    if (bulkPending || !shouldFallback) {
+      if (bulkPending) setState('loading');
+      return undefined;
+    }
+    if (!doc.downloadUrl) { setError('正文地址缺失。'); setState('missing'); return undefined; }
+
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, DOC_FETCH_TIMEOUT_MS);
+    setError('');
+    setState('loading');
+    fetch(doc.downloadUrl, { signal: controller.signal }).then(async (res) => {
+      if (!res.ok) {
+        const error = new Error(`HTTP ${res.status}`);
+        error.status = res.status;
+        throw error;
+      }
       return res.text();
     }).then((text) => {
-      // 与内联 content 同一红线：卡内只渲染截断稿，全文进预览弹窗
-      if (alive) { setBody(clipDocContent(text)); setState('ready'); }
-    }).catch(() => {
-      if (alive) setState('missing');
-    });
-    return () => { alive = false; };
-  }, [state, doc.downloadUrl]);
-  return { state, body };
+      setBody(clipDocContent(text));
+      setError('');
+      setState('ready');
+    }).catch((reason) => {
+      if (reason?.name !== 'AbortError' || timedOut) {
+        setError(docBodyErrorMessage(reason, timedOut));
+        setState('missing');
+      }
+    }).finally(() => clearTimeout(timer));
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [bulk?.status, cached, doc.downloadUrl, hasBody, inline, shouldFallback, bulkPending, retry]);
+  return { state, body, error, retry: () => setRetry((value) => value + 1) };
 }
 
+
 /* ---------- 文档卡（md 可读卡 / 图片 / 视频占位 / data chip 由 Strip 渲染） ---------- */
-const DocCard = memo(function DocCard({ doc, onOpen, fresh }) {
+const DocCard = memo(function DocCard({ doc, onOpen, fresh, onComment, commentCount, revisionCount, commenting }) {
   const open = () => onOpen?.(doc);
   const files = useContext(FilesContext);
-  const { state, body: bodyText } = useDocBody(doc);
+  const { state, body: bodyText, error, retry } = useDocBody(doc);
   let body;
   if (doc.kind === 'image') {
     body = (
@@ -98,8 +148,11 @@ const DocCard = memo(function DocCard({ doc, onOpen, fresh }) {
     body = (
       <div className="docwall-card-body docwall-card-missing">
         <AlertTriangle size={15} />
-        <p>正文暂不可读（文件可能已随运行归档清理）。</p>
-        {doc.downloadUrl && <a href={doc.downloadUrl} download onClick={(e) => e.stopPropagation()}>尝试下载</a>}
+        <p>{error || '正文暂不可读。'}</p>
+        <div className="docwall-card-missing-actions">
+          {doc.downloadUrl && <a href={doc.downloadUrl} download onClick={(e) => e.stopPropagation()}>尝试下载</a>}
+          <button type="button" className="btn btn-sm" onClick={(e) => { e.stopPropagation(); retry(); }}>重试</button>
+        </div>
       </div>
     );
   } else if (state === 'loading' || state === 'idle') {
@@ -114,10 +167,20 @@ const DocCard = memo(function DocCard({ doc, onOpen, fresh }) {
   }
   const Icon = doc.kind === 'image' ? ImageIcon : doc.kind === 'video' ? Film : FileText;
   return (
-    <article className={`docwall-card docwall-card-${doc.kind} ${fresh ? 'docwall-card-fresh' : ''}`}>
+    <article className={`docwall-card docwall-card-${doc.kind} ${fresh ? 'docwall-card-fresh' : ''} ${commenting ? 'docwall-card-commenting' : ''}`}>
       <header className="docwall-card-head" onClick={open}>
         <Icon size={14} aria-hidden="true" />
         <span className="docwall-card-name" title={doc.name}>{doc.name}</span>
+        {revisionCount > 0 && <span className="docwall-card-badge" title={`${revisionCount} 个修订版本`}>✎{revisionCount}</span>}
+        {onComment && (
+          <button type="button"
+            className={`btn btn-icon docwall-card-cmt ${commentCount ? 'docwall-card-cmt-on' : ''}`}
+            title="评论 / 修改建议" aria-label={`评论 ${doc.name}`}
+            onClick={(e) => { e.stopPropagation(); onComment(doc); }}>
+            <MessageSquare size={13} />
+            {commentCount > 0 && <span className="docwall-card-cmt-n">{commentCount}</span>}
+          </button>
+        )}
         <ArtifactPreviewButton artifact={doc} className="docwall-card-pv">⤢</ArtifactPreviewButton>
       </header>
       {body}
@@ -151,11 +214,20 @@ function LiveCard({ progress, structured }) {
 }
 
 /* ---------- 单节点条带 ---------- */
-function NodeStrip({ node, liveProgress, onOpen, registerRef, freshIds }) {
+function NodeStrip({ node, liveProgress, onOpen, registerRef, freshIds, feedback, onComment, commentingKey }) {
   const [chipOpen, setChipOpen] = useState(false);
   const dataFiles = node.dataFiles || [];
   const strip = node.docs || [];
   const live = node.live && liveProgress !== undefined;
+  const cardProps = (doc) => {
+    const entry = feedback?.byArtifact.get(feedbackKey(doc));
+    return {
+      onComment,
+      commentCount: entry?.comments.length || 0,
+      revisionCount: entry?.revisions.length || 0,
+      commenting: commentingKey === feedbackKey(doc),
+    };
+  };
   return (
     <section className="docwall-strip" aria-label={node.nodeLabel} ref={registerRef}>
       <header className="docwall-strip-head">
@@ -167,7 +239,7 @@ function NodeStrip({ node, liveProgress, onOpen, registerRef, freshIds }) {
       </header>
       <div className={`docwall-strip-cards ${strip.length > 0 && strip.length <= 2 ? 'docwall-strip-cards-sparse' : ''}`}>
         {live && <LiveCard progress={liveProgress} structured={liveProgress?.structured} />}
-        {strip.map((doc) => <LazyMount key={doc.id}><DocCard doc={doc} onOpen={onOpen} fresh={freshIds?.has(doc.id)} /></LazyMount>)}
+        {strip.map((doc) => <LazyMount key={doc.id}><DocCard doc={doc} onOpen={onOpen} fresh={freshIds?.has(doc.id)} {...cardProps(doc)} /></LazyMount>)}
         {strip.length === 0 && !dataFiles.length && !live && (
           <div className="docwall-strip-empty">本节点无文件产物</div>
         )}
@@ -191,7 +263,7 @@ function NodeStrip({ node, liveProgress, onOpen, registerRef, freshIds }) {
 
 /* ---------- 主组件：模型计算 + 左右布局 ---------- */
 export function DocWallView({
-  runResults, progressByNode = {}, nodeStates = {}, inspectedRunId,
+  runResults, progressByNode = {}, nodeStates = {}, inspectedRunId, resultsReadyToken = 0,
   loading = false, loadError = '', onRetry, onRefresh,
   onRunHere, recentRuns = [], onInspectRun,
 }) {
@@ -209,49 +281,83 @@ export function DocWallView({
   const [previewDoc, setPreviewDoc] = useState(null); // 点卡页内预览（ArtifactPreviewModal），不跳浏览器
   useEffect(() => { setSelected('overview'); }, [inspectedRunId]);
 
-  // 批量预取：一次请求拉全 run 的 doc 产物截断正文（替代 37 卡 37 请求）。
-  // 只对「无内联正文」的 doc 卡发起；key = `${nodeId}\u0000${name}`，与数据层去重键一致。
+  // 评论与修订（issue #97）：换 run 重置抽屉；revision-ready SSE 到达时经 refreshToken 重拉
+  const feedback = useArtifactFeedback(model.runId, resultsReadyToken);
+  const [commentDoc, setCommentDoc] = useState(null);
+  useEffect(() => { setCommentDoc(null); }, [model.runId]);
+
+  // 批量预取：一次请求拉全 run 的 doc 产物截断正文（替代逐卡请求）。
+  // bulk 带 runId 和阶段，防止换运行时旧缓存被新卡片消费。
+  const docItems = useMemo(() => {
+    const items = [];
+    const seen = new Set();
+    const add = (doc) => {
+      if (doc.kind !== 'doc' || doc.hasContent || !doc.nodeId) return;
+      const file = doc.path || doc.name;
+      const key = `${doc.nodeId}\u0000${file}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      items.push({ node: doc.nodeId, file, name: doc.name, artifactId: doc.id });
+    };
+    model.nodes.forEach((node) => node.docs.forEach(add));
+    model.finals.docs.forEach(add);
+    return items;
+  }, [model]);
+  const docItemsSignature = useMemo(
+    () => docItems.map(({ node, file, name, artifactId }) => `${node}\u0000${file}\u0000${name}\u0000${artifactId || ''}`).join('\u0001'),
+    [docItems],
+  );
   const [bulk, setBulk] = useState(null);
-  const bulkRunRef = useRef('');
+  const bulkContext = useMemo(() => (
+    bulk?.runId === model.runId
+      ? bulk
+      : { runId: model.runId || '', status: 'pending', files: new Map() }
+  ), [bulk, model.runId]);
   useEffect(() => {
-    if (!model.hasRun || !model.runId) return undefined;
-    const docItems = [];
-    for (const node of model.nodes) {
-      for (const doc of node.docs) {
-        if (doc.kind === 'doc' && !doc.content && doc.nodeId) {
-          docItems.push({ node: doc.nodeId, file: doc.path || doc.name, name: doc.name });
-        }
-      }
+    if (!model.hasRun || !model.runId) {
+      setBulk({ runId: model.runId || '', status: 'ready', files: new Map() });
+      return undefined;
     }
-    for (const doc of model.finals.docs) {
-      if (doc.kind === 'doc' && !doc.content && doc.nodeId) {
-        docItems.push({ node: doc.nodeId, file: doc.path || doc.name, name: doc.name });
-      }
-    }
-    if (!docItems.length) { setBulk(new Map()); return undefined; }
     let alive = true;
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, DOC_FETCH_TIMEOUT_MS);
+    setBulk({ runId: model.runId, status: 'pending', files: new Map() });
+    if (!docItems.length) {
+      clearTimeout(timer);
+      setBulk({ runId: model.runId, status: 'ready', files: new Map() });
+      return () => controller.abort();
+    }
     fetch(apiUrl('/artifacts/content'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ runId: model.runId, items: docItems.map(({ node, file }) => ({ node, file })) }),
+      signal: controller.signal,
+      body: JSON.stringify({ runId: model.runId, items: docItems.map(({ node, file, artifactId }) => ({ node, file, artifactId })) }),
     }).then(async (res) => {
-      if (!res.ok) throw new Error(String(res.status));
+      if (!res.ok) {
+        const error = new Error(`HTTP ${res.status}`);
+        error.status = res.status;
+        throw error;
+      }
       return res.json();
     }).then((data) => {
       if (!alive) return;
       const map = new Map();
-      docItems.forEach(({ node, file, name }, i) => {
+      docItems.forEach(({ node, file, name }) => {
         map.set(`${node}\u0000${name}`, data.files?.[`${node}\u0000${file}`] || { omitted: true });
       });
-      setBulk(map);
-    }).catch(() => {
-      if (alive) setBulk(new Map()); // 失败不阻塞渲染：各卡回退单卡惰性拉取
-    });
-    return () => { alive = false; };
-  }, [model]);
-  useEffect(() => { // 换运行重置批量缓存
-    if (bulkRunRef.current !== (model.runId || '')) { bulkRunRef.current = model.runId || ''; setBulk(null); }
-  }, [model.runId]);
+      setBulk({ runId: model.runId, status: 'ready', files: map });
+    }).catch((error) => {
+      if (!alive || (error?.name === 'AbortError' && !timedOut)) return;
+      const map = new Map(docItems.map(({ node, name }) => [`${node}\u0000${name}`, { omitted: true }]));
+      setBulk({ runId: model.runId, status: 'failed', files: map });
+    }).finally(() => clearTimeout(timer));
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [model.hasRun, model.runId, docItemsSignature]);
 
   const onOpen = (doc) => { if (doc?.name) setPreviewDoc(doc); };
 
@@ -416,7 +522,7 @@ export function DocWallView({
   const visibleNodes = selected === 'overview' ? overviewNodes : selectedNode ? [filteredNodes.find((n) => n.nodeId === selected) || selectedNode] : [];
 
   return (
-    <BulkContext.Provider value={bulk}>
+    <BulkContext.Provider value={bulkContext}>
     <FilesContext.Provider value={runFiles}>
     <div className={`docwall docwall-density-${density}`}>
       <aside className="docwall-side" aria-label="节点列表">
@@ -472,7 +578,14 @@ export function DocWallView({
           <section className="docwall-strip" aria-label="成果">
             <header className="docwall-strip-head docwall-strip-head-final"><strong>◆ 成果</strong><span className="docwall-strip-meta">{model.finals.docs.length} 文档 · {model.finals.links.length} 链接</span></header>
             <div className="docwall-strip-cards">
-              {model.finals.docs.map((doc) => <LazyMount key={doc.id}><DocCard doc={doc} onOpen={onOpen} fresh={freshIds.has(doc.id)} /></LazyMount>)}
+              {model.finals.docs.map((doc) => {
+                const entry = feedback.byArtifact.get(feedbackKey(doc));
+                return <LazyMount key={doc.id}><DocCard doc={doc} onOpen={onOpen} fresh={freshIds.has(doc.id)}
+                  onComment={setCommentDoc}
+                  commentCount={entry?.comments.length || 0}
+                  revisionCount={entry?.revisions.length || 0}
+                  commenting={commentDoc && feedbackKey(commentDoc) === feedbackKey(doc)} /></LazyMount>;
+              })}
               {model.finals.links.map((link) => (
                 <a key={link.url} className="docwall-card docwall-card-link" href={link.url} target="_blank" rel="noreferrer">🔗 {link.label}</a>
               ))}
@@ -483,6 +596,9 @@ export function DocWallView({
           visibleNodes.map((node) => (
             <NodeStrip key={node.nodeId} node={node} liveProgress={progressByNode[node.nodeId]} onOpen={onOpen}
               freshIds={freshIds}
+              feedback={feedback}
+              onComment={setCommentDoc}
+              commentingKey={commentDoc ? feedbackKey(commentDoc) : ''}
               registerRef={(el) => stripRefs.current.set(node.nodeId, el)} />
           ))
         )}
@@ -491,6 +607,7 @@ export function DocWallView({
         )}
       </div>
       {previewDoc && <PreviewExtra artifact={previewDoc} onClose={() => setPreviewDoc(null)} />}
+      {commentDoc && <FeedbackDrawer doc={commentDoc} runId={model.runId} feedback={feedback} onClose={() => setCommentDoc(null)} />}
     </div>
     </FilesContext.Provider>
     </BulkContext.Provider>

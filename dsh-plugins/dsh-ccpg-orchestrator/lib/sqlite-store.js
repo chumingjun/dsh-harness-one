@@ -14,7 +14,7 @@ import { basename, dirname, join } from 'node:path';
 import { normalizeRunDocument } from './run-results.js';
 import { normalizeWorkflowDocument } from './workflow-document.js';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS workflows (
@@ -38,6 +38,30 @@ const SCHEMA = `
   ) STRICT;
   CREATE INDEX IF NOT EXISTS runs_started_at ON runs(started_at DESC);
   CREATE INDEX IF NOT EXISTS runs_workflow_started_at ON runs(workflow_id, started_at DESC);
+
+  CREATE TABLE IF NOT EXISTS artifact_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    artifact_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX IF NOT EXISTS artifact_comments_scope ON artifact_comments(run_id, node_id, artifact_id, id);
+
+  CREATE TABLE IF NOT EXISTS artifact_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_run_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    artifact_id TEXT NOT NULL,
+    revision_run_id TEXT NOT NULL,
+    name TEXT,
+    summary TEXT,
+    file_name TEXT,
+    content TEXT,
+    created_at TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX IF NOT EXISTS artifact_revisions_scope ON artifact_revisions(target_run_id, node_id, artifact_id, id);
 `;
 
 const jsonFiles = (dir) => {
@@ -91,6 +115,20 @@ export class WorkflowSqliteStore {
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0);
     if (version > SCHEMA_VERSION) throw new Error(`不支持的 Workflow One SQLite schema：${version}`);
     if (version === SCHEMA_VERSION) return;
+
+    // JSON 目录重导只在 legacy → SQLite（0→N）时做；已有库小版本升级（如 1→2 加表）只执行 DDL，
+    // 否则陈旧的迁移源 JSON 会 upsert 覆盖库内更新的数据。
+    if (version > 0) {
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        this.db.exec(SCHEMA);
+        this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}; COMMIT;`);
+      } catch (error) {
+        try { this.db.exec('ROLLBACK'); } catch { /* transaction already closed */ }
+        throw error;
+      }
+      return;
+    }
 
     const workflows = [];
     const runs = [];
@@ -191,6 +229,17 @@ export class WorkflowSqliteStore {
       `),
       staleRuns: this.db.prepare('SELECT run_id, workflow_id FROM runs ORDER BY started_at DESC, run_id DESC LIMIT -1 OFFSET ?'),
       deleteRun: this.db.prepare('DELETE FROM runs WHERE run_id = ?'),
+      addComment: this.db.prepare('INSERT INTO artifact_comments (run_id, node_id, artifact_id, body, created_at) VALUES (?, ?, ?, ?, ?)'),
+      getComment: this.db.prepare('SELECT id, run_id, node_id, artifact_id, body, created_at FROM artifact_comments WHERE id = ?'),
+      listComments: this.db.prepare('SELECT id, run_id, node_id, artifact_id, body, created_at FROM artifact_comments WHERE run_id = ? ORDER BY id ASC'),
+      deleteComment: this.db.prepare('DELETE FROM artifact_comments WHERE id = ?'),
+      deleteCommentsForRun: this.db.prepare('DELETE FROM artifact_comments WHERE run_id = ?'),
+      addRevision: this.db.prepare(`INSERT INTO artifact_revisions
+        (target_run_id, node_id, artifact_id, revision_run_id, name, summary, file_name, content, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      listRevisions: this.db.prepare('SELECT * FROM artifact_revisions WHERE target_run_id = ? ORDER BY id ASC'),
+      deleteRevisionsForRun: this.db.prepare('DELETE FROM artifact_revisions WHERE target_run_id = ?'),
+      revisionRunIds: this.db.prepare('SELECT DISTINCT revision_run_id FROM artifact_revisions'),
     };
   }
 
@@ -268,13 +317,19 @@ export class WorkflowSqliteStore {
     return this.#runRunStatement(this.statements.putRun, value);
   }
 
-  pruneRuns(keep) {
+  pruneRuns(keep, { keepRevisionRuns = [] } = {}) {
     const count = Math.max(0, Math.floor(Number(keep) || 0));
-    const stale = this.statements.staleRuns.all(count).map((row) => ({ runId: row.run_id, workflowId: row.workflow_id }));
+    const protectedIds = new Set(keepRevisionRuns.map(String));
+    const stale = this.statements.staleRuns.all(count)
+      .map((row) => ({ runId: row.run_id, workflowId: row.workflow_id }))
+      .filter((row) => !protectedIds.has(row.runId));
     if (!stale.length) return stale;
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      for (const row of stale) this.statements.deleteRun.run(row.runId);
+      for (const row of stale) {
+        this.deleteRunData(row.runId);
+        this.statements.deleteRun.run(row.runId);
+      }
       this.db.exec('COMMIT');
     } catch (error) {
       try { this.db.exec('ROLLBACK'); } catch { /* transaction already closed */ }
@@ -282,6 +337,53 @@ export class WorkflowSqliteStore {
     }
     try { this.db.exec('PRAGMA incremental_vacuum(1000)'); } catch { /* 回收失败不影响已提交删除 */ }
     return stale;
+  }
+
+  // ---- 产物评论与修订（run 文档之外的用户数据；见 issue #97）----
+
+  addArtifactComment({ runId, nodeId, artifactId, body, createdAt }) {
+    const created = createdAt || new Date().toISOString();
+    const info = this.statements.addComment.run(String(runId), String(nodeId), String(artifactId), String(body ?? ''), created);
+    return this.getArtifactComment(Number(info.lastInsertRowid));
+  }
+
+  getArtifactComment(id) {
+    return this.statements.getComment.get(Number(id)) || null;
+  }
+
+  listArtifactComments(runId) {
+    return this.statements.listComments.all(String(runId));
+  }
+
+  deleteArtifactComment(id) {
+    return Number(this.statements.deleteComment.run(Number(id)).changes) > 0;
+  }
+
+  addArtifactRevision({ targetRunId, nodeId, artifactId, revisionRunId, name, summary, fileName, content, createdAt }) {
+    const created = createdAt || new Date().toISOString();
+    const info = this.statements.addRevision.run(
+      String(targetRunId), String(nodeId), String(artifactId), String(revisionRunId),
+      name == null ? null : String(name),
+      summary == null ? null : String(summary),
+      fileName == null ? null : String(fileName),
+      content == null ? null : String(content),
+      created,
+    );
+    return Number(info.lastInsertRowid);
+  }
+
+  listArtifactRevisions(targetRunId) {
+    return this.statements.listRevisions.all(String(targetRunId));
+  }
+
+  revisionRunIds() {
+    return this.statements.revisionRunIds.all().map((row) => row.revision_run_id);
+  }
+
+  // run 记录删除时级联清理其评论与修订；修订正文所引用的改写 run 由调用方按 revisionRunIds 决策
+  deleteRunData(runId) {
+    this.statements.deleteCommentsForRun.run(String(runId));
+    this.statements.deleteRevisionsForRun.run(String(runId));
   }
 
   close() {

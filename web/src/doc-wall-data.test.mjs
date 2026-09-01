@@ -52,6 +52,7 @@ const model2 = buildDocWallModel({
 });
 assert.equal(model2.nodes[0].docs.length, 1, 'n1 一张卡（processFiles 与 stateArtifacts 同名去重）');
 assert.equal(model2.nodes[0].docs[0].kind, 'doc');
+assert.equal(model2.nodes[0].docs[0].path, 'workspace/事实底稿.md');
 assert.match(model2.nodes[0].docs[0].previewUrl, /\/wf1\/api\/artifact\?run=run1&node=n1/, '同名去重时带 downloadUrl 的 stateArtifacts 行胜出');
 assert.equal(model2.nodes[1].docs.length, 1, 'processFiles 的 md 进 n2 卡');
 assert.equal(model2.nodes[1].dataFiles.length, 2, 'html/sh 折成 dataFiles');
@@ -64,6 +65,7 @@ const scoped = buildDocWallModel({
   nodeStates: { a: { artifacts: ['ws/报告.md'] } },
 });
 assert.equal(scoped.nodes[0].docs.length, 1);
+assert.equal(scoped.nodes[0].docs[0].path, 'ws/报告.md');
 assert.match(scoped.nodes[0].docs[0].previewUrl, /\/wf1\/api\/artifact\?run=r9&node=a&file=ws%2F%E6%8A%A5%E5%91%8A\.md&preview=1/);
 assert.match(scoped.nodes[0].docs[0].downloadUrl, /\/wf1\/api\/artifact\?run=r9&node=a&file=/);
 

@@ -33,6 +33,8 @@ function fileRow(file) {
     nodeId: file.nodeId || null,
     nodeLabel: file.nodeLabel || null,
     name: file.name,
+    path: file.path || file.relativePath || file.name,
+    hasContent: Object.prototype.hasOwnProperty.call(file, 'content'),
     size: file.size ?? null,
     kind,
     previewUrl: file.previewUrl || null,

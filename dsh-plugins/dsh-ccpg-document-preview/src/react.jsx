@@ -1,9 +1,9 @@
-import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Component, lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Download, Expand, Eye, Minimize, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { documentPreviewKind, loadPreviewText, normalizePreviewDocument } from './index.js';
+import { documentPreviewKind, loadPreviewText, normalizePreviewDocument, previewErrorMessage } from './index.js';
 import './styles.css';
 
 const PdfRenderer = lazy(() => import('./renderers/pdf.jsx'));
@@ -17,6 +17,24 @@ function Loading() {
   return <div className="dsh-doc-preview-message">正在准备预览…</div>;
 }
 
+class PreviewErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return <div className="dsh-doc-preview-message is-error">预览组件加载失败，请刷新页面后重试。</div>;
+    }
+    return this.props.children;
+  }
+}
+
 function TextRenderer({ document, kind, maxTextBytes }) {
   const [state, setState] = useState({ loading: true, error: '', text: '' });
   useEffect(() => {
@@ -25,7 +43,7 @@ function TextRenderer({ document, kind, maxTextBytes }) {
     loadPreviewText(document.previewUrl, { signal: controller.signal, maxBytes: maxTextBytes })
       .then((text) => setState({ loading: false, error: '', text }))
       .catch((reason) => {
-        if (reason?.name !== 'AbortError') setState({ loading: false, error: reason?.message || String(reason), text: '' });
+        if (reason?.name !== 'AbortError') setState({ loading: false, error: previewErrorMessage(reason), text: '' });
       });
     return () => controller.abort();
   }, [document.previewUrl, maxTextBytes]);
@@ -173,7 +191,9 @@ export function DocumentPreviewDialog({ document: input, open = true, onClose, m
         </div>
       </header>
       <main className="dsh-doc-preview-content">
-        <Suspense fallback={<Loading />}><PreviewContent document={document} kind={kind} maxTextBytes={maxTextBytes} /></Suspense>
+        <PreviewErrorBoundary>
+          <Suspense fallback={<Loading />}><PreviewContent document={document} kind={kind} maxTextBytes={maxTextBytes} /></Suspense>
+        </PreviewErrorBoundary>
       </main>
     </section>
   </div>;

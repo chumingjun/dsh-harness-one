@@ -7,6 +7,8 @@ import { apply, inject as hostInject, name as hostName } from '../src/host.js';
 import {
   canPreviewDocument,
   createDocumentPreviewHost,
+  fetchPreviewResponse,
+  previewErrorMessage,
   documentExtension,
   documentMimeType,
   documentPreviewKind,
@@ -44,6 +46,37 @@ test('createDocumentPreviewHost exposes pure helper API', () => {
   assert.equal(host.supports({ name: 'a.pdf' }), true);
   assert.equal(host.kind({ name: 'a.ppt' }), null);
   assert.equal(canPreviewDocument({ name: 'a.docx' }), true);
+});
+
+test('preview errors map network and scoped HTTP failures to actionable messages', async () => {
+  assert.equal(previewErrorMessage(new TypeError('Failed to fetch')), '文档加载失败，请检查连接后重试。');
+  assert.equal(previewErrorMessage({ status: 404 }), '文件不存在或已随运行历史清理。');
+  assert.equal(previewErrorMessage({ status: 409 }), '当前工作区会话已失效，请刷新页面后重试。');
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new TypeError('Failed to fetch'); };
+  try {
+    await assert.rejects(fetchPreviewResponse('/artifact'), (error) => {
+      assert.equal(error.code, 'preview-network-error');
+      assert.equal(error.message, '文档加载失败，请检查连接后重试。');
+      return true;
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('preview HTTP failures preserve status and stable code', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 404 });
+  try {
+    await assert.rejects(fetchPreviewResponse('/artifact'), (error) => {
+      assert.equal(error.status, 404);
+      assert.equal(error.code, 'preview-not-found');
+      return true;
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('host entry declares the plugin shape and serves client-assets static files', async () => {

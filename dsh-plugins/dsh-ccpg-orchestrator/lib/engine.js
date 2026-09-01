@@ -76,7 +76,7 @@ export class Orchestrator {
   }
 
   async run(graph, {
-    triggerInput = '', runId, workflowName, workflowId, canvasId, source, workspaceRoot,
+    triggerInput = '', runId, workflowName, workflowId, canvasId, source, workspaceRoot, revises,
     globalVariables = {}, workflowVariables = {}, runInputs = {},
     resume = null,
   } = {}) {
@@ -86,6 +86,7 @@ export class Orchestrator {
       runId: id, startedAt: new Date().toISOString(), status: 'running',
       triggerInput, runInputs: safeRunInputs, workflowName: workflowName || null, workflowId: workflowId || null,
       canvasId: canvasId || null, source: source || null, workspaceRoot: workspaceRoot || null,
+      revises: revises || null,
       schemaVersion: RUN_SCHEMA_VERSION,
       nodeStates: {}, outputs: {}, structuredOutputs: {}, nodeOrder: [],
       canceled: false,
