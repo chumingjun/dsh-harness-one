@@ -162,3 +162,44 @@
 .docwall-fb-preview { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
 .docwall-fb-summary { font-size: 11.5px; color: var(--fg-faint); margin: 0 0 6px; }
 .docwall-fb-content { max-height: 40vh; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word; margin: 0; }
+.docwall-fb-edit { display: flex; flex-direction: column; gap: 8px; }
+.docwall-fb-edit-hint { font-size: 11.5px; color: var(--fg-faint); margin: 0; }
+
+/* ---- 所见即所得编辑器（RichDocEditor，Tiptap）---- */
+.rde { border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-raised); overflow: hidden; }
+.rde-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 5px 6px; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
+.rde-btn { border: 1px solid transparent; background: none; border-radius: 6px; min-width: 24px; height: 24px; padding: 0 5px; font-size: 12px; color: var(--fg); cursor: pointer; font-family: inherit; line-height: 1; }
+.rde-btn:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.rde-btn-on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.rde-btn-b { font-weight: 800; }
+.rde-btn-i { font-style: italic; }
+.rde-btn-s { text-decoration: line-through; }
+.rde-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
+.rde-table-tools { display: inline-flex; gap: 2px; padding-left: 6px; border-left: 1px solid var(--border); }
+.rde-loading { padding: 24px; font-size: 12px; color: var(--fg-faint); text-align: center; }
+.rde-body { max-height: 56vh; overflow: auto; }
+.rde-body .rde-prose { outline: none; padding: 12px 14px; font-size: 13px; line-height: 1.7; color: var(--fg); min-height: 220px; }
+.rde-prose > * + * { margin-top: 0.6em; }
+.rde-prose h1 { font-size: 1.5em; margin: 0.8em 0 0.4em; font-weight: 700; }
+.rde-prose h2 { font-size: 1.3em; margin: 0.7em 0 0.35em; font-weight: 700; }
+.rde-prose h3 { font-size: 1.12em; margin: 0.6em 0 0.3em; font-weight: 700; }
+.rde-prose ul, .rde-prose ol { padding-left: 1.5em; }
+.rde-prose ul { list-style: disc; }
+.rde-prose ol { list-style: decimal; }
+.rde-prose ul ul { list-style: circle; }
+.rde-prose blockquote { border-left: 3px solid var(--border-strong); padding-left: 12px; color: var(--fg-faint); }
+.rde-prose code { background: color-mix(in srgb, var(--fg) 8%, transparent); border-radius: 4px; padding: 1px 5px; font-size: 0.9em; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.rde-prose pre { background: color-mix(in srgb, var(--fg) 6%, transparent); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; overflow: auto; }
+.rde-prose pre code { background: none; padding: 0; }
+.rde-prose hr { border: none; border-top: 1px solid var(--border-strong); }
+.rde-prose a { color: var(--accent); }
+.rde-prose img { max-width: 100%; border-radius: 6px; }
+.rde-prose ul[data-type="taskList"] { list-style: none; padding-left: 0.2em; }
+.rde-prose ul[data-type="taskList"] li { display: flex; gap: 8px; align-items: flex-start; }
+.rde-prose ul[data-type="taskList"] input { margin-top: 0.4em; }
+/* 表格：编辑区直接可见的网格 + 表头底色 + 选中格高亮 */
+.rde-prose table { border-collapse: collapse; width: 100%; }
+.rde-prose th, .rde-prose td { border: 1px solid var(--border-strong); padding: 5px 9px; text-align: left; vertical-align: top; position: relative; min-width: 3em; }
+.rde-prose th { background: color-mix(in srgb, var(--fg) 6%, transparent); font-weight: 700; }
+.rde-prose .selectedCell { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.rde-prose .column-resize-cursor { cursor: col-resize; }

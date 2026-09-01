@@ -18,6 +18,7 @@ import {
   stripCanvasRuntimeNodeData,
 } from './workflow-serialization.js';
 import { eventBelongsToCanvas, eventBelongsToRun, shouldFollowRunStart } from './run-event-routing.js';
+import { adoptRunStatusPatch, projectRunNodeStates, seedTerminalNodeIds } from './live-run-adopt.js';
 import { useThemePalette } from './theme.js';
 import { useToast, PromptModal, ConfirmModal, Modal } from './ui.jsx';
 
@@ -784,6 +785,9 @@ export default function App() {
 
   // 切换工作流时让运行面板跟随：显示该工作流最近一次运行（详情懒加载），没有则清空。
   // 不清 runDetails 缓存——切回来时历史详情直接命中。
+  // live 运行必须同样拉详情（/runs/detail 对 live run 读内存实时态）并投影回画布：
+  // SSE snapshot 只在连接建立时发一次，重开画布不重连——不主动拉，运行中节点的
+  // 动画/计时/边流动会全部丢失，只能等下一个 node-status 事件才零星恢复。
   const syncRunPanelToWorkflow = useCallback((workflowId) => {
     fetch(apiUrl('/runs')).then((r) => r.json()).then((d) => {
       if ((currentWfIdRef.current || null) !== (workflowId || null)) return;
@@ -800,9 +804,42 @@ export default function App() {
             setRunDetails((current) => ({ ...current, [latest.runId]: detail }));
           })
           .catch(() => { /* 面板显示列表摘要兜底 */ });
+        return;
       }
+      // 收编该 live 运行：接管后续 SSE node-status/run-end（keyed by inspectedRunId），
+      // 并把内存实时节点状态投影回刚加载的画布（与 SSE snapshot 投影同形）。
+      const adoptedRunId = latest.runId;
+      activeRunIdRef.current = adoptedRunId;
+      terminalNodesByRunRef.current.set(adoptedRunId, seedTerminalNodeIds(latest.nodeStates));
+      fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(adoptedRunId)}`))
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('运行记录不存在'))))
+        .then((detail) => {
+          if ((currentWfIdRef.current || null) !== (workflowId || null)) return;
+          runningRef.current = detail.status === 'running';
+          setRunStatus((s) => ({ ...s, ...adoptRunStatusPatch(detail, adoptedRunId, s.total) }));
+          setRunDetails((current) => ({ ...current, [adoptedRunId]: detail }));
+          setNodes((nds) => projectRunNodeStates(nds, detail, adoptedRunId));
+          // 未旁观过的运行没有过程事件，从详情合成一份，过程 tab 不空白
+          setEventsByRunId((current) => (current[adoptedRunId]?.length ? current : {
+            ...current,
+            [adoptedRunId]: [
+              ...Object.entries(detail.nodeStates || {})
+                .filter(([, st]) => st.status !== 'queued')
+                .map(([nodeId, st]) => ({
+                  t: Date.now(), kind: 'node', runId: adoptedRunId, nodeId,
+                  nodeLabel: labelOf(nodesRef.current, nodeId).replace(/\(.*\)$/, ''),
+                  status: st.status, text: st.error, chars: st.chars, durationMs: st.durationMs,
+                })),
+              {
+                t: Date.now(), kind: 'run', runId: adoptedRunId, status: detail.status,
+                text: detail.status === 'running' ? '运行进行中' : `运行：${STATUS_CN[detail.status] || detail.status}`,
+              },
+            ],
+          }));
+        })
+        .catch(() => { /* 列表摘要兜底；SSE node-status 仍会持续更新 */ });
     }).catch(() => { /* 列表拉不到就维持现状 */ });
-  }, [inspectRun]);
+  }, [inspectRun, setNodes]);
 
   const openWorkflow = useCallback(async (wf) => {
     const res = await fetch(apiUrl(`/workflows/detail?id=${encodeURIComponent(wf.id)}`));

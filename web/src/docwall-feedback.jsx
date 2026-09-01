@@ -1,8 +1,10 @@
 // 文稿评论与修订（issue #97 P1）：评论数据拉取 + 评论/版本链抽屉。
 // 轻通道：POST /wf1/api/artifacts/revise 起改写 run（source='revision'），
 // pending 期轮询 /comments 直到 revision_run_id 出现在版本链或 run 失败。
+// 直接编辑走所见即所得编辑器（RichDocEditor），保存经 /artifacts/save 落版本链。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiUrl } from './api.js';
+import { RichDocEditor } from './RichDocEditor.jsx';
 
 const POLL_MS = 4000;
 
@@ -133,7 +135,19 @@ export function useArtifactFeedback(runId, refreshToken = 0) {
     return data.revisionRunId;
   }, [runId]);
 
-  return { byArtifact, pendingRevisions, revisionErrors, addComment, deleteComment, revise, reload: load };
+  // 手工编辑保存：写成 revision_run_id 为空的修订进版本链（不覆盖原稿文件）
+  const saveManual = useCallback(async (doc, content) => {
+    const res = await fetch(apiUrl('/artifacts/save'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId, nodeId: doc.nodeId, artifactId: doc.name, content }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '保存失败');
+    load();
+    return data.revisionId;
+  }, [runId, load]);
+
+  return { byArtifact, pendingRevisions, revisionErrors, addComment, deleteComment, revise, saveManual, reload: load };
 }
 
 /* ---------- 评论/版本链抽屉：挂在文稿视图右侧 ---------- */
@@ -146,6 +160,7 @@ export function FeedbackDrawer({ doc, runId, feedback, onClose }) {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [viewIndex, setViewIndex] = useState(-1); // -1 原稿；0..n 版本链
+  const [draft, setDraft] = useState(null); // { base: -1|0..n, text } 直接编辑草稿；null 未编辑
 
   const submitComment = async () => {
     const body = text.trim();
@@ -163,6 +178,39 @@ export function FeedbackDrawer({ doc, runId, feedback, onClose }) {
     setError('');
     try { await feedback.revise(doc, text.trim()); setText(''); }
     catch (e) { setError(String(e.message || e)); }
+    finally { setBusy(''); }
+  };
+
+  // 直接编辑：以「当前查看的版本」为底稿（-1=原稿需先拉全文；修订版直接用入库正文）。
+  // 仅 md/markdown：csv/txt 经富文本 markdown 往返会破坏原格式（csv 换行结构、txt 缩进）
+  const editableDoc = /\.(md|markdown)$/i.test(doc.name || '');
+  const startEdit = async () => {
+    if (busy) return;
+    setBusy('edit');
+    setError('');
+    try {
+      if (viewIndex === -1) {
+        const res = await fetch(doc.downloadUrl);
+        if (!res.ok) throw new Error('原文拉取失败');
+        setDraft({ base: -1, text: await res.text() });
+      } else {
+        const revision = entry.revisions[viewIndex];
+        if (!revision?.content) throw new Error('该版本正文未入库，无法作为编辑底稿');
+        setDraft({ base: viewIndex, text: revision.content });
+      }
+    } catch (e) { setError(String(e.message || e)); }
+    finally { setBusy(''); }
+  };
+
+  const saveEdit = async () => {
+    if (!draft || busy) return;
+    setBusy('save');
+    setError('');
+    try {
+      await feedback.saveManual(doc, draft.text);
+      setDraft(null);
+      setViewIndex(entry.revisions.length); // 保存后跳到新增的手工版本
+    } catch (e) { setError(String(e.message || e)); }
     finally { setBusy(''); }
   };
 
@@ -219,23 +267,51 @@ export function FeedbackDrawer({ doc, runId, feedback, onClose }) {
       {doc.kind === 'doc' && (
         <section className="docwall-fb-sec">
           <div className="docwall-fb-label">版本链</div>
-          <div className="docwall-fb-vers">
-            <button type="button" className={`docwall-fb-ver ${viewIndex === -1 ? 'docwall-fb-ver-on' : ''}`} onClick={() => setViewIndex(-1)}>原稿</button>
-            {entry.revisions.map((r, i) => (
-              <button key={r.id} type="button" className={`docwall-fb-ver ${viewIndex === i ? 'docwall-fb-ver-on' : ''}`}
-                onClick={() => setViewIndex(i)} title={r.summary || ''}>
-                v{i + 1} · {new Date(r.created_at).toLocaleTimeString()}
-              </button>
-            ))}
-            {entry.revisions.length === 0 && <span className="docwall-fb-empty-inline">暂无修订</span>}
-          </div>
-          {shown && (
-            <div className="docwall-fb-preview">
-              {shown.summary && <p className="docwall-fb-summary">{shown.summary}</p>}
-              {shown.content
-                ? <pre className="docwall-fb-content">{shown.content}</pre>
-                : <p className="docwall-fb-empty-inline">修订正文未入库（可从改写运行下载）</p>}
+          {draft ? (
+            <div className="docwall-fb-edit">
+              <p className="docwall-fb-edit-hint">
+                直接编辑（底稿：{draft.base === -1 ? '原稿' : `v${draft.base + 1}`}）——像改 Word 一样直接修改，保存为新版本，不覆盖原文件
+              </p>
+              {/* key=base：换底稿重开编辑时强制重挂编辑器（编辑器自身 deps 留空防逐键重建） */}
+              <RichDocEditor key={draft.base} initialMarkdown={draft.text} onChange={(markdown) => setDraft((d) => (d ? { ...d, text: markdown } : d))} />
+              {error && <p className="docwall-fb-err">{error}</p>}
+              <div className="docwall-fb-actions">
+                <button type="button" className="btn btn-sm" disabled={Boolean(busy)} onClick={() => { setDraft(null); setError(''); }}>取消</button>
+                <button type="button" className="btn btn-sm btn-primary" disabled={Boolean(busy) || !draft.text.trim()} onClick={saveEdit}>
+                  {busy === 'save' ? '保存中…' : '保存为新版本'}
+                </button>
+              </div>
             </div>
+          ) : (
+            <>
+              <div className="docwall-fb-vers">
+                <button type="button" className={`docwall-fb-ver ${viewIndex === -1 ? 'docwall-fb-ver-on' : ''}`} onClick={() => setViewIndex(-1)}>原稿</button>
+                {entry.revisions.map((r, i) => (
+                  <button key={r.id} type="button" className={`docwall-fb-ver ${viewIndex === i ? 'docwall-fb-ver-on' : ''}`}
+                    onClick={() => setViewIndex(i)} title={r.summary || ''}>
+                    v{i + 1}{r.revision_run_id == null ? ' ✍' : ''} · {new Date(r.created_at).toLocaleTimeString()}
+                  </button>
+                ))}
+                {entry.revisions.length === 0 && <span className="docwall-fb-empty-inline">暂无修订</span>}
+              </div>
+              {shown && (
+                <div className="docwall-fb-preview">
+                  {shown.summary && <p className="docwall-fb-summary">{shown.summary}</p>}
+                  {shown.content
+                    ? <pre className="docwall-fb-content">{shown.content}</pre>
+                    : <p className="docwall-fb-empty-inline">修订正文未入库（可从改写运行下载）</p>}
+                </div>
+              )}
+              <div className="docwall-fb-actions">
+                {editableDoc && (
+                  <button type="button" className="btn btn-sm" disabled={Boolean(busy) || !doc.downloadUrl} title="以当前查看的版本为底稿直接编辑，保存为新版本"
+                    onClick={startEdit}>
+                    {busy === 'edit' ? '准备中…' : '✍ 直接编辑'}
+                  </button>
+                )}
+                {!editableDoc && <span className="docwall-fb-empty-inline">该格式不支持直接编辑（支持 .md）</span>}
+              </div>
+            </>
           )}
         </section>
       )}

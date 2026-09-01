@@ -14,7 +14,7 @@ import { basename, dirname, join } from 'node:path';
 import { normalizeRunDocument } from './run-results.js';
 import { normalizeWorkflowDocument } from './workflow-document.js';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS workflows (
@@ -54,7 +54,7 @@ const SCHEMA = `
     target_run_id TEXT NOT NULL,
     node_id TEXT NOT NULL,
     artifact_id TEXT NOT NULL,
-    revision_run_id TEXT NOT NULL,
+    revision_run_id TEXT,
     name TEXT,
     summary TEXT,
     file_name TEXT,
@@ -115,6 +115,39 @@ export class WorkflowSqliteStore {
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0);
     if (version > SCHEMA_VERSION) throw new Error(`不支持的 Workflow One SQLite schema：${version}`);
     if (version === SCHEMA_VERSION) return;
+
+    // v3：artifact_revisions.revision_run_id 放开 NOT NULL（手工编辑修订无改写 run）。
+    // SQLite 不能 ALTER 删列约束——检测到旧约束时重建该表（评论/修订是小表，整搬可忽略）。
+    if (version >= 1 && version < 3) {
+      const legacyConstraint = this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='artifact_revisions'").get()
+        ?.sql?.includes('revision_run_id TEXT NOT NULL');
+      if (legacyConstraint) {
+        this.db.exec('BEGIN IMMEDIATE');
+        try {
+          this.db.exec(`CREATE TABLE artifact_revisions_v3 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_run_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            artifact_id TEXT NOT NULL,
+            revision_run_id TEXT,
+            name TEXT,
+            summary TEXT,
+            file_name TEXT,
+            content TEXT,
+            created_at TEXT NOT NULL
+          ) STRICT;
+          INSERT INTO artifact_revisions_v3 (id, target_run_id, node_id, artifact_id, revision_run_id, name, summary, file_name, content, created_at)
+            SELECT id, target_run_id, node_id, artifact_id, revision_run_id, name, summary, file_name, content, created_at FROM artifact_revisions;
+          DROP TABLE artifact_revisions;
+          ALTER TABLE artifact_revisions_v3 RENAME TO artifact_revisions;
+          CREATE INDEX IF NOT EXISTS artifact_revisions_scope ON artifact_revisions(target_run_id, node_id, artifact_id, id);`);
+          this.db.exec('COMMIT');
+        } catch (error) {
+          try { this.db.exec('ROLLBACK'); } catch { /* transaction already closed */ }
+          throw error;
+        }
+      }
+    }
 
     // JSON 目录重导只在 legacy → SQLite（0→N）时做；已有库小版本升级（如 1→2 加表）只执行 DDL，
     // 否则陈旧的迁移源 JSON 会 upsert 覆盖库内更新的数据。
@@ -362,7 +395,8 @@ export class WorkflowSqliteStore {
   addArtifactRevision({ targetRunId, nodeId, artifactId, revisionRunId, name, summary, fileName, content, createdAt }) {
     const created = createdAt || new Date().toISOString();
     const info = this.statements.addRevision.run(
-      String(targetRunId), String(nodeId), String(artifactId), String(revisionRunId),
+      String(targetRunId), String(nodeId), String(artifactId),
+      revisionRunId == null ? null : String(revisionRunId),
       name == null ? null : String(name),
       summary == null ? null : String(summary),
       fileName == null ? null : String(fileName),
