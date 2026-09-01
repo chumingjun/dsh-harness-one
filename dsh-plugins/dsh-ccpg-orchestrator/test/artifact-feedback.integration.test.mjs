@@ -114,6 +114,50 @@ try {
     mkdirSync(runDir, { recursive: true });
     writeFileSync(join(runDir, 'art_report'), '# 巡检报告\n正文…');
   }
+  const batchRun = {
+    runId: 'run_fb_batch', workflowId: 'wf_fb', status: 'success',
+    startedAt: '2026-08-11T00:00:00.000Z', finishedAt: '2026-08-11T00:00:02.000Z',
+    nodeStates: { n_batch: { status: 'success', artifacts: ['reports/nested.md'] } },
+    artifactIndex: [{ id: 'art_nested', nodeId: 'n_batch', name: 'nested.md', relativePath: 'reports/nested.md', snapshot: 'run_fb_batch/art_nested', previewable: true, size: 14, mediaType: 'text/markdown' }],
+    schemaVersion: 3,
+  };
+  {
+    const db = new DatabaseSync(databaseFile(workspace));
+    try {
+      db.prepare(`INSERT INTO runs (run_id, workflow_id, status, started_at, finished_at, updated_at, document_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(run_id) DO UPDATE SET document_json=excluded.document_json`)
+        .run(batchRun.runId, batchRun.workflowId, batchRun.status, batchRun.startedAt, batchRun.finishedAt, new Date().toISOString(), JSON.stringify(batchRun));
+    } finally { db.close(); }
+  }
+  {
+    const { hashedKey } = await import('../lib/storage-paths.js');
+    const runDir = join(artifactDir, hashedKey('wf_fb'), hashedKey('run_fb_batch'), 'artifacts', 'run_fb_batch');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, 'art_nested'), '# 快照正文');
+    const workspaceDir = join(workspace, '.workflow-one', 'runtime', hashedKey('wf_fb'), hashedKey('run_fb_batch'), 'nodes', hashedKey('n_batch'), 'workspace', 'reports');
+    mkdirSync(workspaceDir, { recursive: true });
+    writeFileSync(join(workspaceDir, 'nested.md'), '# 工作区旧正文');
+  }
+
+  console.log('feedback api integration tests:');
+
+  // 批量正文优先读 immutable snapshot，并保留嵌套路径与 artifactId 定位
+  {
+    const res = await call('POST', '/wf1/api/artifacts/content', {
+      runId: 'run_fb_batch', items: [{ node: 'n_batch', file: 'reports/nested.md', artifactId: 'art_nested' }],
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.files[`n_batch\u0000reports/nested.md`].content, '# 快照正文');
+  }
+  // 批量正文区分缺失文件
+  {
+    const res = await call('POST', '/wf1/api/artifacts/content', {
+      runId: 'run_fb_batch', items: [{ node: 'n_batch', file: 'missing.md' }],
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.files[`n_batch\u0000missing.md`].missing, true);
+  }
 
   console.log('feedback api integration tests:');
 

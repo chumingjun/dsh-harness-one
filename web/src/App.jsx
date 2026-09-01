@@ -355,8 +355,10 @@ export default function App() {
 
   // 文稿视图数据：切到 docs 或 inspectedRunId 变化时拉 run-results（磁盘投影）。
   // 运行中先快速投影（不等 ready），run-end 后由 resultsReadyToken 触发重载拿最终产物。
+  const docWallRequestRef = useRef(0);
   const loadDocWall = useCallback(async (runId, { waitUntilReady = false } = {}) => {
-    if (!runId) { setDocWallResults(undefined); return; }
+    const requestId = ++docWallRequestRef.current;
+    if (!runId) { setDocWallResults(undefined); setDocWallLoading(false); return; }
     setDocWallLoading(true);
     setDocWallError('');
     try {
@@ -364,11 +366,13 @@ export default function App() {
         apiUrl(`/run-results?id=${encodeURIComponent(runId)}`),
         { waitUntilReady },
       );
+      if (requestId !== docWallRequestRef.current) return;
       setDocWallResults(data);
     } catch (error) {
+      if (requestId !== docWallRequestRef.current) return;
       setDocWallError(error?.message || String(error));
     } finally {
-      setDocWallLoading(false);
+      if (requestId === docWallRequestRef.current) setDocWallLoading(false);
     }
   }, []);
   const [docWallVisible, setDocWallVisible] = useState(false); // 只在 docs 视图挂载时拉数据

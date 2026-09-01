@@ -2743,39 +2743,61 @@ export function apply(ctx, config) {
     const items = Array.isArray(body?.items) ? body.items.slice(0, 200) : [];
     if (!runId || !items.length) return json(res, 400, { error: '需要 runId 和 items' });
     const run = readRun(runId);
-    // 与 /artifact 兜底同款：沿 resumedFrom 祖先链回退定位节点工作区
-    const ancestorRunIds = [runId];
+    if (!run) return json(res, 404, { error: '运行记录不存在', code: 'run-not-found' });
+    // 与 /artifact 兜底同款：沿 resumedFrom 祖先链回退定位节点工作区；
+    // 优先读不可变快照，避免历史运行的节点工作区已清理时正文仍不可读。
+    const ancestorRuns = [run];
     let cursor = run;
     for (let depth = 0; cursor?.resumedFrom && depth < 10; depth += 1) {
-      ancestorRunIds.push(cursor.resumedFrom);
       cursor = readRun(cursor.resumedFrom);
+      if (cursor) ancestorRuns.push(cursor);
     }
     const BUDGET = 1.5 * 1024 * 1024;
     const CLIP = 4096;
     const files = {};
     let used = 0;
+    const readCandidate = (candidateRun, nodeId, file, requestedArtifactId = '') => {
+      const indexed = (candidateRun.artifactIndex || []).filter((artifact) => artifact?.nodeId === nodeId);
+      const byId = requestedArtifactId ? indexed.find((artifact) => artifact.id === requestedArtifactId) : null;
+      const exact = byId || indexed.find((artifact) => artifact.relativePath === file || artifact.name === file);
+      const byName = indexed.filter((artifact) => artifact.name === file);
+      const candidates = exact ? [exact, ...byName.filter((artifact) => artifact.id !== exact.id)] : byName;
+      for (const artifact of candidates) {
+        const resolved = resolveRunArtifact(artifactLocationsForRun(candidateRun), candidateRun, artifact.id);
+        if (resolved?.file) return resolved.file;
+      }
+      const ws = resolveInside(STORAGE.workspaceForNode({
+        workflowId: candidateRun.workflowId || run.workflowId || 'draft', runId: candidateRun.runId, nodeId,
+      }), file);
+      if (!ws || !existsSync(ws) || !statSync(ws).isFile()) return null;
+      const realWs = realpathSync(ws);
+      if (resolveInside(realpathSync(dirname(realWs)), realWs) !== realWs) return null;
+      return realWs;
+    };
     for (const item of items) {
       const nodeId = String(item?.node || '');
       const file = String(item?.file || '');
+      const artifactId = String(item?.artifactId || '');
+      const key = `${nodeId}\u0000${file}`;
       if (!nodeId || !file) continue;
       const ext = extname(file).toLowerCase();
-      if (!['.md', '.markdown', '.txt', '.csv'].includes(ext)) continue;
-      let content = null;
-      for (const candidateRunId of ancestorRunIds) {
-        const ws = resolveInside(STORAGE.workspaceForNode({
-          workflowId: run?.workflowId || 'draft', runId: candidateRunId, nodeId,
-        }), file);
-        if (!ws || !existsSync(ws) || !statSync(ws).isFile()) continue;
-        const realWs = realpathSync(ws);
-        if (resolveInside(realpathSync(dirname(realWs)), realWs) !== realWs) continue;
-        if (used > BUDGET) { files[`${nodeId}\u0000${file}`] = { omitted: true }; break; }
-        const raw = readFileSync(realWs, 'utf8');
-        used += Buffer.byteLength(raw);
-        content = raw.length > CLIP ? { content: `${raw.slice(0, CLIP)}…`, truncated: true } : { content: raw, truncated: false };
-        break;
+      if (!['.md', '.markdown', '.txt', '.csv'].includes(ext)) {
+        files[key] = { missing: true, reason: 'unsupported-type' };
+        continue;
       }
-      if (content) files[`${nodeId}\u0000${file}`] = content;
-      else if (!files[`${nodeId}\u0000${file}`]) files[`${nodeId}\u0000${file}`] = { omitted: true };
+      const source = ancestorRuns.map((candidateRun) => readCandidate(candidateRun, nodeId, file, artifactId)).find(Boolean);
+      if (!source) {
+        files[key] = { missing: true, reason: 'artifact-not-found' };
+        continue;
+      }
+      const size = statSync(source).size;
+      if (used + size > BUDGET) {
+        files[key] = { omitted: true, reason: 'budget' };
+        continue;
+      }
+      const raw = readFileSync(source, 'utf8');
+      used += size;
+      files[key] = raw.length > CLIP ? { content: `${raw.slice(0, CLIP)}…`, truncated: true } : { content: raw, truncated: false };
     }
     return json(res, 200, { files });
   } });

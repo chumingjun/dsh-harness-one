@@ -5,9 +5,9 @@
 // 纯函数（fileKey/pickWorktree/resolveEndpoint）在 ../univer-core.js，单测直覆盖。
 import { useEffect, useMemo, useState } from 'react';
 import { fileKeyOf, pickWorktree, resolveEndpointOf } from '../univer-core.js';
+import { previewErrorMessage } from '../index.js';
 
 async function fetchJson(url, options = {}) {
-  const signal = options.signal;
   const res = await fetch(url, { credentials: 'same-origin', ...options });
   if (!res.ok) {
     const error = new Error(`HTTP ${res.status}`);
@@ -18,7 +18,7 @@ async function fetchJson(url, options = {}) {
 }
 
 async function buildViewerUrl(resolveUrl, signal) {
-  const resolved = await fetchJson(resolveUrl, signal);
+  const resolved = await fetchJson(resolveUrl, { signal });
   // Gateway 随 dsh 重启即停：先显式拉起（幂等，运行中 reused=true），再查地址；
   // 端口被占会逐次递增，所以每次现查不缓存。
   const started = await fetchJson('/univer-api/gateway/start', { method: 'POST', signal });
@@ -53,14 +53,14 @@ export default function UniverRenderer({ document }) {
         loading: false,
         error: missing
           ? '未安装 dsh-univer-office 插件，无法预览 .univer 文件；请下载后用 Univer 打开。'
-          : `Univer 预览不可用：${reason?.message || reason}`,
+          : `Univer 预览不可用：${previewErrorMessage(reason)}`,
         url: '',
       });
     });
     return () => controller.abort();
   }, [resolveUrl]);
 
-  if (loading) return <div className="dsh-doc-preview-message">正在连接 Univer Viewer…</div>;
-  if (error) return <div className="dsh-doc-preview-message is-error">{error}</div>;
+  if (state.loading) return <div className="dsh-doc-preview-message">正在连接 Univer Viewer…</div>;
+  if (state.error) return <div className="dsh-doc-preview-message is-error">{state.error}</div>;
   return <iframe className="dsh-doc-preview-frame" src={state.url} title={`预览 ${document.name}`} />;
 }
