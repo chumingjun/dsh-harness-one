@@ -1,6 +1,6 @@
 {
   "name": "dsh-ccpg-canvasui",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "private": false,
   "type": "module",
   "main": "lib/index.js",

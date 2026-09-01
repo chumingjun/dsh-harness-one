@@ -274,7 +274,7 @@ console.log('system-upgrade tests:');
       assert.match(plan.actions[0].title, /更新/);
       const calls = [];
       const realFetch = globalThis.fetch;
-      globalThis.fetch = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '0.7.1' } }) });
+      globalThis.fetch = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '0.7.2' } }) });
       try {
         await executePlan(plan, {
           dshBin: '/fake/dsh',
@@ -285,7 +285,7 @@ console.log('system-upgrade tests:');
       }
       const up = calls.find((c) => c[4] === 'up');
       assert.ok(up, '在装用户用 up 原地更新');
-      assert.equal(up[5], `${PACKAGE}@0.7.1`);
+      assert.equal(up[5], `${PACKAGE}@0.7.2`);
       assert.ok(!calls.some((c) => c[4] === 'remove'), 'up 路径不 remove 任何包');
       assert.ok(calls.some((c) => c[4] === 'add' && String(c[5] || '').startsWith(SIDEBAR)), '纯净安装兜底：依赖表无 sidebar 时补 add 注册 bundle');
     } finally {
