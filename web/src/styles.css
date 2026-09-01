@@ -158,6 +158,10 @@ html[data-theme='light'] {
 
 
 * { box-sizing: border-box; }
+/* 原生控件（textarea/滚动条/下拉）跟随主题：不声明时浏览器按亮色渲染，
+   暗色主题下评论框等会出现默认白底 */
+html { color-scheme: dark; }
+html[data-theme='light'] { color-scheme: light; }
 html, body, #root { height: 100%; margin: 0; }
 body {
   font-family: var(--font-ui);
