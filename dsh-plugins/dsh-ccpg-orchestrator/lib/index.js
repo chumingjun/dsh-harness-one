@@ -2926,7 +2926,8 @@ export function apply(ctx, config) {
 
   // POST /wf1/api/artifacts/save：手工编辑落版本链（issue #97 补充通道）。
   // 用户在文稿视图直接改文本类产物并保存：不覆盖原稿文件（run 历史不可变），
-  // 写成一条 origin='manual' 的修订进版本链，与 AI 改写版本同链展示、可继续迭代。
+  // 写成 revision_run_id 为空的修订进版本链（AI 改写版本该字段是改写 run id），
+  // 与 AI 改写版本同链展示、可继续迭代。
   register({ kind: 'exact', path: '/wf1/api/artifacts/save', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
@@ -2945,9 +2946,10 @@ export function apply(ctx, config) {
     const artifact = (run.artifactIndex || []).find((item) => item.id === artifactId)
       || (run.artifactIndex || []).find((item) => item.name === artifactId);
     if (!artifact) return json(res, 404, { error: '产物不存在或已被清理' });
+    // 富文本编辑走 markdown 往返，csv/txt 会破坏原格式（前端同步限定）
     const ext = extname(artifact.name).toLowerCase();
-    if (!['.md', '.markdown', '.txt', '.csv'].includes(ext)) {
-      return json(res, 415, { error: '仅支持文本类文稿的直接编辑' });
+    if (!['.md', '.markdown'].includes(ext)) {
+      return json(res, 415, { error: '仅支持 Markdown 文稿的直接编辑' });
     }
     const id = currentDatabase().addArtifactRevision({
       targetRunId: runId, nodeId, artifactId: artifact.name,

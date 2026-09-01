@@ -233,15 +233,15 @@ try {
     const res = await call('POST', '/wf1/api/artifacts/revise', { runId: revisionRunId, nodeId: 'revision_agent', artifactId: 'art_report' });
     assert.equal(res.status, 400);
   }
-  // 手工编辑：非文本产物拒绝（造一个 .png 索引项）
+  // 手工编辑：非 Markdown 产物拒绝（造一个 .csv 索引项——csv 经富文本往返会破坏行结构）
   {
     const db = new DatabaseSync(databaseFile(workspace));
     try {
       const doc = JSON.parse(db.prepare('SELECT document_json FROM runs WHERE run_id = ?').get('run_fb_src').document_json);
-      doc.artifactIndex.push({ id: 'art_pic', nodeId: 'n_input', name: '现场照片.png', snapshot: 'run_fb_src/art_pic', relativePath: '现场照片.png', previewable: false, size: 5, mediaType: 'image/png' });
+      doc.artifactIndex.push({ id: 'art_data', nodeId: 'n_input', name: '台账.csv', snapshot: 'run_fb_src/art_data', relativePath: '台账.csv', previewable: false, size: 5, mediaType: 'text/csv' });
       db.prepare('UPDATE runs SET document_json = ? WHERE run_id = ?').run(JSON.stringify(doc), 'run_fb_src');
     } finally { db.close(); }
-    const res = await call('POST', '/wf1/api/artifacts/save', { runId: 'run_fb_src', nodeId: 'n_input', artifactId: 'art_pic', content: 'not text' });
+    const res = await call('POST', '/wf1/api/artifacts/save', { runId: 'run_fb_src', nodeId: 'n_input', artifactId: 'art_data', content: 'a,b' });
     assert.equal(res.status, 415);
   }
   // 手工编辑 happy path：落 origin=manual 修订进版本链，revision_run_id 为空

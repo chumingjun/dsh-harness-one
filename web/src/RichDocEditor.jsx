@@ -76,6 +76,9 @@ function tableState(editor) {
 export function RichDocEditor({ initialMarkdown, onChange, onReady }) {
   const [tick, setTick] = useState(0); // 编辑器选区/格式态变化 → 重渲染工具条
 
+  // deps 留空：只在挂载时解析底稿（受控状态放外面）。若把 initialMarkdown 放进依赖，
+  // 每次击键 onChange 更新草稿都会重建编辑器——光标跳回文档开头，连续输入不可用。
+  // 换底稿由宿主用 key 重挂载（FeedbackDrawer 的 draft key）。
   const editor = useEditor({
     extensions: RICH_DOC_EXTENSIONS,
     content: initialMarkdown, // Markdown 扩展解析 md 字符串为文档
@@ -83,7 +86,7 @@ export function RichDocEditor({ initialMarkdown, onChange, onReady }) {
     onUpdate: ({ editor: e }) => onChange?.(e.storage.markdown.getMarkdown()),
     onSelectionUpdate: () => setTick((t) => t + 1),
     onTransaction: () => setTick((t) => t + 1),
-  }, [initialMarkdown]); // 底稿切换（换版本重开编辑）重建编辑器
+  });
 
   // 保存快捷键：Cmd/Ctrl+S 交给宿主处理（FeedbackDrawer 的保存按钮逻辑）
   useEffect(() => { onReady?.(editor); }, [editor, onReady]);

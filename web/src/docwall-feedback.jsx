@@ -135,7 +135,7 @@ export function useArtifactFeedback(runId, refreshToken = 0) {
     return data.revisionRunId;
   }, [runId]);
 
-  // 手工编辑保存：写成 origin=manual 的修订进版本链（不覆盖原稿文件）
+  // 手工编辑保存：写成 revision_run_id 为空的修订进版本链（不覆盖原稿文件）
   const saveManual = useCallback(async (doc, content) => {
     const res = await fetch(apiUrl('/artifacts/save'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -181,7 +181,9 @@ export function FeedbackDrawer({ doc, runId, feedback, onClose }) {
     finally { setBusy(''); }
   };
 
-  // 直接编辑：以「当前查看的版本」为底稿（-1=原稿需先拉全文；修订版直接用入库正文）
+  // 直接编辑：以「当前查看的版本」为底稿（-1=原稿需先拉全文；修订版直接用入库正文）。
+  // 仅 md/markdown：csv/txt 经富文本 markdown 往返会破坏原格式（csv 换行结构、txt 缩进）
+  const editableDoc = /\.(md|markdown)$/i.test(doc.name || '');
   const startEdit = async () => {
     if (busy) return;
     setBusy('edit');
@@ -270,7 +272,8 @@ export function FeedbackDrawer({ doc, runId, feedback, onClose }) {
               <p className="docwall-fb-edit-hint">
                 直接编辑（底稿：{draft.base === -1 ? '原稿' : `v${draft.base + 1}`}）——像改 Word 一样直接修改，保存为新版本，不覆盖原文件
               </p>
-              <RichDocEditor initialMarkdown={draft.text} onChange={(markdown) => setDraft((d) => (d ? { ...d, text: markdown } : d))} />
+              {/* key=base：换底稿重开编辑时强制重挂编辑器（编辑器自身 deps 留空防逐键重建） */}
+              <RichDocEditor key={draft.base} initialMarkdown={draft.text} onChange={(markdown) => setDraft((d) => (d ? { ...d, text: markdown } : d))} />
               {error && <p className="docwall-fb-err">{error}</p>}
               <div className="docwall-fb-actions">
                 <button type="button" className="btn btn-sm" disabled={Boolean(busy)} onClick={() => { setDraft(null); setError(''); }}>取消</button>
@@ -300,10 +303,13 @@ export function FeedbackDrawer({ doc, runId, feedback, onClose }) {
                 </div>
               )}
               <div className="docwall-fb-actions">
-                <button type="button" className="btn btn-sm" disabled={Boolean(busy) || !doc.downloadUrl} title="以当前查看的版本为底稿直接编辑，保存为新版本"
-                  onClick={startEdit}>
-                  {busy === 'edit' ? '准备中…' : '✍ 直接编辑'}
-                </button>
+                {editableDoc && (
+                  <button type="button" className="btn btn-sm" disabled={Boolean(busy) || !doc.downloadUrl} title="以当前查看的版本为底稿直接编辑，保存为新版本"
+                    onClick={startEdit}>
+                    {busy === 'edit' ? '准备中…' : '✍ 直接编辑'}
+                  </button>
+                )}
+                {!editableDoc && <span className="docwall-fb-empty-inline">该格式不支持直接编辑（支持 .md）</span>}
               </div>
             </>
           )}
