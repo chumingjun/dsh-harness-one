@@ -1,6 +1,6 @@
 {
   "name": "dsh-ccpg-document-preview",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "private": false,
   "description": "Shared full-screen document preview for dsh and React applications",
   "license": "MIT",
