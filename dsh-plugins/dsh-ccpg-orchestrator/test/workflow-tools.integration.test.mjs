@@ -105,6 +105,26 @@ assert.equal(created.status, 200);
 const created2 = await call('POST', '/wf1/api/workflows', { id: 'wf_t2', name: '另一个工作流', graph: wfGraph });
 assert.equal(created2.status, 200);
 
+await test('HTTP workflow list：返回运行概览且列表专用启动按保存工作流执行', async () => {
+  const list = await call('GET', '/wf1/api/workflows');
+  assert.equal(list.status, 200);
+  const row = list.body.workflows.find((item) => item.id === 'wf_t1');
+  assert.ok(row && Array.isArray(row.liveRuns) && Object.prototype.hasOwnProperty.call(row, 'lastRun'));
+  const missing = await call('POST', '/wf1/api/workflows/run', { workflowId: 'wf_missing' });
+  assert.equal(missing.status, 404);
+  assert.equal(missing.body.code, 'workflow-not-found');
+  const started = await call('POST', '/wf1/api/workflows/run', { workflowId: 'wf_t1', triggerInput: 'list-start' });
+  assert.equal(started.status, 200);
+  assert.equal(started.body.started, true);
+  assert.match(started.body.runId, /^run_/);
+  // 输入节点跑得极快，等一拍后验证终态对账：lastRun 指向本次运行且成功
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const finished = await call('GET', '/wf1/api/workflows');
+  const finishedRow = finished.body.workflows.find((item) => item.id === 'wf_t1');
+  assert.equal(finishedRow.lastRun.runId, started.body.runId);
+  assert.equal(finishedRow.lastRun.status, 'success');
+});
+
 await test('workflow_list：列出工作流含 id/名称/liveRuns', async () => {
   const out = await runTool('workflow_list', {});
   const rows = maybeJson(out);

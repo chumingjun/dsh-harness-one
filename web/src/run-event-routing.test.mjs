@@ -56,12 +56,14 @@ test('follow run start: 本画布手动/续跑启动跟随视图', () => {
   assert.equal(shouldFollowRunStart({ runId: 'r1', canvasId: 'cv-a', workflowId: 'wf-a', source: 'assistant' }, current), true);
 });
 
-test('follow run start: 定时/webhook 触发不抢占视图（即使属于本工作流）', () => {
+test('follow run start: 定时/webhook/子工作流触发不抢占视图（即使属于本工作流）', () => {
   const current = { canvasId: 'cv-a', workflowId: 'wf-a' };
   assert.equal(shouldFollowRunStart({ runId: 'r1', workflowId: 'wf-a', source: 'schedule' }, current), false);
   assert.equal(shouldFollowRunStart({ runId: 'r1', workflowId: 'wf-a', source: 'webhook' }, current), false);
   // catch-up 补跑同属机器触发，不抢占视图
   assert.equal(shouldFollowRunStart({ runId: 'r1', workflowId: 'wf-a', source: 'catch-up' }, current), false);
+  assert.equal(shouldFollowRunStart({ runId: 'r1', workflowId: 'wf-a', source: 'subworkflow' }, current), false);
+  assert.equal(shouldFollowRunStart({ runId: 'r1', workflowId: 'wf-a', source: 'workflow-list' }, current), false);
   // 无 canvasId 的 manual（历史遗留形状）：命名工作流对齐时可跟随
   assert.equal(shouldFollowRunStart({ runId: 'r1', workflowId: 'wf-a', source: 'manual' }, current), true);
 });

@@ -56,6 +56,7 @@ import { collectInstallReport, compareSemver, executePlan, planUpgrade, PACKAGE 
 import { NotificationChannelRegistry, WorkflowNotificationManager } from './notifications.js';
 import { listFeishuCreds, addFeishuCred, removeFeishuCred, setDefaultFeishuCred, getFeishuCredOrEnv } from './credentials.js';
 import { Orchestrator, lintGraph, getKind } from './engine.js';
+import { validateWorkflowInputs } from './workflow-inputs.js';
 import { createWorkflowExportManifest, importWorkflowDocument, normalizeWorkflowDocument } from './workflow-document.js';
 import { saveArtifactsToWorkspace } from './artifact-save.js';
 import { buildRevisionGraph, extractRevision, revisionAgentNodeId } from './artifact-feedback.js';
@@ -365,10 +366,16 @@ export function apply(ctx, config) {
     const lint = lintWorkflowGraph(wf.graph);
     if (!lint.ok) {
       const err = lint.issues.find((i) => i.level === 'error')?.message || '图存在错误';
-      return { ok: false, error: `图有错误不能运行：${err}` };
+      return { ok: false, error: `图有错误不能运行：${err}`, code: 'workflow-invalid-graph', issues: lint.issues };
     }
-    let globals; try { globals = globalContext(); } catch (error) { return { ok: false, error: String(error.message || error) }; }
-    let inputs; try { inputs = assertSafeContextObject(runInputs, 'runInputs'); } catch (error) { return { ok: false, error: String(error.message || error) }; }
+    let globals; try { globals = globalContext(); } catch (error) { return { ok: false, error: String(error.message || error), code: error.code }; }
+    let inputs;
+    try {
+      inputs = assertSafeContextObject(runInputs, 'runInputs');
+      inputs = validateWorkflowInputs(inputs, wf.inputSchema, { label: `工作流「${wf.name || wf.id || '未命名'}」` });
+    } catch (error) {
+      return { ok: false, error: String(error.message || error), code: error.code || 'workflow-input-invalid' };
+    }
     const { runId } = startRun(wf.graph, {
       triggerInput, workflowName: wf.name, workflowId: wf.id,
       canvasId,
@@ -1631,9 +1638,42 @@ export function apply(ctx, config) {
   } });
 
   // ---- 工作流库 ----
+  // 列表运行概览（与 /runs、workflow_runs 工具同一进度口径）：liveRuns 取内存实时态，
+  // lastRun 在最新 live 与最近持久化终态间按开始时间取新；只暴露状态/进度/时间，不带输出正文。
+  const workflowRunSummary = (r, live = false) => {
+    const nodeMap = new Map((r.graph?.nodes || []).map((node) => [node.id, node]));
+    const progress = runProgressOf(r);
+    const currentNodes = Object.entries(r.nodeStates || {})
+      .filter(([, state]) => ['running', 'waiting'].includes(state?.status))
+      .map(([id]) => ({ id, label: nodeMap.get(id)?.data?.label || id }));
+    return {
+      runId: r.runId,
+      status: live ? 'running' : r.status,
+      live: Boolean(live),
+      source: r.source ?? null,
+      startedAt: r.startedAt ?? null,
+      finishedAt: r.finishedAt ?? null,
+      durationMs: r.durationMs ?? null,
+      progress,
+      currentNodes,
+    };
+  };
+  const workflowRuntimeSummary = (workflowId) => {
+    const liveRuns = [...orch.runs.values()]
+      .filter((entry) => entry.run.workspaceRoot === currentStore().workspaceRoot && entry.run.workflowId === workflowId)
+      .map((entry) => workflowRunSummary({ ...entry.run, graph: { nodes: [...entry.s.nodes.values()], edges: entry.s.graph.edges } }, true))
+      .sort((a, b) => String(b.startedAt || '').localeCompare(String(a.startedAt || '')));
+    const latest = recentRuns(RUNS_KEEP, workflowId).find((run) => run.workflowId === workflowId);
+    const latestLive = liveRuns[0] || null;
+    const lastRun = latestLive && (!latest || String(latestLive.startedAt || '') >= String(latest.startedAt || ''))
+      ? latestLive
+      : latest ? workflowRunSummary(latest, false) : null;
+    return { liveRuns, lastRun };
+  };
   register({ kind: 'exact', path: '/wf1/api/workflows', async handler(req, res) {
     if (req.method === 'GET') {
-      return json(res, 200, { workflows: currentDatabase().listWorkflows() });
+      const workflows = currentDatabase().listWorkflows().map((wf) => ({ ...wf, ...workflowRuntimeSummary(wf.id) }));
+      return json(res, 200, { workflows });
     }
     if (req.method === 'POST') {
       const body = await readBody(req);
@@ -1684,6 +1724,28 @@ export function apply(ctx, config) {
     json(res, 405, { error: 'method' });
   } });
 
+  // 列表专用启动：只按 workflowId 使用持久化图/变量/输入 Schema（不收前端图覆盖），
+  // 与画布运行/助手工具共享 startWorkflowRun 的 lint、安全与 Schema 校验。
+  register({ kind: 'exact', path: '/wf1/api/workflows/run', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    const body = await readBody(req);
+    const workflowId = String(body?.workflowId || '').trim();
+    if (!workflowId) return json(res, 400, { error: '缺少 workflowId', code: 'workflow-required' });
+    const wf = readWf(workflowId);
+    if (!wf) return json(res, 404, { error: '工作流不存在', code: 'workflow-not-found' });
+    try { rejectInlineGlobalContext(body); } catch (error) { return routeError(res, error); }
+    const started = startWorkflowRun(wf, {
+      triggerInput: body?.triggerInput ?? '',
+      runInputs: body?.runInputs ?? {},
+      source: 'workflow-list',
+    });
+    if (!started.ok) return json(res, 400, {
+      ok: false, error: started.error, code: started.code || 'workflow-run-invalid',
+      ...(started.issues ? { issues: started.issues } : {}),
+    });
+    return json(res, 200, { started: true, runId: started.runId });
+  } });
+
   register({ kind: 'exact', path: '/wf1/api/workflows/detail', async handler(req, res) {
     const url = new URL(req.url, 'http://x');
     const id = url.searchParams.get('id') || '';
@@ -1722,14 +1784,15 @@ export function apply(ctx, config) {
     let graph = body.graph;
     let workflowName = body.workflowName || null;
     let workflowId = body.workflowId || null;
+    let persistedWorkflow = null;
     let definitions = inlineWorkflowDefinitions(body) || [];
     if (workflowId) {
-      const persisted = readWf(workflowId);
-      if (!persisted) return json(res, 404, { error: '工作流不存在' });
+      persistedWorkflow = readWf(workflowId);
+      if (!persistedWorkflow) return json(res, 404, { error: '工作流不存在' });
       if (hasOwn(body, 'workflowVariableDefinitions') || hasOwn(body, 'workflowVariables') || hasOwn(body, 'variables') || hasOwn(body, 'inputSchema')) {
         return json(res, 400, { error: '命名工作流运行必须使用已保存的变量声明和输入 Schema', code: 'persisted-workflow-authority' });
       }
-      const persistedFingerprint = graphFingerprint(persisted.graph);
+      const persistedFingerprint = graphFingerprint(persistedWorkflow.graph);
       if (!body.graphFingerprint || body.graphFingerprint !== persistedFingerprint) {
         return json(res, 409, {
           error: '画布内容尚未保存成功，请保存后重试',
@@ -1737,11 +1800,15 @@ export function apply(ctx, config) {
           graphFingerprint: persistedFingerprint,
         });
       }
-      graph = persisted.graph;
-      workflowName = persisted.name;
-      definitions = persisted.variables;
+      graph = persistedWorkflow.graph;
+      workflowName = persistedWorkflow.name;
+      definitions = persistedWorkflow.variables;
     }
     try { assertNonSensitiveVariableDefinitions(definitions, '工作流变量定义'); } catch (error) { return routeError(res, error); }
+    if (workflowId) {
+      try { runInputs = validateWorkflowInputs(runInputs, persistedWorkflow?.inputSchema, { label: `工作流「${workflowName || workflowId}」` }); }
+      catch (error) { return routeError(res, error); }
+    }
     if (!graph || !Array.isArray(graph.nodes)) return json(res, 400, { error: '缺少 graph' });
     const lint = lintWorkflowGraph(graph);
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });

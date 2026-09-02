@@ -18,6 +18,7 @@ import {
   stripCanvasRuntimeNodeData,
 } from './workflow-serialization.js';
 import { eventBelongsToCanvas, eventBelongsToRun, shouldFollowRunStart } from './run-event-routing.js';
+import { applyRunEvent } from './workflow-list-state.js';
 import { adoptRunStatusPatch, projectRunNodeStates, seedTerminalNodeIds } from './live-run-adopt.js';
 import { useThemePalette } from './theme.js';
 import { useToast, PromptModal, ConfirmModal, Modal } from './ui.jsx';
@@ -336,12 +337,43 @@ export default function App() {
   // SSE run-start/run-end 触发即时刷新；存在 live 运行时 5s 轮询兜底刷新进度。
   const refreshRunList = useCallback(async () => {
     try {
-      const res = await fetch(apiUrl('/runs'));
+      const res = await fetch(apiUrl('/runs?limit=100'));
       if (!res.ok) return;
       const data = await res.json();
       setRunList(data.runs || []);
     } catch { /* 列表拉不到维持现状 */ }
   }, []);
+
+  // 列表专用启动/取消/查看：复用工作区级 runList 与 inspectedRunId，不另建监听
+  const startWorkflowFromList = useCallback(async (workflow, input = {}) => {
+    const res = await fetch(apiUrl('/workflows/run'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workflowId: workflow.id, triggerInput: input.triggerInput || '', runInputs: input.runInputs || {} }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `启动失败（HTTP ${res.status}）`);
+    toast(`已启动「${workflow.name}」`, 'success');
+    refreshRunList();
+    return data.runId;
+  }, [refreshRunList, toast]);
+
+  const cancelRunById = useCallback(async (runId) => {
+    if (!runId) return false;
+    const res = await fetch(apiUrl('/run/cancel'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || '运行已结束或取消失败');
+    toast('已发送取消请求', 'warn');
+    refreshRunList();
+    return true;
+  }, [refreshRunList, toast]);
+
+  const inspectWorkflowRun = useCallback(async (workflow, runId) => {
+    if (currentWfIdRef.current !== workflow.id) await openWorkflowRef.current?.(workflow);
+    selectRunForView(runId);
+    setView('canvas');
+  }, [selectRunForView]);
   // live 标记经 ref 读（不能进依赖：runList 变化会重建 effect → 轮询变请求风暴）
   const runListRef = useRef([]);
   useEffect(() => { runListRef.current = runList; }, [runList]);
@@ -482,9 +514,14 @@ export default function App() {
       }
     };
 
-    es.addEventListener('node-status', (e) => applyStatus(JSON.parse(e.data)));
+    es.addEventListener('node-status', (e) => {
+      const p = JSON.parse(e.data);
+      setRunList((current) => applyRunEvent(current, 'node-status', p));
+      applyStatus(p);
+    });
     es.addEventListener('agent-progress', (e) => {
       const p = JSON.parse(e.data);
+      setRunList((current) => applyRunEvent(current, 'agent-progress', p));
       if (!appliesToActiveRun(p)) return;
       setProgress((prev) => ({ ...prev, [p.nodeId]: p }));
       setNodes((nds) => nds.map((n) => (n.id === p.nodeId ? { ...n, data: { ...n.data, livePreview: p.preview, liveTurns: p.turns } } : n)));
@@ -522,6 +559,7 @@ export default function App() {
     });
     es.addEventListener('run-start', (e) => {
       const p = JSON.parse(e.data);
+      setRunList((current) => applyRunEvent(current, 'run-start', p));
       // 任何运行起停都刷新切换器列表（不过画布闸门：定时/webhook 运行无 canvasId）
       refreshRunList();
       // 只跟随本画布发起的运行（手动/续跑/助手）；定时/webhook 触发不抢占视图
@@ -543,6 +581,7 @@ export default function App() {
     });
     es.addEventListener('run-end', (e) => {
       const p = JSON.parse(e.data);
+      setRunList((current) => applyRunEvent(current, 'run-end', p));
       refreshRunList();
       if (!appliesToActiveRun(p)) return;
       runningRef.current = false;
@@ -602,6 +641,7 @@ export default function App() {
     });
     es.addEventListener('run-error', (e) => {
       const p = JSON.parse(e.data);
+      setRunList((current) => applyRunEvent(current, 'run-error', p));
       const adopted = appliesToActiveRun(p);
       if (!adopted && !belongsToCurrentCanvas(p)) return;
       if (!adopted) activeRunIdRef.current = p.runId;
@@ -616,6 +656,7 @@ export default function App() {
       // 节点投影只采纳「当前画布最近的 live run」一条，其余运行经切换器查看。
       const p = JSON.parse(e.data);
       if (!p.runId) return;
+      setRunList((current) => applyRunEvent(current, 'snapshot', p));
       setRunDetails((current) => ({ ...current, [p.runId]: { ...p, runId: p.runId } }));
       if (!belongsToCurrentCanvas(p)) return;
       const adopted = p.status === 'running'
@@ -1638,7 +1679,16 @@ export default function App() {
       <div className="main">
         {view === 'workflows' ? (
           <div className="wf-view">
-            <WorkflowList currentId={currentWf?.id} onOpen={openWorkflow} onNew={newWorkflow} />
+            <WorkflowList
+              currentId={currentWf?.id}
+              onOpen={openWorkflow}
+              onNew={newWorkflow}
+              runs={runList}
+              onStartRun={startWorkflowFromList}
+              onCancelRun={cancelRunById}
+              onInspectRun={inspectWorkflowRun}
+              onRefresh={refreshRunList}
+            />
           </div>
         ) : view === 'docs' ? (
           <div className="docwall-view">
