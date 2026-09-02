@@ -22,7 +22,7 @@ SDK_DIR="$DSH_PKG/node_modules/@deepseek-ai"
 echo "dsh SDK: $SDK_DIR"
 
 mkdir -p "$PROFILE_DIR/node_modules/@deepseek-ai"
-for pkg in schemastery cordis dsh-tools dsh-llm dsh-session; do
+for pkg in schemastery cordis dsh-tools dsh-llm dsh-session dsh-agent; do
   [ -d "$SDK_DIR/$pkg" ] || continue
   TARGET="$PROFILE_DIR/node_modules/@deepseek-ai/$pkg"
   if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then rm -rf "$TARGET"; fi

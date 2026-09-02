@@ -23,6 +23,7 @@ import z from '@deepseek-ai/schemastery';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { SessionId } from '@deepseek-ai/dsh-session';
+import { installModelSelection } from '@deepseek-ai/dsh-agent';
 import { renderTemplate, validateTemplate } from './template.js';
 import { describeNodeOutput, normalizeExecutionResult, RUN_SCHEMA_VERSION } from './output-contract.js';
 import { resolveInside, safeFileId, safeFilename } from './safe-path.js';
@@ -1193,6 +1194,13 @@ export function apply(ctx, config) {
     if (!provider || !model) {
       throw new Error('未找到可用的 dsh 渠道和模型，请先在 dsh 设置中完成配置');
     }
+    // 节点级思考级别：仅当与全局选择同渠道同模型时全局档位才继承；节点显式配置优先。
+    // 档位经 installModelSelection 注入 agent/request waterfall（AgentOptions 本身不收 effort）。
+    const reasoningEffort = d.reasoningEffort || (provider === sel.provider && model === sel.model ? sel.reasoningEffort : undefined);
+    // 模型单请求超时（step 粒度）：一次模型调用（含其工具执行前的新型请求）超过即视为卡死，
+    // 与节点总超时（timeoutSec，整个节点生命周期）是两个独立旋钮。step/end 重置计时。
+    const MODEL_TIMEOUT_MS = 300 * 1000;
+    const modelTimeoutMs = Number(d.modelTimeoutSec) > 0 ? Number(d.modelTimeoutSec) * 1000 : MODEL_TIMEOUT_MS;
 
     // 工具过滤：与进程内已注册工具求交集（restrict 不接受未知名）
     const wanted = Array.isArray(d.tools) ? d.tools.filter((t) => t && t !== '*') : [];
@@ -1228,6 +1236,17 @@ export function apply(ctx, config) {
           if (restrictList) {
             try { agentCtx.tools.restrict({ allow: restrictList }); } catch { /* 交集后仍失败则放开 */ }
           }
+          // 思考级别：selection 注入后每次模型请求经 waterfall 套用 effort；
+          // resolveCallConfig 校验档位，不支持时降级为默认行为（与官方 selectModel 同语义）
+          if (reasoningEffort) {
+            try {
+              const resolved = await ctx.llm.resolveCallConfig({ provider, model, reasoningEffort });
+              installModelSelection(agentCtx, {
+                current: { provider, model, ...(resolved.reasoningEffort ? { reasoningEffort: resolved.reasoningEffort } : {}) },
+                assembled: undefined,
+              });
+            } catch { /* 档位校验失败：跟随 provider 默认行为 */ }
+          }
         },
       });
       const agent = handle.agent;
@@ -1237,7 +1256,7 @@ export function apply(ctx, config) {
       // 轮数监控：2s 轮询 session events —— 推流式进度；turn 数超限 cancel；turn/end 即退出
       let watchDone;
       const watchReady = new Promise((r) => { watchDone = r; });
-      const watchState = { stop: false, timer: null };
+      const watchState = { stop: false, timer: null, lastStepStartSeq: 0, stepStartedAt: 0, modelTimeout: null };
       // 实时轨迹：watchTick 逐事件扫描时同步折叠进 liveTracesByRun（详情弹窗运行中即可读）；
       // 水位 lastSeqRef 只处理新到事件；完成后仍走 buildTrace 落盘路径，节点终态即释放。
       let liveTrace = null;
@@ -1254,11 +1273,15 @@ export function apply(ctx, config) {
       const pendingByCallId = new Map(); // callId → entries 下标（配对跨轮询到达的 tool/call 与 tool/result）
       const scanEvents = () => {
         let turns = 0; let preview = ''; let turnEnded = false;
+        let lastStepStartSeq = -1; let stepsSeen = 0;
         try {
           for (const ev of agent.session.events) {
             if (ev.seq < firstSeq) continue;
             if (ev.type === 'turn/start') turns += 1;
             if (ev.type === 'turn/end') turnEnded = true;
+            // step/start = 一次模型调用开始；step/end = 该次调用结束（含工具执行）。
+            // 记录最后一个 step/start 的时间与序号，供模型请求看门狗判断当前 step 是否卡死。
+            if (ev.type === 'step/start') { lastStepStartSeq = ev.seq; stepsSeen += 1; }
             if (ev.type === 'assistant/message') {
               const joined = (ev.data.message?.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
               if (joined) preview = joined;
@@ -1269,7 +1292,7 @@ export function apply(ctx, config) {
             }
           }
         } catch { /* session 已释放 */ }
-        return { turns, preview, turnEnded };
+        return { turns, preview, turnEnded, lastStepStartSeq, stepsSeen };
       };
       // 真·流式生成文稿：扫节点输出目录里最新的文本产物，附其尾部到 agent-progress，
       // 前端流卡直接渲染「正在写的文件」而非 agent 对话文本。只 tail 一个文件，
@@ -1301,7 +1324,27 @@ export function apply(ctx, config) {
       };
       const watchTick = () => {
         if (watchState.stop) return;
-        const { turns, preview, turnEnded } = scanEvents();
+        const { turns, preview, turnEnded, lastStepStartSeq, stepsSeen } = scanEvents();
+        // 模型请求看门狗：step/start 后 modelTimeoutMs 内既无 step/end 也无新事件推进，
+        // 视为该次模型调用卡死，cancel 本节点（区别于 timeoutSec 的节点总超时）。
+        // 以事件序号驱动：step/end 或任何新事件落盘都会刷新 lastActivitySeq。
+        if (!turnEnded && stepsSeen > 0) {
+          const events = agent.session.events;
+          const lastSeq = events.length ? events[events.length - 1].seq : firstSeq;
+          if (lastStepStartSeq > 0 && lastSeq === lastStepStartSeq && !watchState.rechecking) {
+            const stepAgeMs = Date.now() - (watchState.stepStartedAt || Date.now());
+            if (stepAgeMs > modelTimeoutMs) {
+              const err = new Error(`模型请求超时（单次超过 ${Math.round(modelTimeoutMs / 1000)}s 无响应）`);
+              try { agent.cancel({ kind: 'user' }); } catch { /* noop */ }
+              watchState.modelTimeout = err;
+              return watchDone();
+            }
+          }
+          if (lastStepStartSeq !== watchState.lastStepStartSeq) {
+            watchState.lastStepStartSeq = lastStepStartSeq;
+            watchState.stepStartedAt = Date.now();
+          }
+        }
         emit('agent-progress', {
           runId, nodeId: node.id, turns,
           // 实时输出流（文稿视图消费）：assistant 全文拼接，4KB 截断——多工具轮 agent 生成期
@@ -1348,6 +1391,11 @@ export function apply(ctx, config) {
       try { await ctx.get('sessions').flush(agent.session); } catch { /* flush 失败不影响结果 */ }
 
       let { text, reason } = summarize(agent.session.events, firstSeq);
+      // 模型请求看门狗触发：取消导致的「正常收尾」要改写为显式超时错误，
+      // 让引擎的重试机制（非取消类失败）能接手
+      if (watchState.modelTimeout) {
+        reason = { kind: 'error', error: watchState.modelTimeout };
+      }
       let structuredOutput;
       let structuredMeta;
       if (reason?.kind !== 'error' && outputConfig.mode === 'structured') {
@@ -3032,15 +3080,33 @@ export function apply(ctx, config) {
     const providers = await Promise.all(ctx.llm.listProviders().map(async (provider) => {
       try {
         const models = await ctx.llm.listModels(provider.id);
-        return {
-          id: provider.id,
-          name: provider.name,
-          models: models.map((model) => ({
-            id: model.id,
-            name: model.name || model.id,
-            ...(model.description ? { description: model.description } : {}),
-          })),
-        };
+        // 逐模型补能力元数据：思考级别档位（reasoning）与视觉输入（vision）。
+        // resolveModelInfo 走 adapter 精确解析，失败只降级该模型，不拖垮整个目录。
+        const modelsWithMeta = await Promise.all(models.map(async (model) => {
+          try {
+            const info = await ctx.llm.resolveModelInfo(provider.id, model.id);
+            const reasoning = info.reasoning
+              ? {
+                  efforts: info.reasoning.efforts.map((effort) => ({
+                    id: effort.id,
+                    name: effort.name,
+                    ...(effort.description ? { description: effort.description } : {}),
+                  })),
+                  ...(info.reasoning.defaultEffort !== undefined ? { defaultEffort: info.reasoning.defaultEffort } : {}),
+                }
+              : undefined;
+            return {
+              id: model.id,
+              name: model.name || model.id,
+              ...(model.description ? { description: model.description } : {}),
+              ...(reasoning ? { reasoning } : {}),
+              ...(info.inputModalities ? { vision: info.inputModalities.includes('image') } : {}),
+            };
+          } catch {
+            return { id: model.id, name: model.name || model.id, ...(model.description ? { description: model.description } : {}) };
+          }
+        }));
+        return { id: provider.id, name: provider.name, models: modelsWithMeta };
       } catch (error) {
         failures.push({ provider: provider.id, error: error?.message || String(error) });
         return { id: provider.id, name: provider.name, models: [] };
@@ -3049,6 +3115,7 @@ export function apply(ctx, config) {
     json(res, 200, {
       defaultProvider: sel.provider,
       defaultModel: sel.model,
+      defaultReasoningEffort: sel.reasoningEffort,
       providers,
       ...(failures.length ? { failures } : {}),
     });
