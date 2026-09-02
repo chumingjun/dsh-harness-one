@@ -159,7 +159,7 @@ export function ResultPanel({
   className = '',
 }) {
   const runId = getRunId(runDetail, status, results);
-  const [activeTab, setActiveTab] = useState('result');
+  const [activeTab, setActiveTab] = useState('process');
   const [remoteResults, setRemoteResults] = useState(undefined);
   const [selectedOutputId, setSelectedOutputId] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -194,7 +194,7 @@ export function ResultPanel({
   useEffect(() => {
     setRemoteResults(undefined);
     setSelectedOutputId(null);
-    setActiveTab('result');
+    setActiveTab('process');
     setSaveError('');
     setSavedNames([]);
   }, [runId, results]);

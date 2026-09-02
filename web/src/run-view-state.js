@@ -1,6 +1,6 @@
 export const RESULT_TABS = Object.freeze([
-  { id: 'result', label: '成果' },
   { id: 'process', label: '过程' },
+  { id: 'result', label: '成果' },
   { id: 'issues', label: '问题' },
 ]);
 
@@ -19,7 +19,7 @@ export function getRunStatusMeta(status) {
   return STATUS_META[status] || { label: status || '未知状态', tone: 'neutral' };
 }
 
-export function deriveRunViewState(model, activeTab = 'result') {
+export function deriveRunViewState(model, activeTab = 'process') {
   const safe = model || {};
   const successfulOutputs = (safe.outputResults || []).filter((row) => row.status === 'success' && row.output);
   const counts = {
@@ -27,7 +27,7 @@ export function deriveRunViewState(model, activeTab = 'result') {
     process: safe.nodeTimeline?.length || 0,
     issues: safe.issues?.length || 0,
   };
-  const normalizedTab = RESULT_TABS.some((tab) => tab.id === activeTab) ? activeTab : 'result';
+  const normalizedTab = RESULT_TABS.some((tab) => tab.id === activeTab) ? activeTab : 'process';
   return {
     activeTab: normalizedTab,
     counts,
