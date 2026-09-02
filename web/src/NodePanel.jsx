@@ -150,6 +150,13 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
   const modelDefaultLabel = d.channel
     ? `渠道默认（${providerModels[0]?.name || providerModels[0]?.id || '未配置'}）`
     : `跟随 dsh 默认（${llmConfig.defaultModel || '未配置'}）`;
+  // 所选模型的能力元数据：思考级别档位 + 视觉输入。跨渠道选模型后目录无该模型时为 null
+  const currentModel = providerModels.find((item) => item.id === d.model) || null;
+  const modelReasoning = currentModel?.reasoning || null;
+  // 继承全局默认档位：同渠道同模型时 dsh 默认档位生效（与引擎继承语义一致）
+  const inheritedEffort = effectiveProvider === llmConfig.defaultProvider && (!d.model || d.model === llmConfig.defaultModel)
+    ? llmConfig.defaultReasoningEffort
+    : undefined;
 
   const selectProvider = (providerId) => {
     if (!providerId) {
@@ -561,17 +568,42 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
                 </select>
               </Field>
               <Field label="模型">
-                <select value={d.model || ''} onChange={(e) => set({ model: e.target.value || undefined })} disabled={!effectiveProvider}>
+                <select value={d.model || ''} onChange={(e) => set({ model: e.target.value || undefined, reasoningEffort: undefined })} disabled={!effectiveProvider}>
                   <option value="">{modelDefaultLabel}</option>
                   {d.model && !providerModels.some((model) => model.id === d.model) && (
                     <option value={d.model}>{d.model}（目录中不可用）</option>
                   )}
                   {providerModels.map((model) => (
-                    <option key={model.id} value={model.id}>{model.name || model.id}</option>
+                    <option key={model.id} value={model.id}>
+                      {model.name || model.id}{model.vision === true ? ' 👁' : model.vision === false ? '' : ''}
+                    </option>
                   ))}
                 </select>
               </Field>
             </div>
+            {currentModel && (
+              <p className="sec-hint">
+                {currentModel.vision === true && <span title="该模型支持图片输入">👁 支持视觉</span>}
+                {currentModel.vision === false && <span title="该模型不支持图片输入">不支持视觉</span>}
+                {currentModel.vision === undefined && <span>视觉能力未知</span>}
+                {modelReasoning && <span> · 思考{modelReasoning.efforts.length ? ` ${modelReasoning.efforts.length} 档` : '不支持'}</span>}
+              </p>
+            )}
+            {modelReasoning && modelReasoning.efforts.length > 0 && (
+              <Field label="思考级别" hint="留空跟随全局默认档位">
+                <select
+                  value={d.reasoningEffort || ''}
+                  onChange={(e) => set({ reasoningEffort: e.target.value || undefined })}>
+                  <option value="">{inheritedEffort ? `跟随默认（${inheritedEffort}）` : `模型默认（${modelReasoning.defaultEffort || 'provider 决定'}）`}</option>
+                  {d.reasoningEffort && !modelReasoning.efforts.some((effort) => effort.id === d.reasoningEffort) && (
+                    <option value={d.reasoningEffort}>{d.reasoningEffort}（该模型不支持）</option>
+                  )}
+                  {modelReasoning.efforts.map((effort) => (
+                    <option key={effort.id} value={effort.id} title={effort.description || ''}>{effort.name || effort.id}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
             {llmConfig.failures?.length > 0 && (
               <p className="panel-note note-warn">部分 dsh 渠道的模型目录加载失败。</p>
             )}
@@ -584,7 +616,7 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
               <Field label="超时（秒）">
                 <input type="number" min="10" max="3600" value={d.timeoutSec ?? ''}
                   onChange={(e) => set({ timeoutSec: e.target.value === '' ? undefined : Number(e.target.value) })}
-                  placeholder="300" />
+                  placeholder="500" />
               </Field>
             </div>
           </Section>

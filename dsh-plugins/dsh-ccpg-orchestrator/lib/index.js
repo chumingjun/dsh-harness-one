@@ -23,6 +23,7 @@ import z from '@deepseek-ai/schemastery';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { SessionId } from '@deepseek-ai/dsh-session';
+import { installModelSelection } from '@deepseek-ai/dsh-agent';
 import { renderTemplate, validateTemplate } from './template.js';
 import { describeNodeOutput, normalizeExecutionResult, RUN_SCHEMA_VERSION } from './output-contract.js';
 import { resolveInside, safeFileId, safeFilename } from './safe-path.js';
@@ -1192,6 +1193,9 @@ export function apply(ctx, config) {
     if (!provider || !model) {
       throw new Error('未找到可用的 dsh 渠道和模型，请先在 dsh 设置中完成配置');
     }
+    // 节点级思考级别：仅当与全局选择同渠道同模型时全局档位才继承；节点显式配置优先。
+    // 档位经 installModelSelection 注入 agent/request waterfall（AgentOptions 本身不收 effort）。
+    const reasoningEffort = d.reasoningEffort || (provider === sel.provider && model === sel.model ? sel.reasoningEffort : undefined);
 
     // 工具过滤：与进程内已注册工具求交集（restrict 不接受未知名）
     const wanted = Array.isArray(d.tools) ? d.tools.filter((t) => t && t !== '*') : [];
@@ -1226,6 +1230,17 @@ export function apply(ctx, config) {
           agentCtx.systemPrompt.section({ name: 'deployment:persona', order: 0, text: personaText });
           if (restrictList) {
             try { agentCtx.tools.restrict({ allow: restrictList }); } catch { /* 交集后仍失败则放开 */ }
+          }
+          // 思考级别：selection 注入后每次模型请求经 waterfall 套用 effort；
+          // resolveCallConfig 校验档位，不支持时降级为默认行为（与官方 selectModel 同语义）
+          if (reasoningEffort) {
+            try {
+              const resolved = await ctx.llm.resolveCallConfig({ provider, model, reasoningEffort });
+              installModelSelection(agentCtx, {
+                current: { provider, model, ...(resolved.reasoningEffort ? { reasoningEffort: resolved.reasoningEffort } : {}) },
+                assembled: undefined,
+              });
+            } catch { /* 档位校验失败：跟随 provider 默认行为 */ }
           }
         },
       });
@@ -3029,15 +3044,33 @@ export function apply(ctx, config) {
     const providers = await Promise.all(ctx.llm.listProviders().map(async (provider) => {
       try {
         const models = await ctx.llm.listModels(provider.id);
-        return {
-          id: provider.id,
-          name: provider.name,
-          models: models.map((model) => ({
-            id: model.id,
-            name: model.name || model.id,
-            ...(model.description ? { description: model.description } : {}),
-          })),
-        };
+        // 逐模型补能力元数据：思考级别档位（reasoning）与视觉输入（vision）。
+        // resolveModelInfo 走 adapter 精确解析，失败只降级该模型，不拖垮整个目录。
+        const modelsWithMeta = await Promise.all(models.map(async (model) => {
+          try {
+            const info = await ctx.llm.resolveModelInfo(provider.id, model.id);
+            const reasoning = info.reasoning
+              ? {
+                  efforts: info.reasoning.efforts.map((effort) => ({
+                    id: effort.id,
+                    name: effort.name,
+                    ...(effort.description ? { description: effort.description } : {}),
+                  })),
+                  ...(info.reasoning.defaultEffort !== undefined ? { defaultEffort: info.reasoning.defaultEffort } : {}),
+                }
+              : undefined;
+            return {
+              id: model.id,
+              name: model.name || model.id,
+              ...(model.description ? { description: model.description } : {}),
+              ...(reasoning ? { reasoning } : {}),
+              ...(info.inputModalities ? { vision: info.inputModalities.includes('image') } : {}),
+            };
+          } catch {
+            return { id: model.id, name: model.name || model.id, ...(model.description ? { description: model.description } : {}) };
+          }
+        }));
+        return { id: provider.id, name: provider.name, models: modelsWithMeta };
       } catch (error) {
         failures.push({ provider: provider.id, error: error?.message || String(error) });
         return { id: provider.id, name: provider.name, models: [] };
@@ -3046,6 +3079,7 @@ export function apply(ctx, config) {
     json(res, 200, {
       defaultProvider: sel.provider,
       defaultModel: sel.model,
+      defaultReasoningEffort: sel.reasoningEffort,
       providers,
       ...(failures.length ? { failures } : {}),
     });
