@@ -66,6 +66,10 @@ import {
 } from './assistant.js';
 import { ensureWorkflowSkill } from './skill-seed.js';
 import {
+  AgentDefaultsError, AgentDefaultsStore, normalizeAgentDefaults, resolveAgentModelSelection,
+  validateAgentDefaults,
+} from './agent-defaults.js';
+import {
   assertNonSensitiveVariableDefinitions, assertSafeContextObject, GlobalVariableStore, VariableStoreError,
   variableDefinitionsToValues,
 } from './variable-store.js';
@@ -211,6 +215,8 @@ export function apply(ctx, config) {
       return typeof value === 'function' ? value.bind(store) : value;
     },
   });
+  // agent 节点默认值是 dsh 用户级偏好（跨工作区共享），不随 workspace store 走
+  const agentDefaultsStore = new AgentDefaultsStore();
   const currentPaths = () => currentStore().paths;
   const currentDatabase = () => currentStore().database;
   const currentHooks = () => currentStore().hooks;
@@ -1181,12 +1187,13 @@ export function apply(ctx, config) {
       userPrompt += `\n\n可用附件已放入节点输出目录 ${outputDir}，用 read 工具读取：${attachments.map((a) => `${outputDir}/${a.filename}`).join(', ')}`;
     }
 
-    // 节点级模型：默认取全局选择；channel 仅透传给支持的 provider
+    // 节点级模型解析链：节点显式配置 > 设置面板「Workflow One」默认值 > dsh 全局选择；
+    // channel 仅透传给支持的 provider。默认值与全局模型都只在渠道匹配时继承（跨渠道不错配）。
     const defaultModel = ctx.get('agentDefaultModel');
     const sel = defaultModel?.currentSelection?.() || {};
-    const provider = d.channel || sel.provider;
-    let model = d.model;
-    if (!model && (!d.channel || provider === sel.provider)) model = sel.model;
+    const resolved = resolveAgentModelSelection({ node: d, defaults: agentDefaultsStore.read(), dshSelection: sel });
+    const provider = resolved.provider;
+    let model = resolved.model;
     if (!model && provider) {
       const models = await ctx.llm.listModels(provider);
       model = models[0]?.id;
@@ -1194,9 +1201,9 @@ export function apply(ctx, config) {
     if (!provider || !model) {
       throw new Error('未找到可用的 dsh 渠道和模型，请先在 dsh 设置中完成配置');
     }
-    // 节点级思考级别：仅当与全局选择同渠道同模型时全局档位才继承；节点显式配置优先。
+    // 节点级思考级别：节点显式配置 > Workflow One 默认档位 > 全局档位（均需同渠道同模型）。
     // 档位经 installModelSelection 注入 agent/request waterfall（AgentOptions 本身不收 effort）。
-    const reasoningEffort = d.reasoningEffort || (provider === sel.provider && model === sel.model ? sel.reasoningEffort : undefined);
+    const reasoningEffort = resolved.reasoningEffort;
     // 模型单请求超时（step 粒度）：一次模型调用（含其工具执行前的新型请求）超过即视为卡死，
     // 与节点总超时（timeoutSec，整个节点生命周期）是两个独立旋钮。step/end 重置计时。
     const MODEL_TIMEOUT_MS = 300 * 1000;
@@ -3074,6 +3081,8 @@ export function apply(ctx, config) {
   } });
 
   // ---- LLM 配置：直接读取 dsh 运行时注册的渠道和模型目录 ----
+  // 目录只依赖 dsh 运行时（ctx.llm），与工作区无关——scoped:false 让设置面板（无会话上下文）也能读；
+  // 画布请求带 sessionId 时 scoped:false 只是跳过工作区绑定，handler 本就不读工作区状态。
   register({ kind: 'exact', path: '/wf1/api/llm-config', async handler(_req, res) {
     const sel = ctx.get('agentDefaultModel')?.currentSelection?.() || {};
     const failures = [];
@@ -3119,12 +3128,59 @@ export function apply(ctx, config) {
       providers,
       ...(failures.length ? { failures } : {}),
     });
-  } });
+  } }, { scoped: false });
 
   // runtime 徽标数据源：插件形态下 agent 恒走 dsh 底座
   register({ kind: 'exact', path: '/wf1/api/runtime-config', handler(_req, res) {
     json(res, 200, { runtime: { available: true, runtime: 'dsh-plugin', reasons: [] } });
   } });
+
+  // ---- agent 节点默认值（设置面板「Workflow One」）：渠道/模型/思考级别 ----
+  // dsh 用户级偏好，不依赖会话工作区（设置面板无 session 上下文），故 scoped: false。
+  // PUT 整体替换三字段；空串 = 该层不设置，回退到 dsh 全局模型选择。
+  const agentDefaultsPayload = async () => {
+    const sel = ctx.get('agentDefaultModel')?.currentSelection?.() || {};
+    const defaults = agentDefaultsStore.read();
+    const effective = resolveAgentModelSelection({ node: {}, defaults, dshSelection: sel });
+    return {
+      ok: true,
+      defaults,
+      // effective 与 runAgentNode 同一解析链（节点层为空时的结果）；model 缺省表示「渠道首选」
+      effective: {
+        provider: effective.provider || null,
+        model: effective.model || null,
+        reasoningEffort: effective.reasoningEffort || null,
+      },
+      dsh: { provider: sel.provider || null, model: sel.model || null, reasoningEffort: sel.reasoningEffort || null },
+    };
+  };
+  register({ kind: 'exact', path: '/wf1/api/agent-defaults', async handler(req, res) {
+    try {
+      if (req.method === 'GET') return json(res, 200, await agentDefaultsPayload());
+      if (req.method === 'PUT') {
+        const body = await readBody(req);
+        try {
+          const defaults = normalizeAgentDefaults(body);
+          await validateAgentDefaults(defaults, ctx.llm);
+          agentDefaultsStore.write(defaults);
+          return json(res, 200, await agentDefaultsPayload());
+        } catch (error) {
+          if (error instanceof AgentDefaultsError) {
+            return json(res, error.status || 400, { ok: false, error: error.message, code: error.code });
+          }
+          throw error;
+        }
+      }
+      return json(res, 405, { ok: false, error: '仅支持 GET/PUT', code: 'method-not-allowed' });
+    } catch (error) {
+      // scoped:false 没有统一兜底：请求体错误归 400，目录查询等失败落 500
+      if (error instanceof RequestBodyError) {
+        return json(res, Number(error.status) || 400, { ok: false, error: String(error.message || error), code: error.code || 'invalid-request' });
+      }
+      ctx.logger?.error?.(`agent-defaults 接口失败：${error.stack || error.message || error}`);
+      return json(res, 500, { ok: false, error: '读取 dsh 模型目录失败', code: 'internal-error' });
+    }
+  } }, { scoped: false });
 
   register({ kind: 'exact', path: '/wf1/api/tools', handler(_req, res) {
     try {

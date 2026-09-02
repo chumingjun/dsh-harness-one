@@ -655,4 +655,44 @@ for (const [body, expected] of [
   assert.equal(fetchCalls.length, before, "缺目标不发请求");
 }
 
+// ---- 设置面板「Agent 节点默认值」选项装配 ----
+{
+  const catalog = {
+    providers: [
+      {
+        id: "deepseek",
+        name: "DeepSeek",
+        models: [
+          { id: "deepseek-chat", name: "Chat" },
+          {
+            id: "deepseek-reasoner",
+            name: "Reasoner",
+            vision: true,
+            reasoning: { efforts: [{ id: "low" }, { id: "high", name: "高" }] },
+          },
+        ],
+      },
+      { id: "glm", name: "智谱", models: [{ id: "glm-5" }] },
+    ],
+  };
+  assert.equal(client.__test.providerNameOf(catalog, "glm"), "智谱");
+  assert.equal(client.__test.providerNameOf(catalog, "ghost"), "ghost");
+  // __test 函数返回的数组来自 vm realm，先 Array.from 回宿主 realm 再 deepEqual
+  assert.deepEqual(
+    Array.from(client.__test.modelOptionsFor(catalog, "deepseek"), (m) => m.id),
+    ["deepseek-chat", "deepseek-reasoner"],
+  );
+  assert.deepEqual(Array.from(client.__test.modelOptionsFor(catalog, "ghost")), []);
+  assert.deepEqual(
+    Array.from(client.__test.effortOptionsFor(catalog, "deepseek", "deepseek-reasoner"), (e) => e.id),
+    ["low", "high"],
+  );
+  assert.deepEqual(Array.from(client.__test.effortOptionsFor(catalog, "deepseek", "deepseek-chat")), []);
+  assert.deepEqual(Array.from(client.__test.effortOptionsFor(catalog, "ghost", "x")), []);
+  assert.deepEqual(Array.from(client.__test.effortOptionsFor(null, "deepseek", "deepseek-reasoner")), []);
+  // 设置面板数据源：默认值接口与模型目录接口都要在 bundle 里
+  assert.equal(bundle.includes('"/wf1/api/agent-defaults"'), true);
+  assert.equal(bundle.includes('"/wf1/api/llm-config"'), true);
+}
+
 console.log("canvasui client tests: passed");
