@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateGraphOps, wouldCreateCycle, summarizeGraphForAI, checkPatchResult } from '../lib/assistant.js';
+import { validateGraphOps, wouldCreateCycle, summarizeGraphForAI, checkPatchResult, canvasAssistantPersona } from '../lib/assistant.js';
 
 const baseGraph = () => ({
   nodes: [
@@ -108,6 +108,17 @@ test('summarizeGraphForAI keeps agent fields compact', () => {
   assert.equal(s.nodes.length, 2);
   assert.equal(s.nodes[1].label, '分类智能体');
   assert.equal(s.edges[0].from, 'n_input_1');
+});
+
+test('canvas assistant persona requires clarification and confirmation contracts', () => {
+  const persona = canvasAssistantPersona();
+  assert.match(persona, /目标不唯一时必须主动澄清/);
+  assert.match(persona, /列出候选.*禁止猜测/);
+  assert.match(persona, /删除节点、清空画布、覆盖已保存工作流/);
+  assert.match(persona, /运行中的图做结构修改前/);
+  assert.match(persona, /先复述.*等待用户明确确认/);
+  assert.match(persona, /必须带选项/);
+  assert.match(persona, /澄清不超过一轮/);
 });
 
 test('checkPatchResult lint flags empty include/exclude or ok graph', () => {
