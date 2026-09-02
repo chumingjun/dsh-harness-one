@@ -167,6 +167,9 @@ export function ResultPanel({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [savedNames, setSavedNames] = useState([]);
+  const [childDetail, setChildDetail] = useState(null);
+  const [childLoading, setChildLoading] = useState(false);
+  const childRequestRef = useRef(null);
   const initialReadyTokenRef = useRef(resultsReadyToken);
   const readyTokenRunRef = useRef(runId);
   const observedStatus = status?.running
@@ -192,12 +195,18 @@ export function ResultPanel({
   };
 
   useEffect(() => {
+    childRequestRef.current?.abort?.();
+    childRequestRef.current = null;
     setRemoteResults(undefined);
     setSelectedOutputId(null);
     setActiveTab('process');
     setSaveError('');
     setSavedNames([]);
+    setChildDetail(null);
+    setChildLoading(false);
   }, [runId, results]);
+
+  useEffect(() => () => childRequestRef.current?.abort?.(), []);
 
   useEffect(() => {
     if (!runId || results !== undefined) return undefined;
@@ -262,6 +271,31 @@ export function ResultPanel({
     loadResults(controller.signal, runEnded);
   };
 
+  const openChildDetail = async (childRunId) => {
+    if (!childRunId || childLoading) return;
+    childRequestRef.current?.abort?.();
+    const controller = new AbortController();
+    childRequestRef.current = controller;
+    const requestedRunId = runId;
+    setChildLoading(true);
+    try {
+      const response = await fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(childRunId)}`), { signal: controller.signal });
+      const detail = await response.json();
+      if (!response.ok) throw new Error(detail.error || '子运行详情不可用');
+      if (childRequestRef.current !== controller || requestedRunId !== runId) return;
+      setChildDetail(detail);
+    } catch (error) {
+      if (error?.name !== 'AbortError' && childRequestRef.current === controller && requestedRunId === runId) {
+        setLoadError(error.message || String(error));
+      }
+    } finally {
+      if (childRequestRef.current === controller) {
+        childRequestRef.current = null;
+        setChildLoading(false);
+      }
+    }
+  };
+
   return (
     <aside className={`panel result-panel ${className}`.trim()} aria-label="运行结果">
       <header className="result-panel-head">
@@ -322,6 +356,27 @@ export function ResultPanel({
               )}
             </div>
             {model.summary && <p className="result-summary">{model.summary}</p>}
+            {Array.isArray(runDetail?.children) && runDetail.children.length > 0 && (
+              <div className="result-child-runs" aria-label="子工作流运行">
+                <div className="result-child-head"><strong>子工作流运行</strong><span>{runDetail.children.length} 个</span></div>
+                {runDetail.children.map((child) => (
+                  <button type="button" className="result-child-row" key={child.runId} onClick={() => openChildDetail(child.runId)}>
+                    <span>{child.workflowName || child.workflowId || child.runId}</span>
+                    <span className={`result-step-pill result-step-pill-${child.status === 'success' ? 'success' : child.status === 'running' ? 'running' : 'danger'}`}>{child.status}</span>
+                    <ChevronRight size={13} />
+                  </button>
+                ))}
+              </div>
+            )}
+            {childDetail && (
+              <div className="result-child-detail">
+                <div className="result-child-head"><strong>子运行详情</strong><button type="button" className="btn btn-sm" onClick={() => setChildDetail(null)}>返回父运行</button></div>
+                <p>{childDetail.workflowName || childDetail.workflowId || childDetail.runId} · {childDetail.status}</p>
+                <p className="result-child-meta">runId: {childDetail.runId} · 父节点: {childDetail.parentNodeId || '未知'}</p>
+                {childDetail.children?.length > 0 && <p className="result-child-meta">下级子运行：{childDetail.children.length} 个</p>}
+                <pre className="result-child-output">{Object.values(childDetail.outputs || {}).filter(Boolean).at(-1) || '暂无输出'}</pre>
+              </div>
+            )}
             {model.input && <details className="result-input-snapshot"><summary>本次输入</summary><pre>{model.input}</pre></details>}
             {successfulOutputs.length > 1 && (
               <div className="result-output-selector" role="tablist" aria-label="最终输出节点">

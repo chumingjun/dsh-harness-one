@@ -57,6 +57,14 @@ import { NotificationChannelRegistry, WorkflowNotificationManager } from './noti
 import { listFeishuCreds, addFeishuCred, removeFeishuCred, setDefaultFeishuCred, getFeishuCredOrEnv } from './credentials.js';
 import { Orchestrator, lintGraph, getKind } from './engine.js';
 import { validateWorkflowInputs } from './workflow-inputs.js';
+import {
+  MAX_CHILD_RUNS_PER_ROOT,
+  MAX_SUBWORKFLOW_DEPTH,
+  resolveSubworkflowInputs,
+  selectWorkflowResult,
+  validateSubworkflowInputs,
+  SubworkflowError,
+} from './subworkflow.js';
 import { createWorkflowExportManifest, importWorkflowDocument, normalizeWorkflowDocument } from './workflow-document.js';
 import { saveArtifactsToWorkspace } from './artifact-save.js';
 import { buildRevisionGraph, extractRevision, revisionAgentNodeId } from './artifact-feedback.js';
@@ -127,7 +135,14 @@ export function apply(ctx, config) {
   const notificationChannels = new NotificationChannelRegistry();
   notificationChannels.register(createFeishuNotificationChannel({ getCredential: getFeishuCredOrEnv }));
   const notifications = new WorkflowNotificationManager({ channels: notificationChannels, logger: ctx.logger });
-  const lintWorkflowGraph = (graph) => lintGraph(graph, { notificationChannels });
+  // resolveTargetWorkflow 给 subworkflow 节点 lint 用：目标存在性 + inputSchema 字段名校验。
+  // 读库失败按「不存在」处理——lint 不该因目标文档损坏而崩。
+  const lintWorkflowGraph = (graph) => lintGraph(graph, {
+    notificationChannels,
+    resolveTargetWorkflow: (workflowId) => {
+      try { return readWf(workflowId); } catch { return null; }
+    },
+  });
   let legacyClaimedWorkspace = null;
 
   const canonicalWorkspace = (cwd) => {
@@ -777,6 +792,8 @@ export function apply(ctx, config) {
         if (hooks.length) return `有 ${hooks.length} 个 webhook 关联（${hooks.map((h) => h.id).join(', ')}），请先在画布删除 webhook。`;
         const schedules = [...currentSchedulerMeta().values()].filter((m) => m.workflowId === wf.id);
         if (schedules.length) return `有 ${schedules.length} 个定时任务关联（${schedules.map((m) => m.key).join(', ')}），请先在定时任务中心删除。`;
+        const referencing = subworkflowReferencingWorkflows(wf.id);
+        if (referencing.length) return `有 ${referencing.length} 个工作流通过子工作流节点引用它（${referencing.map((r) => r.name || r.id).join(', ')}），请先在那些工作流中移除对应子工作流节点。`;
         // 画布若正打开该工作流：退回草稿态（前端收到事件后回「未保存」空画布）
         for (const [key, cv] of canvases) {
           if (cv.workflowId !== wf.id || key.split('\0')[0] !== currentStore().workspaceRoot) continue;
@@ -847,6 +864,27 @@ export function apply(ctx, config) {
   // ---- 运行历史（按工作区持久化 + 内存缓存）----
   const pendingRunIds = new Set();
   const liveTracesByRun = new Map(); // 运行中节点的实时轨迹：runId → (nodeId → trace)；节点完成后落盘、运行结束释放
+  const liveChildRuns = new Map(); // parentRunId -> Map<childRunId, cancel>
+  const childCountByRoot = new Map();
+  const childRunOf = (parentRunId) => {
+    let children = liveChildRuns.get(parentRunId);
+    if (!children) { children = new Map(); liveChildRuns.set(parentRunId, children); }
+    return children;
+  };
+  const hasSubworkflowNode = (graph) => (graph?.nodes || []).some((node) => node.type === 'subworkflow');
+  const cancelDescendants = (runId, reason) => {
+    const children = liveChildRuns.get(runId);
+    for (const childId of [...(children?.keys?.() || [])]) {
+      // orch.cancel 会再次触发 onCancel，从而递归处理该 child 的后代；
+      // 这里不手动递归，避免同一棵运行树被重复遍历和重复取消。
+      try { orch?.cancel(childId, `父运行取消：${reason}`); } catch { /* 子运行可能已结束 */ }
+    }
+  };
+  const cancelRunTree = (runId, reason = '用户取消') => {
+    const entry = orch?.runs.get(runId);
+    if (!entry) return false;
+    return orch.cancel(runId, reason);
+  };
   const recoverInterruptedRun = (run, interruptedAt) => {
     const startedAtMs = run.startedAt ? new Date(run.startedAt).getTime() : NaN;
     const states = (run.graph?.nodes || []).map((node) => run.nodeStates?.[node.id]);
@@ -1017,6 +1055,23 @@ export function apply(ctx, config) {
     return true;
   };
 
+  // 子工作流节点以 workflowId 引用库内工作流；删除被引用的目标会让父工作流
+  // 运行时才失败，所以两个删除入口（助手工具 + HTTP 路由）都先拦引用方。
+  // 自引用不拦：删自身时引用随之消失（运行期循环由 callChain 兜底）。
+  const subworkflowReferencingWorkflows = (targetId) => {
+    const id = String(targetId || '');
+    if (!id) return [];
+    const refs = [];
+    for (const summary of currentDatabase().listWorkflows()) {
+      if (summary.id === id) continue;
+      const doc = readWf(summary.id);
+      if ((doc?.graph?.nodes || []).some((n) => n.type === 'subworkflow' && String(n.data?.workflowId || '').trim() === id)) {
+        refs.push({ id: doc.id, name: doc.name });
+      }
+    }
+    return refs;
+  };
+
   const resolveAttachmentFile = (attachment) => {
     if (attachment?.id) {
       const dir = resolveInside(STORAGE.attachments, safeFileId(attachment.id, 'invalid'));
@@ -1066,6 +1121,7 @@ export function apply(ctx, config) {
 
   // ---- 引擎 ----
   orch = new Orchestrator(ctx, { onEvent: onOrchestratorEvent, renderTemplate });
+  orch.onCancel = (runId, reason) => cancelDescendants(runId, reason);
   orch.nodeRunner = async (node, run, s, ctl) => runAgentNode(ctx, node, run, s, ctl);
   orch.scriptRunner = async ({ node, input, signal, timeoutMs, workflowId, runId }) => {
     const ws = workspaceFor(node, { workflowId: workflowId || 'draft', runId });
@@ -1083,10 +1139,12 @@ export function apply(ctx, config) {
   const startRun = (graph, {
     triggerInput, workflowName, workflowId, canvasId, source,
     globalVariables = {}, workflowVariables = {}, runInputs = {}, runId: providedRunId, replayOf, resume, revises,
+    parentRunId = null, parentNodeId = null, rootRunId = null, depth = 0, callChain = [],
+    suppressNotifications = false,
   } = {}) => {
     const store = currentStore();
     const runId = providedRunId || `run_${Date.now().toString(36)}_${++runIdSeq}`;
-    notifications.startRun({ runId, graph, workflowName, workflowId });
+    if (!suppressNotifications) notifications.startRun({ runId, graph, workflowName, workflowId });
     pendingRunIds.add(runId);
     // 启动即落盘运行中快照：成果面板在 run-start 后立刻拉 /run-results，
     // 只等最终 persistRun 的话长运行期间 readRun 一直 404（前端退避耗尽即报「运行记录不存在」）。
@@ -1096,6 +1154,9 @@ export function apply(ctx, config) {
         triggerInput: triggerInput ?? '', workflowName: workflowName || null, workflowId: workflowId || null,
         canvasId: canvasId || null, source: source || null, replayOf: replayOf || null,
         revises: revises || null,
+        parentRunId: parentRunId || null, parentNodeId: parentNodeId || null,
+        rootRunId: rootRunId || runId, depth: Number.isInteger(depth) && depth >= 0 ? depth : 0,
+        callChain: Array.isArray(callChain) ? [...callChain] : [],
         ...(resume ? { resumedFrom: resume.runId || null } : {}),
         nodeStates: {}, outputs: {}, structuredOutputs: {}, issues: [],
         graph: graph ? { nodes: graph.nodes.map((n) => ({ id: n.id, type: n.type, position: n.position, data: n.data })), edges: graph.edges } : undefined,
@@ -1104,6 +1165,7 @@ export function apply(ctx, config) {
     } catch { /* 快照写失败不阻塞运行；最终 persistRun 仍会落盘 */ }
     const promise = workspaceContext.run(store, () => Promise.resolve().then(() => orch.run(graph, {
       triggerInput, workflowName, workflowId, canvasId, source, runId, revises,
+      parentRunId, parentNodeId, rootRunId, depth, callChain,
       workspaceRoot: store.workspaceRoot,
       globalVariables, workflowVariables, runInputs,
       resume,
@@ -1121,8 +1183,130 @@ export function apply(ctx, config) {
       notifications.discard(runId);
       ctx.logger?.error?.(`dsh-ccpg 运行失败（${runId}）：${error.message}`);
       return null;
-    }).finally(() => pendingRunIds.delete(runId));
+    }).finally(() => {
+      pendingRunIds.delete(runId);
+      if (!parentRunId && ![...liveChildRuns.values()].some((children) => children.size > 0)) {
+        childCountByRoot.delete(rootRunId || runId);
+      }
+    });
     return { runId, promise };
+  };
+
+  // 子工作流执行器：lint → 循环/深度/预算防护 → 输入映射 → 启动子 run → 同步等待并选结果。
+  // 取消传播双向：父 abort 信号取消子 run；子 run 终态后再判父状态，父 run-end 不早于子终态。
+  orch.runChildWorkflow = async ({ node, run, state, signal, render }) => {
+    if (signal?.aborted || run.canceled) throw new SubworkflowError('父运行已取消', 'SUBWORKFLOW_CANCELED');
+    const workflowId = String(node.data?.workflowId || '').trim();
+    if (!workflowId) throw new SubworkflowError('未选择目标子工作流', 'SUBWORKFLOW_WORKFLOW_REQUIRED');
+    const childWorkflow = readWf(workflowId);
+    if (!childWorkflow) throw new SubworkflowError(`子工作流不存在：${workflowId}`, 'SUBWORKFLOW_NOT_FOUND');
+    const lint = lintWorkflowGraph(childWorkflow.graph);
+    if (!lint.ok) {
+      const error = new SubworkflowError(
+        `子工作流图有错误：${lint.issues.find((issue) => issue.level === 'error')?.message || '图存在错误'}`,
+        'SUBWORKFLOW_INVALID_GRAPH',
+      );
+      error.issues = lint.issues;
+      throw error;
+    }
+    const chain = Array.isArray(run.callChain) && run.callChain.length
+      ? [...run.callChain]
+      : (run.workflowId ? [run.workflowId] : []);
+    if (chain.includes(workflowId)) {
+      throw new SubworkflowError(`检测到子工作流循环调用：${[...chain, workflowId].join(' → ')}`, 'SUBWORKFLOW_CYCLE');
+    }
+    const depth = Number.isInteger(run.depth) ? run.depth : 0;
+    if (depth >= MAX_SUBWORKFLOW_DEPTH) {
+      throw new SubworkflowError(`子工作流嵌套层级超过上限 ${MAX_SUBWORKFLOW_DEPTH}`, 'SUBWORKFLOW_MAX_DEPTH');
+    }
+    const rootRunId = run.rootRunId || run.runId;
+    const childCount = (childCountByRoot.get(rootRunId) || 0) + 1;
+    if (childCount > MAX_CHILD_RUNS_PER_ROOT) {
+      throw new SubworkflowError(`单次运行子工作流数量超过上限 ${MAX_CHILD_RUNS_PER_ROOT}`, 'SUBWORKFLOW_BUDGET_EXCEEDED');
+    }
+    const parentCtx = {
+      outputs: new Map((state.incoming.get(node.id) || []).map((id) => [id, state.run.outputs[id] ?? ''])),
+      structuredOutputs: new Map((state.incoming.get(node.id) || []).map((id) => [id, state.run.structuredOutputs?.[id]])),
+      labels: new Map((state.incoming.get(node.id) || []).map((id) => [id, state.nodes.get(id)?.data?.label || id])),
+      incomingIds: state.incoming.get(node.id) || [],
+      triggerInput: run.triggerInput,
+      nodeStates: run.nodeStates,
+      globalVariables: state.globalVariables,
+      workflowVariables: state.workflowVariables,
+      runInputs: state.runInputs,
+    };
+    const mapped = resolveSubworkflowInputs(node.data || {}, parentCtx, render);
+    const globals = globalContext();
+    const childInputs = validateSubworkflowInputs(mapped.runInputs, childWorkflow.inputSchema);
+    if (signal?.aborted || run.canceled) throw new SubworkflowError('父运行已取消', 'SUBWORKFLOW_CANCELED');
+
+    childCountByRoot.set(rootRunId, childCount);
+    const child = startRun(childWorkflow.graph, {
+      triggerInput: mapped.triggerInput,
+      workflowName: childWorkflow.name,
+      workflowId: childWorkflow.id,
+      globalVariables: globals.globalVariables,
+      workflowVariables: variableDefinitionsToValues(childWorkflow.variables),
+      runInputs: childInputs,
+      source: 'subworkflow',
+      parentRunId: run.runId,
+      parentNodeId: node.id,
+      rootRunId,
+      depth: depth + 1,
+      callChain: [...chain, workflowId],
+      suppressNotifications: true,
+    });
+    if (!child?.runId || !child?.promise) throw new SubworkflowError('子工作流启动失败', 'SUBWORKFLOW_START_FAILED');
+    const children = childRunOf(run.runId);
+    const cancelChild = (reason) => { try { orch.cancel(child.runId, reason); } catch { /* 子运行可能已结束 */ } };
+    children.set(child.runId, cancelChild);
+    let onAbort;
+    let abortPromise;
+    let childSettled = false;
+    try {
+      if (signal?.aborted) {
+        cancelChild('父运行取消');
+        throw new SubworkflowError('父运行已取消', 'SUBWORKFLOW_CANCELED');
+      }
+      abortPromise = new Promise((_, reject) => {
+        onAbort = () => {
+          if (childSettled) return;
+          cancelChild('父运行取消');
+          // 父节点在 child 真正收尾前保持 running，避免父 run-end 早于 child 终态。
+          Promise.resolve(child.promise).then(
+            () => reject(new SubworkflowError('父运行已取消', 'SUBWORKFLOW_CANCELED')),
+            () => reject(new SubworkflowError('父运行已取消', 'SUBWORKFLOW_CANCELED')),
+          );
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+      });
+      const childRun = await Promise.race([child.promise, abortPromise]);
+      childSettled = true;
+      if (!childRun) throw new SubworkflowError('子工作流未返回运行结果', 'SUBWORKFLOW_START_FAILED');
+      if (signal?.aborted || run.canceled) throw new SubworkflowError('父运行已取消', 'SUBWORKFLOW_CANCELED');
+      const selected = selectWorkflowResult(childRun);
+      if (childRun.status === 'canceled') throw new SubworkflowError('子工作流已取消', 'SUBWORKFLOW_CANCELED');
+      if (childRun.status !== 'success') {
+        const error = new SubworkflowError(`子工作流运行失败：${childRun.error || childRun.status}`, 'SUBWORKFLOW_CHILD_FAILED');
+        error.childRunId = child.runId;
+        error.childStatus = childRun.status;
+        error.childSummary = selected.output;
+        throw error;
+      }
+      return {
+        output: selected.output,
+        structuredOutput: selected.structuredOutput,
+        childRunId: child.runId,
+        childWorkflowId: childWorkflow.id,
+        childStatus: childRun.status,
+        childSummary: selected.output.slice(0, 2000),
+        childArtifacts: selected.artifacts,
+      };
+    } finally {
+      if (onAbort) signal?.removeEventListener('abort', onAbort);
+      children.delete(child.runId);
+      if (!children.size) liveChildRuns.delete(run.runId);
+    }
   };
 
   // ---- agent 节点执行（升级版）----
@@ -1757,6 +1941,14 @@ export function apply(ctx, config) {
     }
     if (req.method === 'DELETE') {
       if (!readWf(id)) return json(res, 404, { error: '工作流不存在' });
+      const referencing = subworkflowReferencingWorkflows(id);
+      if (referencing.length) {
+        return json(res, 409, {
+          error: `有 ${referencing.length} 个工作流通过子工作流节点引用它：${referencing.map((r) => r.name || r.id).join('、')}，请先移除那些子工作流节点`,
+          code: 'subworkflow-referenced',
+          referencing,
+        });
+      }
       deleteWf(id);
       return json(res, 200, { ok: true });
     }
@@ -1884,7 +2076,7 @@ export function apply(ctx, config) {
     const body = await readBody(req);
     const entry = orch.runs.get(body?.runId);
     const ok = entry?.run?.workspaceRoot === currentStore().workspaceRoot
-      ? orch.cancel(body?.runId, '用户取消')
+      ? cancelRunTree(body?.runId, '用户取消')
       : false;
     json(res, 200, { ok, runId: body?.runId || null });
   } });
@@ -1930,7 +2122,7 @@ export function apply(ctx, config) {
     };
 
     const testAbort = new AbortController();
-    const testTimeoutMs = Number(node.data?.timeoutSec) > 0 ? Number(node.data.timeoutSec) * 1000 : 500 * 1000;
+    const testTimeoutMs = Number(node.data?.timeoutSec) > 0 ? Number(node.data.timeoutSec) * 1000 : 5 * 60 * 1000;
     let testTimedOut = false;
     const testTimer = setTimeout(() => { testTimedOut = true; testAbort.abort(); }, testTimeoutMs);
     req.once('aborted', () => testAbort.abort());
@@ -1982,6 +2174,7 @@ export function apply(ctx, config) {
     return { done, total, succeeded };
   };
   const resumableRun = (r, isLive) => !isLive
+    && !hasSubworkflowNode(r.graph)
     && ['error', 'canceled', 'interrupted'].includes(r.status)
     && Boolean(r.graph?.nodes?.length)
     && Object.values(r.nodeStates || {}).some((st) => st?.status === 'success')
@@ -1997,6 +2190,10 @@ export function apply(ctx, config) {
         workflowId: summary.workflowId ?? null,
         workflowName: summary.workflowName ?? null,
         source: summary.source ?? null,
+        parentRunId: summary.parentRunId ?? null,
+        parentNodeId: summary.parentNodeId ?? null,
+        rootRunId: summary.rootRunId ?? summary.runId ?? null,
+        depth: Number.isInteger(summary.depth) ? summary.depth : 0,
         startedAt: summary.startedAt ?? null,
         durationMs: summary.durationMs ?? null,
         live: isLive,
@@ -2023,6 +2220,10 @@ export function apply(ctx, config) {
         const isLive = liveIds.has(r.runId);
         return {
           ...summary,
+          parentRunId: summary.parentRunId ?? null,
+          parentNodeId: summary.parentNodeId ?? null,
+          rootRunId: summary.rootRunId ?? summary.runId ?? null,
+          depth: Number.isInteger(summary.depth) ? summary.depth : 0,
           outputs: summarizeOutputs(summary.outputs, structuredOutputs),
           nodeStates: summarizeNodeStates(summary.nodeStates),
           structuredOutputSummary: summarizeStructuredOutputs(structuredOutputs),
@@ -2040,7 +2241,28 @@ export function apply(ctx, config) {
     if (!id) return json(res, 400, { error: '缺少 id' });
     const r = readRun(id);
     if (!r) return json(res, 404, { error: '运行记录不存在' });
-    json(res, 200, { ...r, structuredOutputs: r.structuredOutputs || {} });
+    const childDocuments = new Map(currentDatabase().listChildRuns(id, 100).map((child) => [child.runId, child]));
+    for (const entry of orch.runs.values()) {
+      if (entry.run.workspaceRoot === currentStore().workspaceRoot && entry.run.parentRunId === id) {
+        childDocuments.set(entry.run.runId, entry.run);
+      }
+    }
+    const children = [...childDocuments.values()].slice(0, 100).map((child) => ({
+      runId: child.runId,
+      workflowId: child.workflowId ?? null,
+      workflowName: child.workflowName ?? null,
+      status: child.status,
+      source: child.source ?? null,
+      parentRunId: child.parentRunId ?? null,
+      parentNodeId: child.parentNodeId ?? null,
+      rootRunId: child.rootRunId ?? child.runId ?? null,
+      depth: Number.isInteger(child.depth) ? child.depth : 0,
+      startedAt: child.startedAt ?? null,
+      finishedAt: child.finishedAt ?? null,
+      durationMs: child.durationMs ?? null,
+      resumable: resumableRun(child, orch.runs.has(child.runId)),
+    }));
+    json(res, 200, { ...r, structuredOutputs: r.structuredOutputs || {}, children });
   } });
 
   register({ kind: 'exact', path: '/wf1/api/run-results', async handler(req, res) {
@@ -2182,6 +2404,9 @@ export function apply(ctx, config) {
     if (!prev) return json(res, 404, { error: '运行记录不存在' });
     const graph = body?.graph || prev.graph;
     if (!graph || !Array.isArray(graph.nodes)) return json(res, 400, { error: '该运行没有图快照，需传 graph' });
+    if (hasSubworkflowNode(graph)) {
+      return json(res, 409, { error: '含子工作流节点的运行首期不支持重放，避免重复执行子运行', code: 'subworkflow-replay-unsupported' });
+    }
     const triggerInput = body?.triggerInput !== undefined ? String(body.triggerInput) : String(prev.triggerInput || '');
     let runInputs; try { runInputs = assertSafeContextObject(body?.runInputs ?? prev.runInputs, 'runInputs'); } catch (error) { return routeError(res, error); }
     let globals; try { globals = globalContext(); } catch (error) { return routeError(res, error); }
@@ -2206,6 +2431,9 @@ export function apply(ctx, config) {
     if (!prev) return json(res, 404, { error: '运行记录不存在' });
     if (orch.runs.has(prev.runId)) return json(res, 409, { error: '该运行仍在进行中', code: 'run-live' });
     if (!prev.graph || !Array.isArray(prev.graph.nodes)) return json(res, 400, { error: '该运行没有图快照，无法续跑' });
+    if (hasSubworkflowNode(prev.graph)) {
+      return json(res, 409, { error: '含子工作流节点的运行首期不支持续跑，避免重复执行子运行', code: 'subworkflow-resume-unsupported' });
+    }
     const succeeded = Object.values(prev.nodeStates || {}).filter((st) => st?.status === 'success');
     if (!succeeded.length) return json(res, 400, { error: '该运行没有已完成的节点，无需续跑', code: 'nothing-to-resume' });
     const persistedWorkflow = prev.workflowId ? readWf(prev.workflowId) : null;

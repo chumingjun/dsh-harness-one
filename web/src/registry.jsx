@@ -12,6 +12,7 @@ const ICONS = {
   output: I('<path d="M12 15V3m0 0l-4 4m4-4l4 4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/>'),
   notify: I('<path d="M10.3 21a2 2 0 003.4 0"/><path d="M4 17h16c-1.5-1.6-2-3.2-2-7a6 6 0 00-12 0c0 3.8-.5 5.4-2 7z"/>'),
   note: I('<path d="M4 5h16M4 12h10M4 19h7"/>'),
+  subworkflow: I('<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5M16 13l2 2-2 2"/>'),
 };
 
 export const NODE_REGISTRY = [
@@ -87,6 +88,16 @@ export const NODE_REGISTRY = [
     preset: () => ({ label: '说明', text: '' }),
     summary: (d) => d.text || '（空白说明）',
     badges: () => [{ text: '不参与运行', cls: 'badge-note' }],
+  },
+  {
+    type: 'subworkflow',
+    icon: ICONS.subworkflow, label: '子工作流', color: 'var(--type-subworkflow, var(--accent))',
+    preset: () => ({ label: '子工作流', workflowId: '', inputMap: { triggerInput: '$upstream', runInputs: {} } }),
+    summary: (d) => d.workflowName || d.workflowId || '未选择工作流',
+    badges: (d) => [
+      { text: '同步调用' },
+      d.workflowId && { text: d.workflowId.slice(0, 12), cls: 'badge-model' },
+    ].filter(Boolean),
   },
 ];
 

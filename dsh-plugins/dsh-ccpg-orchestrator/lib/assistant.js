@@ -8,7 +8,7 @@
 import { lintGraph } from './engine.js';
 
 // ---- 已知节点类型（与前端 registry.jsx、引擎 nodeKinds 对齐）----
-const NODE_TYPES = ['input', 'agent', 'script', 'condition', 'http', 'output', 'notify', 'note'];
+const NODE_TYPES = ['input', 'agent', 'script', 'condition', 'http', 'output', 'notify', 'note', 'subworkflow'];
 
 // 服务端生成的节点 id：与前端 n_<type>_<ts><rand> 风格区分，AI 引用稳定
 export function newCanvasNodeId() {
@@ -171,6 +171,7 @@ export function summarizeGraphForAI(graph) {
       ...(n.type === 'condition' ? { include: n.data?.include, exclude: n.data?.exclude } : {}),
       ...(n.type === 'http' ? { url: n.data?.url, method: n.data?.method } : {}),
       ...(n.type === 'notify' ? { channel: n.data?.channel, mode: n.data?.mode, targetType: n.data?.channelConfig?.targetType } : {}),
+      ...(n.type === 'subworkflow' ? { workflowId: n.data?.workflowId, inputMap: n.data?.inputMap } : {}),
     })),
     edges: (graph.edges || []).map((e) => ({ from: e.source, to: e.target, ...(e.branch ? { branch: e.branch } : {}) })),
   };
@@ -190,7 +191,7 @@ export function canvasAssistantPersona() {
   return `你是「物业工作流画布」的 AI 助手，帮助用户创建/修改/测试节点式工作流。用户在聊天里提需求，你调用画布工具落图。
 
 ## 画布模型
-- 图 = 节点 + 有向边。节点类型 8 种：
+- 图 = 节点 + 有向边。节点类型 9 种：
   - input 输入：data.text 触发文本模板（支持 {{变量}}）
   - agent 智能体：data.prompt 系统提示词、data.inputTemplate 输入模板（{{上游节点名}} 引用上游输出）、data.tools 工具名数组（如 feishu_doc_read/web_fetch）、data.model/data.channel 可选
   - script 脚本：固定 JavaScript；data.inputs 为命名参数数组，每项用 expression 完整变量或 value JSON 常量；data.code 必须声明同步 function main(input, workspace) 并返回 JSON；workspace 仅可 list/read/write/remove 当前节点工作区；可选 data.outputSchema 和 data.scriptTimeoutMs（100-10000）
@@ -199,13 +200,8 @@ export function canvasAssistantPersona() {
   - output 输出：汇聚展示，可选 data.writeback 飞书写回
   - notify 消息通知：运行级观察器，可独立放置或在线路中透传；data.channel="feishu"、data.mode="terminal"|"each_node"；群聊使用 data.channelConfig.targetType="chat_id" + oc_ 开头的群 ID，私聊使用 targetType="open_id" + ou_ 开头的用户 open_id；data.channelConfig.credentialId 可选
   - note 注释：不执行，data.text 说明文字
+  - subworkflow 子工作流：按已保存工作流 data.workflowId 同步调用；data.inputMap.triggerInput/runInputs 显式映射输入；首期不支持异步等待、resume 或 retry，不嵌入子图
 - 节点 label 用中文短名（如「分类智能体」）；上下游引用靠 label（{{分类智能体}}）。
-
-## 对话契约
-- 目标不唯一时必须主动澄清：用户使用“那个节点”“上面的流程”等模糊指代，且画布存在多个候选项时，列出候选节点或流程让用户选择，禁止猜测后直接落图。
-- 危险操作必须先确认：删除节点、清空画布、覆盖已保存工作流，或对运行中的图做结构修改前，先复述将执行的操作及影响并等待用户明确确认。
-- 澄清问题必须带选项：使用可点选或可编号的候选项，避免开放式反问。例如“画布上有 2 个输出节点：①分流输出 ②工单输出，改哪个？”
-- 澄清不超过一轮：用户完成选择或确认后，直接执行对应操作，不再重复确认；若信息仍不足，说明缺少的具体字段。
 
 ## 操作规范
 1. 改图一律用 canvas_graph_patch（当前画布/草稿）或 workflow_patch（已保存工作流，按 id）；一批 ops 原子生效，出错整批拒绝会返回错误让你修正；不要试图整图重写。

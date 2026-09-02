@@ -28,7 +28,7 @@ const TOOL_LABELS = {
   feishu_doc_write: '写飞书文档',
 };
 
-const TYPE_TEXT = { input: '输入', agent: '智能体', output: '输出', condition: '条件', http: 'HTTP', script: '脚本', notify: '消息通知', note: '注释' };
+const TYPE_TEXT = { input: '输入', agent: '智能体', output: '输出', condition: '条件', http: 'HTTP', script: '脚本', notify: '消息通知', note: '注释', subworkflow: '子工作流' };
 
 /** 面板实时活动区的跳秒计时：每秒重渲染（仅运行中挂载） */
 function useElapsedTick(active) {
@@ -131,11 +131,15 @@ function ScriptParameterRow({ input, index, error, templateProps, onChange, onRe
   );
 }
 
-export function NodePanel({ node, onChange, onDelete, onTest, onClose, availableTools = [], skills = [], feishuEnabled = false, feishuCreds = [], notificationChannels = [], llmConfig = {}, upstreamNodes = [], upstreamPreviews = {}, graph, workflowId, runId, workflowVariables, inputSchema, runInputs, triggerInput, globalVariableEpoch, progress }) {
+export function NodePanel({ node, onChange, onDelete, onTest, onClose, availableTools = [], availableWorkflows = [], skills = [], feishuEnabled = false, feishuCreds = [], notificationChannels = [], llmConfig = {}, upstreamNodes = [], upstreamPreviews = {}, graph, workflowId, runId, workflowVariables, inputSchema, runInputs, triggerInput, globalVariableEpoch, progress }) {
   if (!node) return null;
   const [copied, setCopied] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [runInputsText, setRunInputsText] = useState(() => JSON.stringify(node.data?.inputMap?.runInputs ?? {}, null, 2));
   const d = node.data || {};
+  useEffect(() => {
+    setRunInputsText(JSON.stringify(d.inputMap?.runInputs ?? {}, null, 2));
+  }, [d.inputMap?.runInputs]);
   const nodeType = d.nodeType || node.type;
   const notifyTargetType = d.channelConfig?.targetType || 'chat_id';
   useElapsedTick(d.runStatus === 'running');
@@ -349,6 +353,51 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
                 <button className="btn btn-sm" onClick={() => removeAttachment(a)}>移除</button>
               </div>
             ))}
+          </Section>
+        </>
+      )}
+
+      {nodeType === 'subworkflow' && (
+        <>
+          <Section title="目标工作流" hint="按稳定 workflowId 调用，运行时同步等待">
+            <Field label="工作流">
+              <select value={d.workflowId || ''} onChange={(event) => {
+                const selected = availableWorkflows.find((item) => item.id === event.target.value);
+                set({ workflowId: event.target.value || undefined, workflowName: selected?.name || undefined });
+              }}>
+                <option value="">请选择已保存工作流</option>
+                {availableWorkflows.filter((item) => item.id !== workflowId).map((item) => (
+                  <option key={item.id} value={item.id}>{item.name || item.id} · {item.id}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="工作流 ID" hint="也可手填未出现在列表中的 ID">
+              <input value={d.workflowId || ''} onChange={(event) => set({ workflowId: event.target.value.trim() || undefined, workflowName: undefined })}
+                placeholder="wf_xxx" />
+            </Field>
+            {d.workflowId && <p className="panel-note">目标：{d.workflowName || d.workflowId}</p>}
+          </Section>
+          <Section title="输入映射" hint="纯引用保留 JSON 类型；模板字符串输出文本">
+            <TemplateEditor
+              {...templateProps}
+              label="触发输入"
+              hint="默认使用 $upstream"
+              rows={1}
+              value={typeof d.inputMap?.triggerInput === 'string' ? d.inputMap.triggerInput : '$upstream'}
+              onChange={(value) => set({ inputMap: { ...(d.inputMap || {}), triggerInput: value } })}
+              placeholder="$upstream"
+              compact
+              singleLine
+            />
+            <Field label="runInputs JSON" hint="例如 {&quot;ticket&quot;: {&quot;$ref&quot;: &quot;{{$upstream}}&quot;}}" wide>
+              <textarea rows={5} spellCheck="false" value={runInputsText}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setRunInputsText(value);
+                  try { set({ inputMap: { ...(d.inputMap || {}), runInputs: JSON.parse(value || '{}') } }); } catch { /* 保留编辑中的非法 JSON，运行前由后端校验 */ }
+                }}
+                placeholder={'{\n  "ticket": { "$ref": "$upstream" }\n}'} />
+            </Field>
           </Section>
         </>
       )}

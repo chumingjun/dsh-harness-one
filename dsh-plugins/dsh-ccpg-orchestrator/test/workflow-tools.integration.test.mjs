@@ -230,6 +230,31 @@ await test('workflow_delete：缺 confirm 拒绝；有关联定时任务/webhook
   assert.equal(gone.status, 404);
 });
 
+await test('workflow_delete：被子工作流节点引用时拒绝并列出引用方（工具与 HTTP 一致）', async () => {
+  // wf_t3 = 被引用的子工作流；wf_t4 = 含 subworkflow 节点的父工作流
+  const c3 = await call('POST', '/wf1/api/workflows', { id: 'wf_t3', name: '子目标', graph: wfGraph });
+  assert.equal(c3.status, 200);
+  const c4 = await call('POST', '/wf1/api/workflows', { id: 'wf_t4', name: '父流程', graph: {
+    nodes: [{ id: 'sub1', type: 'subworkflow', position: { x: 0, y: 0 }, data: { label: '子调用', workflowId: 'wf_t3' } }],
+    edges: [],
+  } });
+  assert.equal(c4.status, 200);
+  const guardedTool = await runTool('workflow_delete', { workflowId: 'wf_t3', confirm: true });
+  assert.match(guardedTool, /子工作流节点引用/);
+  assert.match(guardedTool, /父流程/);
+  const guardedHttp = await call('DELETE', '/wf1/api/workflows/detail?id=wf_t3');
+  assert.equal(guardedHttp.status, 409);
+  assert.equal(guardedHttp.body.code, 'subworkflow-referenced');
+  assert.deepEqual(guardedHttp.body.referencing, [{ id: 'wf_t4', name: '父流程' }]);
+  // 移除引用后两个入口都可删
+  const patch = await runTool('workflow_patch', { workflowId: 'wf_t4', ops: [{ op: 'deleteNode', id: 'sub1' }] });
+  assert.match(patch, /已应用/);
+  const done = maybeJson(await runTool('workflow_delete', { workflowId: 'wf_t3', confirm: true }));
+  assert.equal(done.deleted, true);
+  const del4 = await call('DELETE', '/wf1/api/workflows/detail?id=wf_t4');
+  assert.equal(del4.status, 200);
+});
+
 await test('workflow_open：未绑定画布的会话被拒；绑定后切换', async () => {
   // session-2 未绑定画布 → workflow_open 拒绝
   const def = registeredTools.get('workflow_open');

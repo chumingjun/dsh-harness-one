@@ -266,3 +266,13 @@
 .sch-radio span { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
 .sch-radio em { font-style: normal; color: var(--fg-faint); font-size: 11px; }
 .sch-form-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 10px; }
+
+/* 子工作流运行区（ResultPanel 概览）：子 run 行可点开详情 */
+.result-child-runs { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.result-child-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--fg-muted); }
+.result-child-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 6px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-raised); color: var(--fg); font-size: 12px; cursor: pointer; }
+.result-child-row:hover { border-color: var(--border-strong); }
+.result-child-row > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result-child-detail { margin-top: 8px; padding: 8px 10px; border: 1px dashed var(--border-strong); border-radius: 8px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
+.result-child-meta { color: var(--fg-faint); font-size: 11px; }
+.result-child-output { max-height: 220px; overflow: auto; margin: 0; padding: 8px; border-radius: 6px; background: var(--bg-raised); font-size: 11px; white-space: pre-wrap; word-break: break-word; }
