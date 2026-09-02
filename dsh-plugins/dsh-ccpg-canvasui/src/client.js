@@ -918,6 +918,9 @@ window.__ModuleLoader__.load({
     var SYSTEM_INFO_API = "/wf1/api/system/info";
     var SYSTEM_CHECK_API = "/wf1/api/system/check-update";
     var SYSTEM_UPGRADE_API = "/wf1/api/system/upgrade";
+    // agent 节点默认值（渠道/模型/思考级别）：与 llm-config 目录配套使用
+    var AGENT_DEFAULTS_API = "/wf1/api/agent-defaults";
+    var LLM_CONFIG_API = "/wf1/api/llm-config";
 
     function systemGet(api) {
       return fetch(api, { headers: { accept: "application/json" } }).then(function (r) {
@@ -1001,6 +1004,214 @@ window.__ModuleLoader__.load({
       if (entry.kind === "registry") return "聚合安装（npm " + (entry.spec || "") + "）";
       if (entry.gitRoot) return "聚合安装（源码 link）";
       return "聚合安装（离线包）";
+    }
+
+    // ================= Agent 节点默认值（渠道 / 模型 / 思考级别） =================
+    // 语义：节点自身没配置时的兜底，再往下才是 dsh 全局选择（与 runAgentNode 同一解析链）。
+
+    function modelOptionsFor(llmConfig, providerId) {
+      var providers = (llmConfig && llmConfig.providers) || [];
+      for (var i = 0; i < providers.length; i++) {
+        if (providers[i].id === providerId) return providers[i].models || [];
+      }
+      return [];
+    }
+
+    function effortOptionsFor(llmConfig, providerId, modelId) {
+      var models = modelOptionsFor(llmConfig, providerId);
+      for (var i = 0; i < models.length; i++) {
+        if (models[i].id === modelId) return (models[i].reasoning && models[i].reasoning.efforts) || [];
+      }
+      return [];
+    }
+
+    function providerNameOf(llmConfig, providerId) {
+      var providers = (llmConfig && llmConfig.providers) || [];
+      for (var i = 0; i < providers.length; i++) {
+        if (providers[i].id === providerId) return providers[i].name || providers[i].id;
+      }
+      return providerId || "";
+    }
+
+    var selectStyle = {
+      width: "100%", padding: "6px 8px", borderRadius: "8px", fontSize: "13px",
+      border: "1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,.3))",
+      background: "var(--dsw-alias-bg-primary, transparent)", color: "var(--dsw-alias-label-primary)",
+    };
+
+    function defaultsField(label, control) {
+      return react.createElement(
+        "div",
+        { key: label, style: { display: "flex", alignItems: "center", gap: "10px" } },
+        react.createElement(
+          "div",
+          { style: { width: "72px", flexShrink: 0, fontSize: "13px", color: "var(--dsw-alias-text-secondary)" } },
+          label,
+        ),
+        react.createElement("div", { style: { flex: 1 } }, control),
+      );
+    }
+
+    function AgentDefaultsCard() {
+      var a = s2(null), llmConfig = a[0], setLlmConfig = a[1];
+      var b = s2(null), saved = b[0], setSaved = b[1]; // GET/PUT 回包 {defaults, effective, dsh}
+      var c = s2({ provider: "", model: "", reasoningEffort: "" }), draft = c[0], setDraft = c[1];
+      var e = s2(false), saving = e[0], setSaving = e[1];
+      var f = s2(null), message = f[0], setMessage = f[1]; // {kind:'ok'|'err', text}
+
+      react.useEffect(function () {
+        var dead = false;
+        systemGet(LLM_CONFIG_API).then(function (d2) { if (!dead) setLlmConfig(d2); }).catch(function () {
+          if (!dead) setLlmConfig({ providers: [] });
+        });
+        systemGet(AGENT_DEFAULTS_API).then(function (d2) {
+          if (dead || !d2 || !d2.ok) return;
+          setSaved(d2);
+          setDraft(Object.assign({ provider: "", model: "", reasoningEffort: "" }, d2.defaults));
+        }).catch(function () {});
+        return function () { dead = true; };
+      }, []);
+
+      var providers = (llmConfig && llmConfig.providers) || [];
+      var dirty = !!saved && (
+        draft.provider !== saved.defaults.provider
+        || draft.model !== saved.defaults.model
+        || draft.reasoningEffort !== saved.defaults.reasoningEffort
+      );
+
+      var patchDraft = function (patch) {
+        setMessage(null);
+        setDraft(function (prev) { return Object.assign({}, prev, patch); });
+      };
+
+      var save = function () {
+        setSaving(true);
+        setMessage(null);
+        fetch(AGENT_DEFAULTS_API, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(draft),
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (r2) {
+            if (r2 && r2.ok) {
+              setSaved(r2);
+              setDraft(Object.assign({ provider: "", model: "", reasoningEffort: "" }, r2.defaults));
+              setMessage({ kind: "ok", text: "已保存，新发起的运行立即生效" });
+            } else {
+              setMessage({ kind: "err", text: (r2 && r2.error) || "保存失败" });
+            }
+          })
+          .catch(function () { setMessage({ kind: "err", text: "连接不上本地服务，请确认 dsh 正在运行" }); })
+          .finally(function () { setSaving(false); });
+      };
+
+      // —— 选项装配 ——
+      var dshProvider = saved && saved.dsh && saved.dsh.provider;
+      var providerOptions = [{ value: "", label: "跟随 dsh 默认" + (dshProvider ? "（" + providerNameOf(llmConfig, dshProvider) + "）" : "") }]
+        .concat(providers.map(function (p) { return { value: p.id, label: p.name || p.id }; }));
+
+      var models = modelOptionsFor(llmConfig, draft.provider);
+      var modelOptions = [{ value: "", label: draft.provider ? "渠道首选模型" : "跟随渠道" }]
+        .concat(models.map(function (m) { return { value: m.id, label: (m.name || m.id) + (m.vision ? " 👁" : "") }; }));
+      // 已保存的模型从目录下线时保留原值展示，避免静默改写用户配置
+      if (draft.model && !models.some(function (m) { return m.id === draft.model; })) {
+        modelOptions.push({ value: draft.model, label: draft.model + "（目录中不可用）" });
+      }
+
+      var efforts = effortOptionsFor(llmConfig, draft.provider, draft.model);
+      var effortOptions = [{ value: "", label: "跟随模型默认" }]
+        .concat(efforts.map(function (e2) { return { value: e2.id, label: e2.name || e2.id }; }));
+      if (draft.reasoningEffort && !efforts.some(function (e2) { return e2.id === draft.reasoningEffort; })) {
+        effortOptions.push({ value: draft.reasoningEffort, label: draft.reasoningEffort + "（模型不支持）" });
+      }
+
+      var effective = saved && saved.effective;
+      var effectiveText = !effective || !effective.provider
+        ? null
+        : "当前生效：" + providerNameOf(llmConfig, effective.provider)
+          + " / " + (effective.model || "渠道首选模型")
+          + (effective.reasoningEffort ? " / 思考级别 " + effective.reasoningEffort : "");
+
+      var mkSelect = function (value, options, disabled, onChange) {
+        return react.createElement(
+          "select",
+          {
+            style: selectStyle,
+            value: value,
+            disabled: disabled,
+            onChange: function (ev) { onChange(ev.target.value); },
+          },
+          options.map(function (o) {
+            return react.createElement("option", { key: o.value || "__default", value: o.value }, o.label);
+          }),
+        );
+      };
+
+      return react.createElement(
+        "div",
+        {
+          style: {
+            border: "1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,.25))",
+            borderRadius: "10px", padding: "12px 14px", display: "flex",
+            flexDirection: "column", gap: "10px",
+          },
+        },
+        react.createElement("div", { style: { fontSize: "13px", fontWeight: 600 } }, "Agent 节点默认值"),
+        react.createElement(
+          "div",
+          { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)", lineHeight: "18px" } },
+          "节点没有单独配置渠道/模型/思考级别时，按这里的默认值运行；都没有时跟随 dsh 全局选择。",
+        ),
+        !llmConfig
+          ? react.createElement("div", { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } }, "正在读取渠道目录…")
+          : !providers.length
+            ? react.createElement("div", { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } }, "还没有可用的模型渠道，请先在 dsh 设置里完成配置。")
+            : [
+                defaultsField("渠道", mkSelect(draft.provider, providerOptions, saving, function (v) {
+                  patchDraft({ provider: v, model: "", reasoningEffort: "" });
+                })),
+                defaultsField("模型", mkSelect(draft.model, modelOptions, saving || !draft.provider, function (v) {
+                  patchDraft({ model: v, reasoningEffort: "" });
+                })),
+                defaultsField("思考级别", mkSelect(
+                  draft.reasoningEffort,
+                  effortOptions,
+                  saving || !draft.model || !efforts.length,
+                  function (v) { patchDraft({ reasoningEffort: v }); },
+                )),
+              ],
+        react.createElement(
+          "div",
+          { style: { display: "flex", alignItems: "center", gap: "10px", minHeight: "22px" } },
+          providers.length
+            ? react.createElement(
+                "button",
+                {
+                  style: {
+                    cursor: dirty && !saving ? "pointer" : "default",
+                    borderRadius: "8px", padding: "5px 14px", fontSize: "13px",
+                    border: "1px solid transparent",
+                    background: "var(--dsw-alias-accent-bg, #4F46E5)", color: "#fff",
+                    opacity: dirty && !saving ? 1 : 0.45,
+                  },
+                  disabled: !dirty || saving,
+                  onClick: save,
+                },
+                saving ? "保存中…" : "保存",
+              )
+            : null,
+          message
+            ? react.createElement(
+                "span",
+                { style: { fontSize: "12px", color: message.kind === "ok" ? "rgba(52,211,153,1)" : "rgba(248,113,113,1)" } },
+                (message.kind === "ok" ? "✓ " : "✗ ") + message.text,
+              )
+            : effectiveText
+              ? react.createElement("span", { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } }, effectiveText)
+              : null,
+        ),
+      );
     }
 
     function WorkflowOneSection() {
@@ -1091,6 +1302,9 @@ window.__ModuleLoader__.load({
       return react.createElement(
         "div",
         { style: { display: "flex", flexDirection: "column", gap: "14px", maxWidth: "560px" } },
+
+        // —— Agent 节点默认值：渠道 / 模型 / 思考级别 ——
+        react.createElement(AgentDefaultsCard),
 
         // —— 第一眼：当前版本大字 + 状态一句话 ——
         react.createElement(
@@ -1596,6 +1810,9 @@ window.__ModuleLoader__.load({
       graphThumbnail: graphThumbnail,
       WorkflowRunCard: WorkflowRunCard,
       GraphPatchCard: GraphPatchCard,
+      modelOptionsFor: modelOptionsFor,
+      effortOptionsFor: effortOptionsFor,
+      providerNameOf: providerNameOf,
     };
 
     return exports;
