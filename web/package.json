@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "test": "npm run test:variables && npm run test:results && npm run test:scripts && npm run test:ui",
-    "test:variables": "node src/variables.test.mjs && node src/global-variables.test.mjs && node src/json-response.test.mjs && node src/api-base.test.mjs && node src/trial-request.test.mjs && node src/variable-scope.test.mjs && node src/run-event-routing.test.mjs && node src/workflow-serialization.test.mjs && node src/doc-wall-data.test.mjs",
+    "test:variables": "node src/variables.test.mjs && node src/global-variables.test.mjs && node src/json-response.test.mjs && node src/api-base.test.mjs && node src/trial-request.test.mjs && node src/variable-scope.test.mjs && node src/run-event-routing.test.mjs && node src/workflow-serialization.test.mjs && node src/doc-wall-data.test.mjs && node src/live-run-adopt.test.mjs",
     "test:results": "node src/result-adapter.test.mjs",
     "test:scripts": "node src/script-parameters.test.mjs",
     "test:ui": "node src/toolbar-responsive.test.mjs && node src/resume-workflow.test.mjs && node src/notify-node.test.mjs && node src/workflow-transfer-ui.test.mjs && node src/run-switcher.test.mjs && node src/schedule-center.test.mjs && node src/node-detail-polling.test.mjs"
@@ -20,6 +20,18 @@
     "@codemirror/language": "^6.12.4",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.9",
+    "@tiptap/extension-image": "2.27.2",
+    "@tiptap/extension-link": "2.27.2",
+    "@tiptap/extension-table": "2.27.2",
+    "@tiptap/extension-table-cell": "2.27.2",
+    "@tiptap/extension-table-header": "2.27.2",
+    "@tiptap/extension-table-row": "2.27.2",
+    "@tiptap/extension-task-item": "2.27.2",
+    "@tiptap/extension-task-list": "2.27.2",
+    "@tiptap/extension-text-align": "2.27.2",
+    "@tiptap/pm": "2.27.2",
+    "@tiptap/react": "2.27.2",
+    "@tiptap/starter-kit": "2.27.2",
     "@xyflow/react": "^12.3.0",
     "dsh-ccpg-document-preview": "file:../dsh-plugins/dsh-ccpg-document-preview",
     "lucide-react": "^1.32.0",
@@ -28,7 +40,8 @@
     "react-markdown": "^10.1.0",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "tiptap-markdown": "0.8.10"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",

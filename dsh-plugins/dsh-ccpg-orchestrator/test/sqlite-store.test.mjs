@@ -89,7 +89,7 @@ test('migrates valid JSON, reports bad files, and becomes the only write source'
     store.close();
     store.close();
     const settings = new DatabaseSync(databaseFile);
-    assert.equal(settings.prepare('PRAGMA user_version').get().user_version, 2);
+    assert.equal(settings.prepare('PRAGMA user_version').get().user_version, 3);
     assert.equal(settings.prepare('PRAGMA auto_vacuum').get().auto_vacuum, 2);
     settings.close();
 
