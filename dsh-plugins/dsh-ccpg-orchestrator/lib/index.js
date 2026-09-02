@@ -1853,7 +1853,7 @@ export function apply(ctx, config) {
     };
 
     const testAbort = new AbortController();
-    const testTimeoutMs = Number(node.data?.timeoutSec) > 0 ? Number(node.data.timeoutSec) * 1000 : 5 * 60 * 1000;
+    const testTimeoutMs = Number(node.data?.timeoutSec) > 0 ? Number(node.data.timeoutSec) * 1000 : 500 * 1000;
     let testTimedOut = false;
     const testTimer = setTimeout(() => { testTimedOut = true; testAbort.abort(); }, testTimeoutMs);
     req.once('aborted', () => testAbort.abort());

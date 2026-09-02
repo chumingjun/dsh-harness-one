@@ -764,7 +764,7 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
               <Field label="超时（秒）">
                 <input type="number" min="5" max="3600" value={d.timeoutSec ?? ''}
                   onChange={(e) => set({ timeoutSec: e.target.value === '' ? undefined : Number(e.target.value) })}
-                  placeholder="300" />
+                  placeholder="500" />
               </Field>
             )}
           </div>
