@@ -196,7 +196,7 @@ assert.equal(artifactPreviewKind('archive.zip'), null);
 assert.equal(artifactPreviewKind('unsafe.svg'), null);
 
 const state = deriveRunViewState(fallback, 'bad-tab');
-assert.equal(state.activeTab, 'result');
+assert.equal(state.activeTab, 'process');
 assert.deepEqual(state.counts, { result: 2, process: 3, issues: 0 });
 assert.equal(state.canExport, true);
 assert.equal(state.isEmpty, false);
