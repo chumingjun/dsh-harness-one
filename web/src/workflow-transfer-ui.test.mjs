@@ -9,5 +9,9 @@ assert.match(source, /if \(!res\.ok\)/);
 assert.match(source, /URL\.createObjectURL\(await res\.blob\(\)\)/);
 assert.match(source, /await onOpen\?\.\(out\)/);
 assert.match(styles, /@media \(max-width: 520px\)[\s\S]*\.wf-list-head \{ flex-wrap: wrap; \}[\s\S]*\.wf-list-head \.btn \{ white-space: nowrap; \}/);
+assert.match(source, /onStartRun/);
+assert.match(source, /onCancelRun/);
+assert.match(source, /wf-live-run/);
+assert.match(source, /RunWorkflowModal/);
 
 console.log('workflow transfer UI tests: passed');

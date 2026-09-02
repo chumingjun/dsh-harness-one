@@ -178,6 +178,8 @@ export class Orchestrator {
 
     this.emit('run-start', {
       runId: id, nodeIds: graph.nodes.map((n) => n.id),
+      // 业务节点数（排除 notify）：列表/切换器进度口径与 runProgressOf 一致
+      nodeCount: graph.nodes.filter((n) => n.type !== 'notify').length,
       workflowId: run.workflowId, workflowName: run.workflowName,
       canvasId: run.canvasId, source: run.source,
     });
