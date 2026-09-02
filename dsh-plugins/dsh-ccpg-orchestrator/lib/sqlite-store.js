@@ -252,6 +252,7 @@ export class WorkflowSqliteStore {
       getRun: this.db.prepare('SELECT updated_at, document_json FROM runs WHERE run_id = ?'),
       listRuns: this.db.prepare('SELECT document_json FROM runs ORDER BY started_at DESC, run_id DESC LIMIT ?'),
       listRunsForWorkflow: this.db.prepare('SELECT document_json FROM runs WHERE workflow_id = ? ORDER BY started_at DESC, run_id DESC LIMIT ?'),
+      listChildRuns: this.db.prepare("SELECT document_json FROM runs WHERE json_extract(document_json, '$.parentRunId') = ? ORDER BY started_at ASC, run_id ASC LIMIT ?"),
       putRun: this.db.prepare(`
         INSERT INTO runs (run_id, workflow_id, status, started_at, finished_at, updated_at, document_json)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -348,6 +349,13 @@ export class WorkflowSqliteStore {
 
   putRun(value) {
     return this.#runRunStatement(this.statements.putRun, value);
+  }
+
+  listChildRuns(parentRunId, limit = 100) {
+    if (!parentRunId) return [];
+    const count = Math.max(0, Math.floor(Number(limit) || 0));
+    return this.statements.listChildRuns.all(String(parentRunId), count)
+      .map((row) => parseDocument(row, normalizeRunDocument));
   }
 
   pruneRuns(keep, { keepRevisionRuns = [] } = {}) {

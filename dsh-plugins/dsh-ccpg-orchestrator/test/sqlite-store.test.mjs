@@ -149,6 +149,26 @@ test('filters runs by workflowId and keeps the unfiltered default', () => {
   }
 });
 
+test('lists child runs by parent in start order and normalizes documents', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wf1-sqlite-children-'));
+  try {
+    const store = new WorkflowSqliteStore({
+      databaseFile: join(root, 'workflow-one.sqlite'),
+      workflowsDir: join(root, 'workflows'),
+      runsDir: join(root, 'runs'),
+    });
+    store.putRun({ ...run('child_b', '2026-08-02T00:00:00.000Z', 'success', 'wf_child'), parentRunId: 'parent_1', parentNodeId: 'sub_b', rootRunId: 'parent_1', depth: 1, source: 'subworkflow' });
+    store.putRun({ ...run('unrelated', '2026-08-01T00:00:00.000Z'), parentRunId: 'other_parent' });
+    store.putRun({ ...run('child_a', '2026-08-01T00:00:00.000Z', 'error', 'wf_child'), parentRunId: 'parent_1', parentNodeId: 'sub_a', rootRunId: 'parent_1', depth: 1, source: 'subworkflow' });
+    assert.deepEqual(store.listChildRuns('parent_1').map((value) => value.runId), ['child_a', 'child_b']);
+    assert.equal(store.listChildRuns('parent_1')[0].parentNodeId, 'sub_a');
+    assert.deepEqual(store.listChildRuns('missing'), []);
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('rolls back schema migration when the database is incompatible', () => {
   const root = mkdtempSync(join(tmpdir(), 'wf1-sqlite-rollback-'));
   try {

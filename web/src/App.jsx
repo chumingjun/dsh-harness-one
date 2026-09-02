@@ -93,6 +93,7 @@ export default function App() {
   const terminalNodesByRunRef = useRef(new Map());
   const [canvasMenu, setCanvasMenu] = useState(null); // 双击画布 { x, y } 弹加节点菜单
   const [catalog, setCatalog] = useState({ tools: [], feishuEnabled: false, notificationChannels: [] });
+  const [availableWorkflows, setAvailableWorkflows] = useState([]);
   const [skills, setSkills] = useState([]);
   const [llmConfig, setLLMConfig] = useState({});
   const [runtime, setRuntime] = useState(null);
@@ -304,6 +305,8 @@ export default function App() {
       if (runtimeData) setRuntime(runtimeData.runtime || { available: false });
       if (credsData) setFeishuCreds(credsData.credentials || []);
       if (larkData) setLarkStatus(larkData.status || null);
+      const workflowsData = await j('/workflows');
+      if (workflowsData) setAvailableWorkflows(workflowsData.workflows || []);
       const latest = runsData?.runs?.[0];
       // 初次恢复也要按工作流对齐：草稿图带着 workflowId 时优先取该工作流的最近运行
       const draftWorkflowId = graphData?.workflowId;
@@ -1779,6 +1782,7 @@ export default function App() {
             onTest={openTestNode}
             onClose={() => setSelectedId(null)}
             availableTools={catalog.tools}
+            availableWorkflows={availableWorkflows}
             skills={skills}
             feishuEnabled={catalog.feishuEnabled}
             feishuCreds={feishuCreds}

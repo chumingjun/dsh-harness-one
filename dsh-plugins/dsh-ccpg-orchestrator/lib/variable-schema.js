@@ -26,6 +26,12 @@ const META_SCHEMA = objectSchema({
   usage: objectSchema({}, 'Token 用量'), writeback: field('any', '输出写回结果'),
   notification: field('any', '消息通知发送结果'),
   toleratedError: field('string', '容错继续的错误'),
+  errorCode: field('string', '稳定错误码'),
+  childRunId: field('string', '子运行 ID'),
+  childWorkflowId: field('string', '子工作流 ID'),
+  childStatus: field('string', '子运行状态'),
+  childSummary: field('string', '子运行摘要'),
+  childArtifacts: arraySchema(field('string', '子运行产物引用'), '子运行产物'),
 });
 
 function inferType(value, fallback = 'any') {

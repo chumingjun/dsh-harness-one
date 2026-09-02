@@ -653,4 +653,144 @@ await test('lint 检出 canonical 非直接上游与无效 agent schema', () => 
   assert.match(messages, /Schema 无效/);
 });
 
+await test('空图运行能正常收尾', async () => {
+  const { orch } = makeOrch();
+  const run = await orch.run({ nodes: [], edges: [] }, { runId: 'run_empty' });
+  assert.equal(run.status, 'success');
+  assert.deepEqual(run.nodeStates, {});
+  assert.equal(orch.currentRunIds().includes('run_empty'), false);
+});
+
+await test('取消排队节点不会重复扣减 remaining', async () => {
+  let cancelOnQueued = false;
+  const { orch, events } = makeOrch(async (node, _run, _s, ctl) => {
+    if (node.id === 'slow') {
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 2000);
+        ctl.signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+      });
+      throw new Error('运行已取消');
+    }
+    return { output: node.id };
+  });
+  const cancelListener = (event, payload) => {
+    if (!cancelOnQueued && event === 'node-status' && payload.status === 'queued' && payload.nodeId === 'slow') {
+      cancelOnQueued = true;
+      orch.cancel(payload.runId, '队列取消');
+    }
+  };
+  const originalEmit = orch.emit.bind(orch);
+  orch.emit = (event, payload) => {
+    originalEmit(event, payload);
+    cancelListener(event, payload);
+  };
+  const run = await orch.run({
+    nodes: [
+      { id: 'slow', type: 'agent', data: { label: 'slow' } },
+      { id: 'after', type: 'agent', data: { label: 'after' } },
+    ],
+    edges: [{ source: 'slow', target: 'after' }],
+  }, { runId: 'run_queue_cancel' });
+  assert.equal(run.status, 'canceled');
+  assert.equal(run.nodeStates.slow.status, 'canceled');
+  assert.equal(run.nodeStates.after.status, 'canceled');
+  const terminal = events.filter(([event, payload]) => event === 'node-status'
+    && payload.runId === 'run_queue_cancel'
+    && ['success', 'error', 'canceled', 'skipped'].includes(payload.status));
+  assert.equal(new Set(terminal.map(([, payload]) => payload.nodeId)).size, 2);
+});
+
+await test('重试退避可被取消且仍能收尾', async () => {
+  let calls = 0;
+  const { orch } = makeOrch(async () => {
+    calls += 1;
+    throw new Error('瞬时失败');
+  });
+  const running = orch.run({
+    nodes: [{ id: 'retry', type: 'agent', data: { retryCount: 5 } }],
+    edges: [],
+  }, { runId: 'run_retry_cancel' });
+  await delay(30);
+  orch.cancel('run_retry_cancel', '退避期间取消');
+  const run = await running;
+  assert.equal(run.status, 'canceled');
+  assert.equal(run.nodeStates.retry.status, 'canceled');
+  assert.equal(calls, 1);
+});
+
+await test('subworkflow runner waits for child and maps cancellation to parent', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const { orch } = makeOrch();
+  orch.runChildWorkflow = async ({ signal }) => {
+    await new Promise((resolve, reject) => {
+      const onAbort = () => reject(Object.assign(new Error('父运行已取消'), { code: 'SUBWORKFLOW_CANCELED' }));
+      signal.addEventListener('abort', onAbort, { once: true });
+      gate.then(() => { signal.removeEventListener('abort', onAbort); resolve(); });
+    });
+    return { output: 'child output', childRunId: 'child_1', childStatus: 'success' };
+  };
+  const running = orch.run({ nodes: [{ id: 'sub', type: 'subworkflow', data: { workflowId: 'wf_child' } }], edges: [] }, { runId: 'run_parent_child' });
+  await delay(20);
+  assert.equal(orch.runs.get('run_parent_child')?.run.nodeStates.sub.status, 'running');
+  orch.cancel('run_parent_child', '用户取消');
+  release();
+  const run = await running;
+  assert.equal(run.status, 'canceled');
+  assert.equal(run.nodeStates.sub.status, 'canceled');
+  assert.equal(run.nodeStates.sub.errorCode, 'SUBWORKFLOW_CANCELED');
+});
+
+await test('subworkflow 节点不重复执行 retry', async () => {
+  let calls = 0;
+  const { orch } = makeOrch();
+  orch.runChildWorkflow = async () => {
+    calls += 1;
+    throw new Error('child failed');
+  };
+  const run = await orch.run({
+    nodes: [{ id: 'sub', type: 'subworkflow', data: { workflowId: 'wf_child', retryCount: 5 } }],
+    edges: [],
+  }, { runId: 'run_subworkflow_no_retry' });
+  assert.equal(run.status, 'error');
+  assert.equal(run.nodeStates.sub.status, 'error');
+  assert.equal(calls, 1);
+});
+
+await test('lint：subworkflow 模板字段与目标工作流解析可检出', () => {
+  const graph = {
+    nodes: [
+      { id: 'up', type: 'agent', data: { label: '上游', prompt: 'x' } },
+      { id: 'sub', type: 'subworkflow', data: { label: '子', workflowId: 'wf_child', inputMap: { triggerInput: '{{node["ghost"].text}}' } } },
+    ],
+    edges: [{ id: 'e1', source: 'up', target: 'sub' }],
+  };
+  const bad = lintGraph(graph);
+  assert.equal(bad.ok, false);
+  assert.ok(bad.issues.some((issue) => issue.nodeId === 'sub' && /变量引用没有该节点/.test(issue.message)), '坏模板引用应报 error');
+
+  const okGraph = {
+    nodes: [
+      { id: 'up', type: 'agent', data: { label: '上游', prompt: 'x' } },
+      { id: 'sub', type: 'subworkflow', data: { label: '子', workflowId: 'wf_child', inputMap: { triggerInput: '{{上游}}', runInputs: { ticket: { $ref: 'node["up"].data' } } } } },
+    ],
+    edges: [{ id: 'e1', source: 'up', target: 'sub' }],
+  };
+  const ok = lintGraph(okGraph);
+  assert.equal(ok.issues.filter((issue) => issue.nodeId === 'sub' && issue.level === 'error').length, 0, `合法引用不应报错：${JSON.stringify(ok.issues)}`);
+
+  // 宿主注入 resolveTargetWorkflow 后：目标不存在 / 输入字段名错配都在 lint 检出
+  const resolveTargetWorkflow = (id) => (id === 'wf_child' ? { id, inputSchema: { fields: [{ key: 'ticket' }] } } : null);
+  const missing = lintGraph({
+    nodes: [{ id: 'sub', type: 'subworkflow', data: { label: '子', workflowId: 'wf_gone' } }],
+    edges: [],
+  }, { resolveTargetWorkflow });
+  assert.ok(missing.issues.some((issue) => issue.code === 'SUBWORKFLOW_NOT_FOUND'));
+  const unknownField = lintGraph({
+    nodes: [{ id: 'sub', type: 'subworkflow', data: { label: '子', workflowId: 'wf_child', inputMap: { runInputs: { nope: 'x' } } } }],
+    edges: [],
+  }, { resolveTargetWorkflow });
+  assert.ok(unknownField.issues.some((issue) => issue.code === 'SUBWORKFLOW_INPUT_UNKNOWN'));
+});
+
 console.log(process.exitCode ? `${passed} tests passed with failures` : `ALL PASS (${passed})`);

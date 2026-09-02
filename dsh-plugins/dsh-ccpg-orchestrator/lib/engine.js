@@ -7,6 +7,7 @@ import { lintScriptInputs, resolveScriptInputs } from './typed-expression.js';
 import { getScriptOutputSchema, validateScriptOutput } from './script-schema.js';
 import { normalizeScriptTimeout, SCRIPT_LIMITS } from './script-runner.js';
 import { validateNotificationNodeData } from './notifications.js';
+import { validateSubworkflowNode, subworkflowTemplateFields } from './subworkflow.js';
 // 相对 v1 的升级：
 //   - 多运行实例并存（Map 而非单 this.s）
 //   - 并发上限（就绪节点排队，槽位释放依次启动）
@@ -18,10 +19,30 @@ import { validateNotificationNodeData } from './notifications.js';
 // 计数约定：每个节点的完成只在其自身 _onNodeDone 尾部扣一次 s.remaining；
 // 跳过/取消的节点在标记处扣，且不再递归重复扣。
 
-export const NODE_TIMEOUT_MS = 500 * 1000;
+export const NODE_TIMEOUT_MS = 5 * 60 * 1000;
 const CONDITION_VERDICT_RE = /^条件判定：(true|false)/;
 
 let runSeq = 0;
+
+// 取消传播用的可中断等待：abort 时立即 reject，而不是等满时长。
+function waitWithAbort(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('运行已取消'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      reject(new Error('运行已取消'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 // ---------------- 节点类型注册表（扩展点） ----------------
 // 一种节点 = 一个 NodeKind 对象：
@@ -31,6 +52,7 @@ let runSeq = 0;
 //   kind.edgeTaken       可选。(s, node, edge) => boolean，控制分支边是否放行
 //   kind.lint            可选。(node, lintCtx) => issues[]（{level:'error'|'warn', message}）
 //   kind.wantsSink       可选。true = 成功后调用 engine.outputSink（输出写回等后处理）
+//   kind.templateLintFields 可选。(node) => string[]，额外纳入模板静态检查的字段（默认只查 text/inputTemplate/url/headers/body）
 // 新增节点类型：export const myKind = {...}; registerKind(myKind) —— 引擎/
 // 超时/取消/失败传播/历史持久化全部自动获得。
 export const nodeKinds = new Map();
@@ -69,6 +91,8 @@ export class Orchestrator {
     this.nodeRunner = null; // index.js 注入：async (node, run, s, {signal, emit}) => ({output, ...extra})
     this.scriptRunner = null; // index.js 注入：async ({node,input,signal}) => ({value,artifacts,...})
     this.outputSink = null; // index.js 注入：async (node, output, {signal}) => ({output, ...extra}) 输出节点后处理（飞书写回等）
+    this.runChildWorkflow = null; // index.js 注入：同步启动并等待子工作流
+    this.onCancel = null; // index.js 注入：父运行取消时传播到子运行
   }
 
   emit(event, payload) {
@@ -78,6 +102,7 @@ export class Orchestrator {
   async run(graph, {
     triggerInput = '', runId, workflowName, workflowId, canvasId, source, workspaceRoot, revises,
     globalVariables = {}, workflowVariables = {}, runInputs = {},
+    parentRunId = null, parentNodeId = null, rootRunId = null, depth = 0, callChain = [],
     resume = null,
   } = {}) {
     const id = runId || `run_${Date.now().toString(36)}_${++runSeq}`;
@@ -86,6 +111,9 @@ export class Orchestrator {
       runId: id, startedAt: new Date().toISOString(), status: 'running',
       triggerInput, runInputs: safeRunInputs, workflowName: workflowName || null, workflowId: workflowId || null,
       canvasId: canvasId || null, source: source || null, workspaceRoot: workspaceRoot || null,
+      parentRunId: parentRunId || null, parentNodeId: parentNodeId || null,
+      rootRunId: rootRunId || id, depth: Number.isInteger(depth) && depth >= 0 ? depth : 0,
+      callChain: Array.isArray(callChain) ? [...callChain] : [],
       revises: revises || null,
       schemaVersion: RUN_SCHEMA_VERSION,
       nodeStates: {}, outputs: {}, structuredOutputs: {}, nodeOrder: [],
@@ -102,6 +130,7 @@ export class Orchestrator {
       activeCount: 0, concurrency: 4,
       finished: false, startedAtMs: Date.now(),
       nodeAbort: new Map(),
+      cancelAbort: new AbortController(),
     };
     for (const n of graph.nodes) {
       s.incoming.set(n.id, []);
@@ -182,16 +211,25 @@ export class Orchestrator {
       nodeCount: graph.nodes.filter((n) => n.type !== 'notify').length,
       workflowId: run.workflowId, workflowName: run.workflowName,
       canvasId: run.canvasId, source: run.source,
+      ...(run.parentRunId ? { parentRunId: run.parentRunId } : {}),
+      ...(run.parentNodeId ? { parentNodeId: run.parentNodeId } : {}),
+      ...(run.rootRunId ? { rootRunId: run.rootRunId } : {}),
+      ...(run.depth != null ? { depth: run.depth } : {}),
     });
     s._done = new Promise((resolve) => { s.resolve = resolve; });
-    this._pump(s);
+    // 空图或续跑种子已覆盖全部节点时，不会经过 _onNodeDone，必须主动收尾。
+    this._maybeFinish(s);
+    if (!s.finished) this._pump(s);
     await s._done;
     run.durationMs = Date.now() - s.startedAtMs;
-    run.status = run.canceled ? 'canceled'
+    run.status = run.canceled || Object.values(run.nodeStates).some((st) => st.status === 'canceled') ? 'canceled'
       : Object.values(run.nodeStates).some((st) => st.status === 'error') ? 'error' : 'success';
     this.emit('run-end', {
       runId: id, status: run.status, durationMs: run.durationMs,
       workflowId: run.workflowId, canvasId: run.canvasId, source: run.source,
+      ...(run.parentRunId ? { parentRunId: run.parentRunId } : {}),
+      ...(run.parentNodeId ? { parentNodeId: run.parentNodeId } : {}),
+      ...(run.rootRunId ? { rootRunId: run.rootRunId } : {}),
     });
     return run;
   }
@@ -219,6 +257,8 @@ export class Orchestrator {
     for (const ac of s.nodeAbort.values()) {
       try { ac.abort(); } catch { /* 已中止 */ }
     }
+    try { s.cancelAbort.abort(); } catch { /* 已中止 */ }
+    try { this.onCancel?.(run.runId, reason); } catch { /* 子运行取消失败不阻塞父 */ }
     this._maybeFinish(s);
   }
 
@@ -247,9 +287,16 @@ export class Orchestrator {
     }
   }
 
-  async _executeNode(s, nodeId) {
+  async _executeNode(s, nodeId, { releaseSlot = true } = {}) {
     const node = s.nodes.get(nodeId);
     const { run } = s;
+    const kind = getKind(node.type);
+    // queued 事件的订阅方可能同步触发 cancel；此时不要再启动已取消的节点。
+    if (s.finished || run.nodeStates[nodeId]?.status === 'canceled') {
+      if (releaseSlot) s.activeCount -= 1;
+      this._maybeFinish(s);
+      return;
+    }
     if (node.__retryLeft === undefined) node.__retryLeft = this._retryTotal(node);
     const ac = new AbortController();
     s.nodeAbort.set(nodeId, ac);
@@ -264,7 +311,6 @@ export class Orchestrator {
       let output = '';
       let extra = {};
       if (run.canceled) throw new Error('运行已取消');
-      const kind = getKind(node.type);
       if (kind?.passThrough) {
         // 注释等纯标注节点：不执行，输出 = 上游拼接，立即按成功收尾
         const ctx0 = this.templateCtx(node, s);
@@ -281,6 +327,7 @@ export class Orchestrator {
         emit: this.emit.bind(this), runId: run.runId,
         workflowId: run.workflowId,
         render: (tpl, options = {}) => this.renderTemplate(tpl || '', { ...this.templateCtx(node, s), ...options }),
+        runChildWorkflow: this.runChildWorkflow,
       };
       let result;
       if (!kind) {
@@ -326,7 +373,7 @@ export class Orchestrator {
     } catch (err) {
       // 重试：节点声明 retryCount 时，非取消类失败按指数退避重试（重试重新计时超时）
       const canceled0 = run.canceled || String(err?.message || '') === '运行已取消';
-      if (!canceled0 && !s.run.canceled && this._retryLeft(node) > 0) {
+      if (!canceled0 && !s.run.canceled && kind?.retryable !== false && this._retryLeft(node) > 0) {
         node.__retryLeft -= 1;
         const attempt = this._retryTotal(node) - node.__retryLeft;
         const delay = Math.min(8000, 500 * 2 ** (attempt - 1));
@@ -334,12 +381,20 @@ export class Orchestrator {
           runId: run.runId, nodeId, status: 'running', retrying: true, attempt: attempt + 1,
           error: `${String(err.message || err)}（${delay}ms 后重试）`,
         });
-        await new Promise((r) => setTimeout(r, delay));
-        clearTimeout(timer);
-        s.nodeAbort.delete(nodeId);
-        return this._executeNode(s, nodeId);
+        let retryCanceled = false;
+        try {
+          await waitWithAbort(delay, ac.signal);
+        } catch (retryError) {
+          if (!run.canceled && !ac.signal.aborted) throw retryError;
+          retryCanceled = true;
+        }
+        if (!retryCanceled) {
+          clearTimeout(timer);
+          s.nodeAbort.delete(nodeId);
+          return this._executeNode(s, nodeId, { releaseSlot: false });
+        }
       }
-      const canceled = canceled0
+      const canceled = run.canceled || canceled0
         || (timedOut === false && ac.signal.aborted === true && String(err?.message || '').includes('取消'))
         || String(err?.message || '') === '运行已取消';
       const msg = timedOut ? `节点超时（${Math.round(timeoutMs / 1000)}s）` : String(err.message || err);
@@ -353,13 +408,22 @@ export class Orchestrator {
         return this._onNodeDone(s, node.id, false);
       }
       const errDetails = err?.nodeDetails && typeof err.nodeDetails === 'object' ? err.nodeDetails : {};
+      // 子工作流失败详情：稳定错误码 + 子运行定位，详情弹窗与变量树都消费
+      const childDetails = {};
+      if (err?.code) childDetails.errorCode = err.code;
+      if (err?.childRunId) childDetails.childRunId = err.childRunId;
+      if (err?.childStatus) childDetails.childStatus = err.childStatus;
+      if (err?.childSummary) childDetails.childSummary = String(err.childSummary).slice(0, 2000);
       run.nodeStates[node.id] = {
-        ...errDetails,
+        ...errDetails, ...childDetails,
         status: canceled ? 'canceled' : 'error', error: canceled ? '运行已取消' : msg,
         durationMs: Date.now() - t0, startedAt,
       };
       this.emit('node-status', {
         runId: run.runId, nodeId: node.id, status: canceled ? 'canceled' : 'error', error: canceled ? '运行已取消' : msg,
+        ...(childDetails.errorCode ? { errorCode: childDetails.errorCode } : {}),
+        ...(childDetails.childRunId ? { childRunId: childDetails.childRunId } : {}),
+        ...(childDetails.childStatus ? { childStatus: childDetails.childStatus } : {}),
         ...(errDetails.trace ? { hasTrace: true, sessionId: errDetails.sessionId } : {}),
         ...(errDetails.turns != null ? { turns: errDetails.turns } : {}),
       });
@@ -367,7 +431,7 @@ export class Orchestrator {
     } finally {
       clearTimeout(timer);
       s.nodeAbort.delete(nodeId);
-      s.activeCount -= 1;
+      if (releaseSlot) s.activeCount -= 1;
       this._pump(s);
       this._maybeFinish(s);
     }
@@ -734,6 +798,26 @@ registerKind({
   },
 });
 
+// 子工作流：同步调用库内已保存工作流；执行器由宿主注入（首期不支持重试/续跑/重放）。
+registerKind({
+  type: 'subworkflow',
+  retryable: false,
+  async execute({ node, s, engine, signal, render }) {
+    if (typeof engine.runChildWorkflow !== 'function') {
+      const error = new Error('子工作流执行器未注入（宿主初始化异常）');
+      error.code = 'SUBWORKFLOW_RUNNER_UNAVAILABLE';
+      throw error;
+    }
+    return engine.runChildWorkflow({ node, run: s.run, state: s, signal, render });
+  },
+  lint(node, lintCtx) {
+    return validateSubworkflowNode(node, lintCtx);
+  },
+  templateLintFields(node) {
+    return subworkflowTemplateFields(node.data);
+  },
+});
+
 // 消息通知是运行级观察器；节点执行本身只负责在线路中透传数据。
 registerKind({
   type: 'notify',
@@ -796,7 +880,7 @@ export function lintGraph(graph, options = {}) {
       for (const iss of kind.lint(n, lintCtx) || []) issues.push({ nodeId: n.id, ...iss });
     }
 
-    const templateFields = [d.text, d.inputTemplate, d.url, d.headers, d.body];
+    const templateFields = [d.text, d.inputTemplate, d.url, d.headers, d.body, ...(kind?.templateLintFields?.(n) || [])];
     for (const field of templateFields) {
       if (!field) continue;
       const checked = validateTemplate(field, {
