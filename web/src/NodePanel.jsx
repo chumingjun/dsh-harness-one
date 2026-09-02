@@ -608,17 +608,22 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
               <p className="panel-note note-warn">部分 dsh 渠道的模型目录加载失败。</p>
             )}
             <div className="field-grid">
-              <Field label="轮数上限">
+              <Field label="轮数上限" hint="模型调用+工具执行算一轮">
                 <input type="number" min="1" max="20" value={d.maxRounds ?? ''}
                   onChange={(e) => set({ maxRounds: e.target.value === '' ? undefined : Number(e.target.value) })}
-                  placeholder={String(llmConfig.defaultMaxRounds || 6)} />
+                  placeholder="3" />
               </Field>
-              <Field label="超时（秒）">
+              <Field label="节点超时（秒）" hint="整个节点生命周期">
                 <input type="number" min="10" max="3600" value={d.timeoutSec ?? ''}
                   onChange={(e) => set({ timeoutSec: e.target.value === '' ? undefined : Number(e.target.value) })}
                   placeholder="500" />
               </Field>
             </div>
+            <Field label="单次请求超时（秒）" hint="一次模型调用无响应即判卡死，触发重试">
+              <input type="number" min="10" max="3600" value={d.modelTimeoutSec ?? ''}
+                onChange={(e) => set({ modelTimeoutSec: e.target.value === '' ? undefined : Number(e.target.value) })}
+                placeholder="300" />
+            </Field>
           </Section>
         </>
       )}
