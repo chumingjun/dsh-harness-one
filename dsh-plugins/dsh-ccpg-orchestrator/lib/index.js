@@ -26,6 +26,7 @@ import { SessionId } from '@deepseek-ai/dsh-session';
 import { renderTemplate, validateTemplate } from './template.js';
 import { describeNodeOutput, normalizeExecutionResult, RUN_SCHEMA_VERSION } from './output-contract.js';
 import { resolveInside, safeFileId, safeFilename } from './safe-path.js';
+import { decodeTailWindow } from './doc-tail.js';
 import { runScript } from './script-runner.js';
 import {
   artifactId as runArtifactId,
@@ -1292,7 +1293,9 @@ export function apply(ctx, config) {
           try {
             const buf = Buffer.alloc(stat.size - start);
             readSync(fd, buf, 0, buf.length, start);
-            return { name: basename(String(newest.full)), size: stat.size, tail: buf.toString('utf8'), growing: true };
+            // 起点按字节截断可能劈开多字节字符（中文必踩）：跳到字符边界再解码
+            const tail = decodeTailWindow(buf, { trimStart: start > 0 });
+            return { name: basename(String(newest.full)), size: stat.size, tail, growing: true };
           } finally { closeSync(fd); }
         } catch { return undefined; }
       };
@@ -1805,7 +1808,7 @@ export function apply(ctx, config) {
     };
 
     const testAbort = new AbortController();
-    const testTimeoutMs = Number(node.data?.timeoutSec) > 0 ? Number(node.data.timeoutSec) * 1000 : 5 * 60 * 1000;
+    const testTimeoutMs = Number(node.data?.timeoutSec) > 0 ? Number(node.data.timeoutSec) * 1000 : 500 * 1000;
     let testTimedOut = false;
     const testTimer = setTimeout(() => { testTimedOut = true; testAbort.abort(); }, testTimeoutMs);
     req.once('aborted', () => testAbort.abort());

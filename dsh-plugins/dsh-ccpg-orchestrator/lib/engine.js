@@ -10,7 +10,7 @@ import { validateNotificationNodeData } from './notifications.js';
 // 相对 v1 的升级：
 //   - 多运行实例并存（Map 而非单 this.s）
 //   - 并发上限（就绪节点排队，槽位释放依次启动）
-//   - 每节点超时（默认 300s，节点可配 timeoutSec）与整运行取消（未开始节点标 canceled + agent.abort 传播）
+//   - 每节点超时（默认 500s，节点可配 timeoutSec）与整运行取消（未开始节点标 canceled + agent.abort 传播）
 //   - 条件分支节点（condition）：模板渲染后命中 include/exclude 关键词决定走 true/false 出边（边 branch 字段）
 //   - 图静态校验 lintGraph（环之外：未填提示词、模板引用不存在的节点、孤立输出、同名节点）
 //   - 失败传播规则不变：全部直接上游 error/skipped/canceled 才跳过下游
@@ -18,7 +18,7 @@ import { validateNotificationNodeData } from './notifications.js';
 // 计数约定：每个节点的完成只在其自身 _onNodeDone 尾部扣一次 s.remaining；
 // 跳过/取消的节点在标记处扣，且不再递归重复扣。
 
-export const NODE_TIMEOUT_MS = 5 * 60 * 1000;
+export const NODE_TIMEOUT_MS = 500 * 1000;
 const CONDITION_VERDICT_RE = /^条件判定：(true|false)/;
 
 let runSeq = 0;
