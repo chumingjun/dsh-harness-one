@@ -47,3 +47,41 @@ for (const block of [
 }
 
 console.log('llm guard tests passed');
+
+// —— 多余沙箱升级参数清洗（gpt-5.6-terra 在 danger-full-access 会话里自发带
+//    sandbox_permissions/justification 导致 write 被拒的回归）——
+const escalationCall = (args) => [
+  { type: 'block-start', index: 0, blockType: 'tool-call' },
+  { type: 'tool-call-delta', index: 0, id: 'call-9', name: 'write', argumentsDelta: args },
+  { type: 'block-end', index: 0, block: { type: 'tool-call', id: 'call-9', name: 'write', arguments: args } },
+  finish,
+];
+
+{
+  const out = await collect(escalationCall('{"file_path":"/tmp/a.md","content":"x","sandbox_permissions":"danger-full-access","justification":"创建交付物。"}'));
+  assert.equal(out.length, 4);
+  assert.deepEqual(JSON.parse(out[2].block.arguments), { file_path: '/tmp/a.md', content: 'x' });
+}
+
+{
+  // justification 单独出现（无 sandbox_permissions）同样过不了成对校验，剔除
+  const out = await collect(escalationCall('{"file_path":"/tmp/a.md","justification":""}'));
+  assert.deepEqual(JSON.parse(out[2].block.arguments), { file_path: '/tmp/a.md' });
+}
+
+{
+  // 无升级参数的调用原样放行（字符串引用相等，未被重写）
+  const args = '{"file_path":"/tmp/a.md","content":"x"}';
+  const out = await collect(escalationCall(args));
+  assert.equal(out[2].block.arguments, args);
+}
+
+{
+  // 非法 JSON 与非对象 JSON 原样放行
+  for (const args of ['not json', '["sandbox_permissions"]', '"str"', 'null']) {
+    const out = await collect(escalationCall(args));
+    assert.equal(out[2].block.arguments, args);
+  }
+}
+
+console.log('escalation strip tests passed');
