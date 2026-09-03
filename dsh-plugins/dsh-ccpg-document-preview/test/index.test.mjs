@@ -14,6 +14,7 @@ import {
   documentPreviewKind,
   normalizePreviewDocument,
 } from '../src/index.js';
+import { markdownSanitizeSchema } from '../src/markdown-sanitize.mjs';
 
 test('detects supported preview formats by extension', () => {
   const cases = {
@@ -110,6 +111,45 @@ test('host entry declares the plugin shape and serves client-assets static files
 
 test('apply tolerates a missing webServer', () => {
   assert.doesNotThrow(() => apply({ logger: { info() {} } }));
+});
+
+// ---- markdown 渲染管线 ----
+
+// 与画布卡片侧（web/src/MarkdownDocument.jsx）同款管线：raw HTML 表格（agent 产出
+// 文稿的常见混合格式）要放行，脚本注入向量要在 sanitize 白名单处拦下。
+test('markdown: unified pipeline renders raw HTML table and strips script vectors', async () => {
+  const { unified } = await import('unified');
+  const remarkParse = (await import('remark-parse')).default;
+  const remarkRehype = (await import('remark-rehype')).default;
+  const rehypeRaw = (await import('rehype-raw')).default;
+  const rehypeSanitize = (await import('rehype-sanitize')).default;
+  const rehypeStringify = (await import('rehype-stringify')).default;
+
+  const run = async (text) => String(await unified()
+    .use(remarkParse)
+    .use(remarkRehype, { allowDangerousHtml: true })
+    .use(rehypeRaw)
+    .use(rehypeSanitize, markdownSanitizeSchema)
+    .use(rehypeStringify)
+    .process(text));
+
+  // 「markdown 套 HTML 表格」：标题走 markdown、表格走 raw HTML（colspan/rowspan/<b> 原样保留）
+  const table = await run('# 保洁服务岗位工作流程表\n\n<table><tr><td colspan="5"><b>楼栋岗工作流程表</b></td></tr>'
+    + '<tr><th>类别</th><th>时间</th></tr>'
+    + '<tr><td rowspan="2">日常工作</td><td>07:00-12:00</td></tr></table>\n');
+  assert.match(table, /<h1>保洁服务岗位工作流程表<\/h1>/);
+  assert.match(table, /<td colspan="5"><b>楼栋岗工作流程表<\/b><\/td>/);
+  assert.match(table, /<th>类别<\/th>/);
+  assert.match(table, /<td rowspan="2">日常工作<\/td>/);
+
+  // sanitize 白名单收口：脚本与事件处理器不得漏出
+  const hostile = await run('<table><tr><td onclick="steal()">x</td></tr></table>'
+    + '<img src=x onerror="steal()"><script>alert(1)<\/script><iframe src="https://evil"></iframe>');
+  assert.ok(!hostile.includes('steal'), hostile);
+  assert.ok(!hostile.includes('script'), hostile);
+  assert.ok(!hostile.includes('iframe'), hostile);
+  // style 整串透传（与卡片侧同取舍，td 的 vertical-align 需要它）：合法值保留
+  assert.ok((await run('<table><tr><td style="vertical-align:top">x</td></tr></table>')).includes('vertical-align:top'));
 });
 
 

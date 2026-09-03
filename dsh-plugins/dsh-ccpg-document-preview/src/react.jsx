@@ -3,6 +3,9 @@ import { createPortal } from 'react-dom';
 import { Download, Expand, Eye, Minimize, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
+import { markdownSanitizeSchema } from './markdown-sanitize.mjs';
 import { documentPreviewKind, loadPreviewText, normalizePreviewDocument, previewErrorMessage } from './index.js';
 import './styles.css';
 
@@ -63,11 +66,14 @@ function TextRenderer({ document, kind, maxTextBytes }) {
 
 // react-markdown + GFM：完整表格/任务列表/删除线/脚注等；此前手写解析器只会
 // 标题/代码块/列表/段落，表格、粗体、行内代码、链接、引用全部原样漏出。
+// rehype-raw + sanitize 管线与画布卡片侧（web/src/MarkdownDocument.jsx）对齐：
+// 正文里嵌的 <table>/<br/> 等 raw HTML 原地渲染，白名单在 markdown-sanitize.mjs。
 function Markdown({ text }) {
   return (
     <article className="dsh-doc-preview-scroll dsh-doc-preview-markdown">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]]}
         components={{
           a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>,
           table: ({ node, ...props }) => <div className="md-table-wrap"><table {...props} /></div>,
