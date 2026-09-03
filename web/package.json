@@ -10,7 +10,7 @@
     "test:variables": "node src/variables.test.mjs && node src/global-variables.test.mjs && node src/json-response.test.mjs && node src/api-base.test.mjs && node src/trial-request.test.mjs && node src/variable-scope.test.mjs && node src/run-event-routing.test.mjs && node src/workflow-serialization.test.mjs && node src/doc-wall-data.test.mjs && node src/live-run-adopt.test.mjs",
     "test:results": "node src/result-adapter.test.mjs",
     "test:scripts": "node src/script-parameters.test.mjs",
-    "test:ui": "node src/toolbar-responsive.test.mjs && node src/resume-workflow.test.mjs && node src/notify-node.test.mjs && node src/workflow-transfer-ui.test.mjs && node src/run-switcher.test.mjs && node src/schedule-center.test.mjs && node src/node-detail-polling.test.mjs"
+    "test:ui": "node src/toolbar-responsive.test.mjs && node src/resume-workflow.test.mjs && node src/notify-node.test.mjs && node src/agent-default-label.test.mjs && node src/workflow-transfer-ui.test.mjs && node src/run-switcher.test.mjs && node src/schedule-center.test.mjs && node src/node-detail-polling.test.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
