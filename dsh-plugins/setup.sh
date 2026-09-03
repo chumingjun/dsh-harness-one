@@ -202,7 +202,7 @@ LINK_ROOTS="$PLUGINS"
 [ "$AGGREGATE" = 1 ] && LINK_ROOTS="$PLUGINS dsh-harness-one/dsh-ccpg-tools dsh-harness-one/dsh-ccpg-orchestrator dsh-harness-one/dsh-ccpg-web dsh-harness-one/dsh-ccpg-canvasui dsh-harness-one/dsh-ccpg-document-preview dsh-harness-one/dsh-ccpg-larkauth dsh-harness-one/dsh-ccpg-llm-guard"
 for pkg in $LINK_ROOTS; do
   mkdir -p "$HERE/$pkg/node_modules/@deepseek-ai"
-  for dep in schemastery cordis dsh-tools dsh-llm dsh-session; do
+  for dep in schemastery cordis dsh-tools dsh-llm dsh-session dsh-agent; do
     [ -d "$SDK_DIR/$dep" ] || continue
     T="$HERE/$pkg/node_modules/@deepseek-ai/$dep"
     [ -L "$T" ] || ln -s "$SDK_DIR/$dep" "$T"
