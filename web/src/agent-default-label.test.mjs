@@ -25,4 +25,11 @@ assert.match(panel, /const defaultProvider = wf1Provider \|\| llmConfig\.default
 // 思考级别继承链：WF1 档位优先，且要求同渠道同模型（与引擎 resolve 同语义）
 assert.match(panel, /wf1Defaults\.reasoningEffort && wf1Model && effectiveProvider === wf1Provider/, '思考级别继承应先看 WF1 档位');
 
+// 超时占位与引擎 resolveAgentTimeouts 同链：WF1 默认值 > 内置 500/300
+assert.match(panel, /wf1Defaults\.nodeTimeoutSec > 0 \? String\(wf1Defaults\.nodeTimeoutSec\) : '500'/, '节点超时占位应先取 WF1 默认值');
+assert.match(panel, /wf1Defaults\.modelTimeoutSec > 0 \? String\(wf1Defaults\.modelTimeoutSec\) : '300'/, '单次超时占位应先取 WF1 默认值');
+assert.match(panel, /placeholder=\{wf1Timeouts\.nodeTimeoutSec\}/, 'agent 面板节点超时应使用 wf1Timeouts 占位');
+assert.match(panel, /placeholder=\{wf1Timeouts\.modelTimeoutSec\}/, 'agent 面板单次超时应使用 wf1Timeouts 占位');
+assert.match(panel, /nodeType === 'agent' \? wf1Timeouts\.nodeTimeoutSec : '300'/, '容错区超时占位应按节点类型区分（非 agent 内置 300）');
+
 console.log('agent default label tests: passed');

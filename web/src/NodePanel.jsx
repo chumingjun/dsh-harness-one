@@ -152,6 +152,11 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
   // 默认值展示链与引擎解析链（agent-defaults.js）对齐：节点未配置时第一顺位是
   // 设置面板「Workflow One」默认值（wf1Defaults），未设置才回退 dsh 全局选择。
   const wf1Defaults = llmConfig.wf1Defaults || {};
+  // 超时展示（与 resolveAgentTimeouts 同链）：节点未配时实际生效的秒数，placeholder 如实展示
+  const wf1Timeouts = {
+    nodeTimeoutSec: wf1Defaults.nodeTimeoutSec > 0 ? String(wf1Defaults.nodeTimeoutSec) : '500',
+    modelTimeoutSec: wf1Defaults.modelTimeoutSec > 0 ? String(wf1Defaults.modelTimeoutSec) : '300',
+  };
   const wf1Provider = wf1Defaults.provider || '';
   const wf1Model = wf1Provider ? (wf1Defaults.model || null) : null; // 设了渠道没设模型 → 运行时取渠道首选
   const defaultProvider = wf1Provider || llmConfig.defaultProvider || '';
@@ -678,15 +683,15 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
                   placeholder="3" />
               </Field>
               <Field label="节点超时（秒）" hint="整个节点生命周期">
-                <input type="number" min="10" max="3600" value={d.timeoutSec ?? ''}
+                <input type="number" min="10" max="86400" value={d.timeoutSec ?? ''}
                   onChange={(e) => set({ timeoutSec: e.target.value === '' ? undefined : Number(e.target.value) })}
-                  placeholder="500" />
+                  placeholder={wf1Timeouts.nodeTimeoutSec} />
               </Field>
             </div>
             <Field label="单次请求超时（秒）" hint="一次模型调用无响应即判卡死，触发重试">
-              <input type="number" min="10" max="3600" value={d.modelTimeoutSec ?? ''}
+              <input type="number" min="10" max="86400" value={d.modelTimeoutSec ?? ''}
                 onChange={(e) => set({ modelTimeoutSec: e.target.value === '' ? undefined : Number(e.target.value) })}
-                placeholder="300" />
+                placeholder={wf1Timeouts.modelTimeoutSec} />
             </Field>
           </Section>
         </>
@@ -826,9 +831,9 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
             </Field>
             {nodeType !== 'script' && (
               <Field label="超时（秒）">
-                <input type="number" min="5" max="3600" value={d.timeoutSec ?? ''}
+                <input type="number" min="5" max="86400" value={d.timeoutSec ?? ''}
                   onChange={(e) => set({ timeoutSec: e.target.value === '' ? undefined : Number(e.target.value) })}
-                  placeholder="500" />
+                  placeholder={nodeType === 'agent' ? wf1Timeouts.nodeTimeoutSec : '300'} />
               </Field>
             )}
           </div>

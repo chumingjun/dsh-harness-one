@@ -93,6 +93,7 @@ export class Orchestrator {
     this.outputSink = null; // index.js 注入：async (node, output, {signal}) => ({output, ...extra}) 输出节点后处理（飞书写回等）
     this.runChildWorkflow = null; // index.js 注入：同步启动并等待子工作流
     this.onCancel = null; // index.js 注入：父运行取消时传播到子运行
+    this.resolveNodeTimeout = null; // index.js 注入：(node) => 该节点未配 timeoutSec 时的默认超时秒；空 = 内置 NODE_TIMEOUT_MS
   }
 
   emit(event, payload) {
@@ -304,7 +305,12 @@ export class Orchestrator {
     const startedAt = new Date(t0).toISOString();
     run.nodeStates[nodeId] = { status: 'running', startedAt };
     this.emit('node-status', { runId: run.runId, nodeId, status: 'running', startedAt });
-    const timeoutMs = Number(node.data?.timeoutSec) > 0 ? Number(node.data.timeoutSec) * 1000 : NODE_TIMEOUT_MS;
+    // 节点总超时：节点显式 timeoutSec 优先；未配时 agent 节点可注入设置面板默认值（resolveNodeTimeout），其余用内置
+    let fallbackSec = 0;
+    try { fallbackSec = Number(this.resolveNodeTimeout?.(node)) || 0; } catch { fallbackSec = 0; }
+    const timeoutMs = Number(node.data?.timeoutSec) > 0
+      ? Number(node.data.timeoutSec) * 1000
+      : (fallbackSec > 0 ? fallbackSec * 1000 : NODE_TIMEOUT_MS);
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; ac.abort(); }, timeoutMs);
     try {

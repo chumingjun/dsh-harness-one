@@ -87,8 +87,8 @@ const test = async (name, fn) => {
 await test('GET 初始为空默认值，effective 跟随 dsh 全局选择', async () => {
   const { status, body } = await call('GET');
   assert.equal(status, 200);
-  assert.deepEqual(body.defaults, { provider: '', model: '', reasoningEffort: '' });
-  assert.deepEqual(body.effective, { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'medium' });
+  assert.deepEqual(body.defaults, { provider: '', model: '', reasoningEffort: '', nodeTimeoutSec: 0, modelTimeoutSec: 0 });
+  assert.deepEqual(body.effective, { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'medium', nodeTimeoutSec: 500, modelTimeoutSec: 300 });
   assert.deepEqual(body.dsh, { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'medium' });
 });
 
@@ -99,12 +99,20 @@ await test('PUT 未知渠道 400 且不落盘', async () => {
   assert.equal(existsSync(join(dshHome, 'plugin-data', 'dsh-ccpg-orchestrator', 'state', 'agent-defaults.json')), false);
 });
 
-await test('PUT 合法三件套 200，effective 生效且 GET 可读回', async () => {
-  const put = await call('PUT', { provider: 'glm', model: 'glm-5', reasoningEffort: '' });
+await test('PUT 合法五件套 200，effective 生效且 GET 可读回', async () => {
+  const put = await call('PUT', { provider: 'glm', model: 'glm-5', reasoningEffort: '', nodeTimeoutSec: 900, modelTimeoutSec: 120 });
   assert.equal(put.status, 200);
-  assert.deepEqual(put.body.effective, { provider: 'glm', model: 'glm-5', reasoningEffort: null });
+  assert.deepEqual(put.body.effective, { provider: 'glm', model: 'glm-5', reasoningEffort: null, nodeTimeoutSec: 900, modelTimeoutSec: 120 });
   const get = await call('GET');
-  assert.deepEqual(get.body.defaults, { provider: 'glm', model: 'glm-5', reasoningEffort: '' });
+  assert.deepEqual(get.body.defaults, { provider: 'glm', model: 'glm-5', reasoningEffort: '', nodeTimeoutSec: 900, modelTimeoutSec: 120 });
+});
+
+await test('PUT 非法超时 400 且不落盘', async () => {
+  const bad = await call('PUT', { provider: 'glm', model: 'glm-5', nodeTimeoutSec: -5 });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /不小于 0 的整数/);
+  const frac = await call('PUT', { provider: 'glm', model: 'glm-5', modelTimeoutSec: 1.5 });
+  assert.equal(frac.status, 400);
 });
 
 await test('PUT 思考级别校验：支持的放行、不支持的 400', async () => {
@@ -113,7 +121,7 @@ await test('PUT 思考级别校验：支持的放行、不支持的 400', async 
   assert.match(bad.body.error, /不支持思考级别/);
   const good = await call('PUT', { provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high' });
   assert.equal(good.status, 200);
-  assert.deepEqual(good.body.effective, { provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high' });
+  assert.deepEqual(good.body.effective, { provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high', nodeTimeoutSec: 500, modelTimeoutSec: 300 });
 });
 
 await test('PUT 缺依赖字段 400；清空回退 dsh 全局', async () => {
@@ -122,7 +130,7 @@ await test('PUT 缺依赖字段 400；清空回退 dsh 全局', async () => {
   assert.match(bad.body.error, /先选默认渠道/);
   const cleared = await call('PUT', {});
   assert.equal(cleared.status, 200);
-  assert.deepEqual(cleared.body.effective, { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'medium' });
+  assert.deepEqual(cleared.body.effective, { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'medium', nodeTimeoutSec: 500, modelTimeoutSec: 300 });
 });
 
 await test('POST 方法 405', async () => {
@@ -141,12 +149,12 @@ await test('PUT 畸形 JSON 请求体 400（scoped:false 路由也要有请求�
 await test('llm-config 暴露 wf1Defaults（节点面板展示链与引擎解析链对齐）', async () => {
   const llmRoute = ctx.webServer.routes.find((entry) => entry.kind === 'exact' && entry.path === '/wf1/api/llm-config')?.handler;
   assert.ok(llmRoute, 'llm-config 路由已注册');
-  const put = await call('PUT', { provider: 'glm', model: 'glm-5', reasoningEffort: '' });
+  const put = await call('PUT', { provider: 'glm', model: 'glm-5', reasoningEffort: '', nodeTimeoutSec: 800, modelTimeoutSec: 200 });
   assert.equal(put.status, 200);
   const res = responseCapture();
   await llmRoute(request('GET', '/wf1/api/llm-config'), res);
   const body = res.json();
-  assert.deepEqual(body.wf1Defaults, { provider: 'glm', model: 'glm-5', reasoningEffort: '' });
+  assert.deepEqual(body.wf1Defaults, { provider: 'glm', model: 'glm-5', reasoningEffort: '', nodeTimeoutSec: 800, modelTimeoutSec: 200 });
   // dsh 全局选择字段保持原语义，不受 WF1 默认值影响
   assert.equal(body.defaultProvider, 'deepseek');
   assert.equal(body.defaultModel, 'deepseek-chat');

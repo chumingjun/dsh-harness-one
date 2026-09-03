@@ -13,7 +13,10 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 const MAX_FIELD_LENGTH = 200;
-const ALLOWED_KEYS = new Set(['provider', 'model', 'reasoningEffort']);
+const ALLOWED_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'nodeTimeoutSec', 'modelTimeoutSec']);
+// 超时字段：正整数秒，0/空 = 不设置（回退内置默认 500s / 300s）。上限 86400（一天）防呆。
+const TIMEOUT_KEYS = new Set(['nodeTimeoutSec', 'modelTimeoutSec']);
+const MAX_TIMEOUT_SEC = 86400;
 
 export class AgentDefaultsError extends Error {
   constructor(message, { code = 'invalid-agent-defaults', status = 400 } = {}) {
@@ -33,9 +36,12 @@ export const agentDefaultsFile = () => join(
   'plugin-data', 'dsh-ccpg-orchestrator', 'state', 'agent-defaults.json',
 );
 
-export const EMPTY_AGENT_DEFAULTS = Object.freeze({ provider: '', model: '', reasoningEffort: '' });
+export const EMPTY_AGENT_DEFAULTS = Object.freeze({
+  provider: '', model: '', reasoningEffort: '',
+  nodeTimeoutSec: 0, modelTimeoutSec: 0,
+});
 
-/** 输入整形：只收三个字符串字段，空串 = 不设置（跟随 dsh 全局选择）。 */
+/** 输入整形：三个字符串字段 + 两个超时（秒，0 = 不设置）。 */
 export function normalizeAgentDefaults(source) {
   if (source === null || typeof source !== 'object' || Array.isArray(source)) fail('请求体必须是对象');
   for (const key of Object.keys(source)) {
@@ -45,12 +51,19 @@ export function normalizeAgentDefaults(source) {
   for (const key of ALLOWED_KEYS) {
     const value = source[key];
     if (value === undefined || value === null) continue;
+    if (TIMEOUT_KEYS.has(key)) {
+      const num = typeof value === 'number' ? value : Number(String(value).trim());
+      if (!Number.isFinite(num) || num < 0 || !Number.isInteger(num)) fail(`${key} 必须是不小于 0 的整数（秒）`);
+      if (num > MAX_TIMEOUT_SEC) fail(`${key} 不能超过 ${MAX_TIMEOUT_SEC} 秒`);
+      result[key] = num;
+      continue;
+    }
     if (typeof value !== 'string') fail(`${key} 必须是字符串`);
     const trimmed = value.trim();
-    if (trimmed.length > MAX_FIELD_LENGTH) fail(`${key} 最长 ${MAX_FIELD_LENGTH} 个字符`);
+    if (trimmed.length > MAX_FIELD_LENGTH) fail(`${key} 最长 ${MAX_FIELD_LENGTH} 个的字符`);
     result[key] = trimmed;
   }
-  // 依赖关系：model 依附 provider，思考级别依附具体模型
+  // 依赖关系：model 依附 provider，思考级别依附具体模型；超时独立无依赖
   if (result.model && !result.provider) fail('设置默认模型前必须先选默认渠道');
   if (result.reasoningEffort && !result.model) fail('设置默认思考级别前必须先选默认渠道和模型');
   return result;
@@ -141,4 +154,22 @@ export function resolveAgentModelSelection({ node = {}, defaults = EMPTY_AGENT_D
     || (provider === sel.provider && model === sel.model ? sel.reasoningEffort : undefined)
     || undefined;
   return { provider, model, reasoningEffort };
+}
+
+/**
+ * 节点未显式配置时的超时解析（秒）：节点 data > Workflow One 默认值 > 内置默认。
+ * 覆盖 agent 节点的两个旋钮——nodeTimeoutSec（节点总生命周期，内置 500s）与
+ * modelTimeoutSec（单次模型请求，内置 300s）。返回有效秒数，永不 undefined。
+ */
+export const DEFAULT_NODE_TIMEOUT_SEC = 500;
+export const DEFAULT_MODEL_TIMEOUT_SEC = 300;
+
+export function resolveAgentTimeouts({ node = {}, defaults = EMPTY_AGENT_DEFAULTS } = {}) {
+  const nodeTimeoutSec = Number(node.timeoutSec) > 0
+    ? Number(node.timeoutSec)
+    : (defaults.nodeTimeoutSec > 0 ? defaults.nodeTimeoutSec : DEFAULT_NODE_TIMEOUT_SEC);
+  const modelTimeoutSec = Number(node.modelTimeoutSec) > 0
+    ? Number(node.modelTimeoutSec)
+    : (defaults.modelTimeoutSec > 0 ? defaults.modelTimeoutSec : DEFAULT_MODEL_TIMEOUT_SEC);
+  return { nodeTimeoutSec, modelTimeoutSec };
 }

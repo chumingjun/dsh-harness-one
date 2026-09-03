@@ -75,8 +75,8 @@ import {
 } from './assistant.js';
 import { ensureWorkflowSkill } from './skill-seed.js';
 import {
-  AgentDefaultsError, AgentDefaultsStore, normalizeAgentDefaults, resolveAgentModelSelection,
-  validateAgentDefaults,
+  AgentDefaultsError, AgentDefaultsStore, DEFAULT_NODE_TIMEOUT_SEC, normalizeAgentDefaults,
+  resolveAgentModelSelection, resolveAgentTimeouts, validateAgentDefaults,
 } from './agent-defaults.js';
 import {
   assertNonSensitiveVariableDefinitions, assertSafeContextObject, GlobalVariableStore, VariableStoreError,
@@ -1123,6 +1123,12 @@ export function apply(ctx, config) {
   orch = new Orchestrator(ctx, { onEvent: onOrchestratorEvent, renderTemplate });
   orch.onCancel = (runId, reason) => cancelDescendants(runId, reason);
   orch.nodeRunner = async (node, run, s, ctl) => runAgentNode(ctx, node, run, s, ctl);
+  // agent 节点未配 timeoutSec 时的总超时回退：设置面板「Workflow One」默认值（>0 才生效）
+  orch.resolveNodeTimeout = (node) => (
+    node?.type === 'agent' || node?.data?.nodeType === 'agent'
+      ? agentDefaultsStore.read().nodeTimeoutSec
+      : 0
+  );
   orch.scriptRunner = async ({ node, input, signal, timeoutMs, workflowId, runId }) => {
     const ws = workspaceFor(node, { workflowId: workflowId || 'draft', runId });
     const result = await runScript({
@@ -1380,9 +1386,10 @@ export function apply(ctx, config) {
 
     // 节点级模型解析链：节点显式配置 > 设置面板「Workflow One」默认值 > dsh 全局选择；
     // channel 仅透传给支持的 provider。默认值与全局模型都只在渠道匹配时继承（跨渠道不错配）。
+    const agentDefaults = agentDefaultsStore.read();
     const defaultModel = ctx.get('agentDefaultModel');
     const sel = defaultModel?.currentSelection?.() || {};
-    const resolved = resolveAgentModelSelection({ node: d, defaults: agentDefaultsStore.read(), dshSelection: sel });
+    const resolved = resolveAgentModelSelection({ node: d, defaults: agentDefaults, dshSelection: sel });
     const provider = resolved.provider;
     let model = resolved.model;
     if (!model && provider) {
@@ -1395,10 +1402,11 @@ export function apply(ctx, config) {
     // 节点级思考级别：节点显式配置 > Workflow One 默认档位 > 全局档位（均需同渠道同模型）。
     // 档位经 installModelSelection 注入 agent/request waterfall（AgentOptions 本身不收 effort）。
     const reasoningEffort = resolved.reasoningEffort;
+    // 超时解析链同源：节点 data > Workflow One 默认值 > 内置默认（500s / 300s）。
     // 模型单请求超时（step 粒度）：一次模型调用（含其工具执行前的新型请求）超过即视为卡死，
     // 与节点总超时（timeoutSec，整个节点生命周期）是两个独立旋钮。step/end 重置计时。
-    const MODEL_TIMEOUT_MS = 300 * 1000;
-    const modelTimeoutMs = Number(d.modelTimeoutSec) > 0 ? Number(d.modelTimeoutSec) * 1000 : MODEL_TIMEOUT_MS;
+    const { modelTimeoutSec } = resolveAgentTimeouts({ node: d, defaults: agentDefaults });
+    const modelTimeoutMs = modelTimeoutSec * 1000;
 
     // 工具过滤：与进程内已注册工具求交集（restrict 不接受未知名）
     const wanted = Array.isArray(d.tools) ? d.tools.filter((t) => t && t !== '*') : [];
@@ -2122,7 +2130,13 @@ export function apply(ctx, config) {
     };
 
     const testAbort = new AbortController();
-    const testTimeoutMs = Number(node.data?.timeoutSec) > 0 ? Number(node.data.timeoutSec) * 1000 : 5 * 60 * 1000;
+    // 测试入口超时与正式运行同链：节点 data > Workflow One 默认值（agent 节点）> 内置默认
+    let testFallbackSec = 0;
+    try { testFallbackSec = Number(orch.resolveNodeTimeout?.(node)) || 0; } catch { testFallbackSec = 0; }
+    const testTimeoutSec = Number(node.data?.timeoutSec) > 0
+      ? Number(node.data.timeoutSec)
+      : (testFallbackSec > 0 ? testFallbackSec : DEFAULT_NODE_TIMEOUT_SEC);
+    const testTimeoutMs = testTimeoutSec * 1000;
     let testTimedOut = false;
     const testTimer = setTimeout(() => { testTimedOut = true; testAbort.abort(); }, testTimeoutMs);
     req.once('aborted', () => testAbort.abort());
@@ -3435,11 +3449,12 @@ export function apply(ctx, config) {
 
   // ---- agent 节点默认值（设置面板「Workflow One」）：渠道/模型/思考级别 ----
   // dsh 用户级偏好，不依赖会话工作区（设置面板无 session 上下文），故 scoped: false。
-  // PUT 整体替换三字段；空串 = 该层不设置，回退到 dsh 全局模型选择。
+  // PUT 整体替换五字段；空串/0 = 该层不设置，超时回退内置默认（500s / 300s）。
   const agentDefaultsPayload = async () => {
     const sel = ctx.get('agentDefaultModel')?.currentSelection?.() || {};
     const defaults = agentDefaultsStore.read();
     const effective = resolveAgentModelSelection({ node: {}, defaults, dshSelection: sel });
+    const timeouts = resolveAgentTimeouts({ node: {}, defaults });
     return {
       ok: true,
       defaults,
@@ -3448,6 +3463,8 @@ export function apply(ctx, config) {
         provider: effective.provider || null,
         model: effective.model || null,
         reasoningEffort: effective.reasoningEffort || null,
+        nodeTimeoutSec: timeouts.nodeTimeoutSec,
+        modelTimeoutSec: timeouts.modelTimeoutSec,
       },
       dsh: { provider: sel.provider || null, model: sel.model || null, reasoningEffort: sel.reasoningEffort || null },
     };
