@@ -136,6 +136,23 @@ await test('PUT 畸形 JSON 请求体 400（scoped:false 路由也要有请求�
   assert.match(body.error, /JSON/);
 });
 
+// llm-config 是节点面板默认值展示链的数据源：必须同步暴露 wf1Defaults，
+// 否则前端占位文案只能回退「跟随 dsh 默认」，与引擎实际解析（WF1 默认值优先）不一致。
+await test('llm-config 暴露 wf1Defaults（节点面板展示链与引擎解析链对齐）', async () => {
+  const llmRoute = ctx.webServer.routes.find((entry) => entry.kind === 'exact' && entry.path === '/wf1/api/llm-config')?.handler;
+  assert.ok(llmRoute, 'llm-config 路由已注册');
+  const put = await call('PUT', { provider: 'glm', model: 'glm-5', reasoningEffort: '' });
+  assert.equal(put.status, 200);
+  const res = responseCapture();
+  await llmRoute(request('GET', '/wf1/api/llm-config'), res);
+  const body = res.json();
+  assert.deepEqual(body.wf1Defaults, { provider: 'glm', model: 'glm-5', reasoningEffort: '' });
+  // dsh 全局选择字段保持原语义，不受 WF1 默认值影响
+  assert.equal(body.defaultProvider, 'deepseek');
+  assert.equal(body.defaultModel, 'deepseek-chat');
+  await call('PUT', {}); // 清理，恢复空默认值
+});
+
 if (originalEnv.DSH_HOME === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = originalEnv.DSH_HOME;
 if (originalEnv.WF1_LEGACY_DATA_DIR === undefined) delete process.env.WF1_LEGACY_DATA_DIR;
 else process.env.WF1_LEGACY_DATA_DIR = originalEnv.WF1_LEGACY_DATA_DIR;

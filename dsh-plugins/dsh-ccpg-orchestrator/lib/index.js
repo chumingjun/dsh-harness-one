@@ -3420,6 +3420,9 @@ export function apply(ctx, config) {
       defaultProvider: sel.provider,
       defaultModel: sel.model,
       defaultReasoningEffort: sel.reasoningEffort,
+      // 节点未配置时的真正第一顺位默认值（设置面板「Workflow One」）；空串 = 未设置。
+      // 前端占位文案优先展示这层，node 面板与 runAgentNode 解析链（agent-defaults.js）对齐。
+      wf1Defaults: agentDefaultsStore.read(),
       providers,
       ...(failures.length ? { failures } : {}),
     });

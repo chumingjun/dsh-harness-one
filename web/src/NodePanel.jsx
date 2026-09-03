@@ -149,18 +149,29 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
   const scriptInputs = normalizeScriptInputs(d.inputs);
   const scriptInputErrors = validateScriptInputs(scriptInputs);
   const providers = Array.isArray(llmConfig.providers) ? llmConfig.providers : [];
-  const effectiveProvider = d.channel || llmConfig.defaultProvider || '';
+  // 默认值展示链与引擎解析链（agent-defaults.js）对齐：节点未配置时第一顺位是
+  // 设置面板「Workflow One」默认值（wf1Defaults），未设置才回退 dsh 全局选择。
+  const wf1Defaults = llmConfig.wf1Defaults || {};
+  const wf1Provider = wf1Defaults.provider || '';
+  const wf1Model = wf1Provider ? (wf1Defaults.model || null) : null; // 设了渠道没设模型 → 运行时取渠道首选
+  const defaultProvider = wf1Provider || llmConfig.defaultProvider || '';
+  const effectiveProvider = d.channel || defaultProvider || '';
   const providerModels = providers.find((provider) => provider.id === effectiveProvider)?.models || [];
-  const modelDefaultLabel = d.channel
+  const defaultModelLabel = d.channel
     ? `渠道默认（${providerModels[0]?.name || providerModels[0]?.id || '未配置'}）`
-    : `跟随 dsh 默认（${llmConfig.defaultModel || '未配置'}）`;
+    : wf1Provider
+      ? `跟随 Workflow One 默认（${wf1Model || providerModels[0]?.name || providerModels[0]?.id || '渠道首选'}）`
+      : `跟随 dsh 默认（${llmConfig.defaultModel || '未配置'}）`;
   // 所选模型的能力元数据：思考级别档位 + 视觉输入。跨渠道选模型后目录无该模型时为 null
   const currentModel = providerModels.find((item) => item.id === d.model) || null;
   const modelReasoning = currentModel?.reasoning || null;
-  // 继承全局默认档位：同渠道同模型时 dsh 默认档位生效（与引擎继承语义一致）
-  const inheritedEffort = effectiveProvider === llmConfig.defaultProvider && (!d.model || d.model === llmConfig.defaultModel)
-    ? llmConfig.defaultReasoningEffort
-    : undefined;
+  // 继承默认档位（与引擎同语义）：同渠道同模型时先看 WF1 默认档位，未设再看 dsh 全局档位
+  let inheritedEffort;
+  if (wf1Defaults.reasoningEffort && wf1Model && effectiveProvider === wf1Provider && (!d.model || d.model === wf1Model)) {
+    inheritedEffort = wf1Defaults.reasoningEffort;
+  } else if (llmConfig.defaultReasoningEffort && effectiveProvider === llmConfig.defaultProvider && (!d.model || d.model === llmConfig.defaultModel)) {
+    inheritedEffort = llmConfig.defaultReasoningEffort;
+  }
 
   const selectProvider = (providerId) => {
     if (!providerId) {
@@ -610,7 +621,11 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
             <div className="field-grid">
               <Field label="渠道">
                 <select value={d.channel || ''} onChange={(e) => selectProvider(e.target.value)}>
-                  <option value="">跟随 dsh 默认（{llmConfig.defaultProvider || '未配置'}）</option>
+                  <option value="">
+                    {wf1Provider
+                      ? `跟随 Workflow One 默认（${providers.find((p) => p.id === wf1Provider)?.name || wf1Provider}${wf1Model ? '' : '，渠道首选模型'}）`
+                      : `跟随 dsh 默认（${llmConfig.defaultProvider || '未配置'}）`}
+                  </option>
                   {providers.map((provider) => (
                     <option key={provider.id} value={provider.id}>{provider.name || provider.id}</option>
                   ))}
