@@ -80,7 +80,7 @@ done
 [ -n "$DSH_PROBE" ] && SDK_DIR=$(node -e "console.log(require('path').dirname(require('path').dirname(process.argv[1])))" "$DSH_PROBE")/node_modules/@deepseek-ai
 if [ -n "$SDK_DIR" ] && [ -d "$SDK_DIR/dsh-tools" ]; then
   mkdir -p node_modules/@deepseek-ai
-  for dep in schemastery cordis dsh-tools dsh-llm dsh-session; do
+  for dep in schemastery cordis dsh-tools dsh-llm dsh-session dsh-agent; do
     T="node_modules/@deepseek-ai/$dep"
     [ -d "$SDK_DIR/$dep" ] || continue
     [ -L "$T" ] || ln -s "$SDK_DIR/$dep" "$T"
