@@ -8,6 +8,7 @@ import {
   EMPTY_AGENT_DEFAULTS,
   normalizeAgentDefaults,
   resolveAgentModelSelection,
+  resolveAgentTimeouts,
   validateAgentDefaults,
 } from '../lib/agent-defaults.js';
 
@@ -21,18 +22,25 @@ test('normalize: 空对象与缺省字段都落成空默认值', () => {
   assert.deepEqual(normalizeAgentDefaults({ provider: undefined, model: null }), EMPTY_AGENT_DEFAULTS);
 });
 
-test('normalize: 正常字段保留并 trim', () => {
+test('normalize: 正常字段保留并 trim；超时收整数', () => {
   assert.deepEqual(
     normalizeAgentDefaults({ provider: ' deepseek ', model: 'deepseek-chat', reasoningEffort: 'high' }),
-    { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' },
+    { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high', nodeTimeoutSec: 0, modelTimeoutSec: 0 },
+  );
+  assert.deepEqual(
+    normalizeAgentDefaults({ provider: 'deepseek', model: 'deepseek-chat', nodeTimeoutSec: '600', modelTimeoutSec: 240 }),
+    { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: '', nodeTimeoutSec: 600, modelTimeoutSec: 240 },
   );
 });
 
-test('normalize: 拒绝未知字段 / 非字符串 / 非对象', () => {
+test('normalize: 拒绝未知字段 / 非字符串 / 非对象 / 非法超时', () => {
   assert.throws(() => normalizeAgentDefaults({ provider: 'a', extra: 1 }), AgentDefaultsError);
   assert.throws(() => normalizeAgentDefaults({ provider: 42 }), AgentDefaultsError);
   assert.throws(() => normalizeAgentDefaults(null), AgentDefaultsError);
   assert.throws(() => normalizeAgentDefaults('x'), AgentDefaultsError);
+  assert.throws(() => normalizeAgentDefaults({ nodeTimeoutSec: -1 }), /不小于 0 的整数/);
+  assert.throws(() => normalizeAgentDefaults({ modelTimeoutSec: 1.5 }), /不小于 0 的整数/);
+  assert.throws(() => normalizeAgentDefaults({ nodeTimeoutSec: 86401 }), /不能超过/);
 });
 
 test('normalize: model 依赖 provider、思考级别依赖 model', () => {
@@ -101,11 +109,12 @@ test('store: 写入后可读回，落盘 0600', () => {
   const dir = mkdtempSync(join(tmpdir(), 'wf1-agent-defaults-'));
   const file = join(dir, 'sub', 'agent-defaults.json');
   const store = new AgentDefaultsStore(file);
-  store.write({ provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high' });
-  assert.deepEqual(store.read(), { provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high' });
+  store.write({ provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high', nodeTimeoutSec: 600, modelTimeoutSec: 240 });
+  assert.deepEqual(store.read(), { provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high', nodeTimeoutSec: 600, modelTimeoutSec: 240 });
   const doc = JSON.parse(readFileSync(file, 'utf8'));
   assert.equal(doc.version, 1);
   assert.equal(doc.provider, 'deepseek');
+  assert.equal(doc.nodeTimeoutSec, 600);
 });
 
 // ---- resolveAgentModelSelection（与 runAgentNode 同一解析链）----
@@ -173,6 +182,30 @@ test('resolve: 默认档位的下一顺位是 dsh 全局档位', () => {
     dshSelection: SEL,
   });
   assert.equal(r.reasoningEffort, 'medium');
+});
+
+// ---- resolveAgentTimeouts（节点 data > WF1 默认值 > 内置 500/300）----
+
+test('resolveTimeouts: 全空 → 内置默认 500/300', () => {
+  assert.deepEqual(resolveAgentTimeouts({ node: {}, defaults: EMPTY_AGENT_DEFAULTS }), { nodeTimeoutSec: 500, modelTimeoutSec: 300 });
+});
+
+test('resolveTimeouts: WF1 默认值生效（节点未配置时）', () => {
+  assert.deepEqual(
+    resolveAgentTimeouts({ node: {}, defaults: { ...EMPTY_AGENT_DEFAULTS, nodeTimeoutSec: 900, modelTimeoutSec: 120 } }),
+    { nodeTimeoutSec: 900, modelTimeoutSec: 120 },
+  );
+});
+
+test('resolveTimeouts: 节点显式配置永远优先（只覆盖配了的那项）', () => {
+  assert.deepEqual(
+    resolveAgentTimeouts({ node: { timeoutSec: 60 }, defaults: { ...EMPTY_AGENT_DEFAULTS, nodeTimeoutSec: 900, modelTimeoutSec: 120 } }),
+    { nodeTimeoutSec: 60, modelTimeoutSec: 120 },
+  );
+  assert.deepEqual(
+    resolveAgentTimeouts({ node: { modelTimeoutSec: 30 }, defaults: { ...EMPTY_AGENT_DEFAULTS, nodeTimeoutSec: 900 } }),
+    { nodeTimeoutSec: 900, modelTimeoutSec: 30 },
+  );
 });
 
 let failed = 0;

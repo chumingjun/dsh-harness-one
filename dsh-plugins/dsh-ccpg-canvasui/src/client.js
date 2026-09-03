@@ -1055,7 +1055,7 @@ window.__ModuleLoader__.load({
     function AgentDefaultsCard() {
       var a = s2(null), llmConfig = a[0], setLlmConfig = a[1];
       var b = s2(null), saved = b[0], setSaved = b[1]; // GET/PUT 回包 {defaults, effective, dsh}
-      var c = s2({ provider: "", model: "", reasoningEffort: "" }), draft = c[0], setDraft = c[1];
+      var c = s2({ provider: "", model: "", reasoningEffort: "", nodeTimeoutSec: 0, modelTimeoutSec: 0 }), draft = c[0], setDraft = c[1];
       var e = s2(false), saving = e[0], setSaving = e[1];
       var f = s2(null), message = f[0], setMessage = f[1]; // {kind:'ok'|'err', text}
 
@@ -1067,7 +1067,7 @@ window.__ModuleLoader__.load({
         systemGet(AGENT_DEFAULTS_API).then(function (d2) {
           if (dead || !d2 || !d2.ok) return;
           setSaved(d2);
-          setDraft(Object.assign({ provider: "", model: "", reasoningEffort: "" }, d2.defaults));
+          setDraft(Object.assign({ provider: "", model: "", reasoningEffort: "", nodeTimeoutSec: 0, modelTimeoutSec: 0 }, d2.defaults));
         }).catch(function () {});
         return function () { dead = true; };
       }, []);
@@ -1077,6 +1077,8 @@ window.__ModuleLoader__.load({
         draft.provider !== saved.defaults.provider
         || draft.model !== saved.defaults.model
         || draft.reasoningEffort !== saved.defaults.reasoningEffort
+        || Number(draft.nodeTimeoutSec || 0) !== Number(saved.defaults.nodeTimeoutSec || 0)
+        || Number(draft.modelTimeoutSec || 0) !== Number(saved.defaults.modelTimeoutSec || 0)
       );
 
       var patchDraft = function (patch) {
@@ -1087,16 +1089,27 @@ window.__ModuleLoader__.load({
       var save = function () {
         setSaving(true);
         setMessage(null);
+        // 超时输入框是文本：空串归 0（不设置），非法值在提交前拦下
+        var payload = Object.assign({}, draft, {
+          nodeTimeoutSec: Math.max(0, Math.floor(Number(draft.nodeTimeoutSec) || 0)),
+          modelTimeoutSec: Math.max(0, Math.floor(Number(draft.modelTimeoutSec) || 0)),
+        });
+        if (draft.nodeTimeoutSec !== "" && (!Number.isFinite(Number(draft.nodeTimeoutSec)) || Number(draft.nodeTimeoutSec) < 0)
+          || draft.modelTimeoutSec !== "" && (!Number.isFinite(Number(draft.modelTimeoutSec)) || Number(draft.modelTimeoutSec) < 0)) {
+          setSaving(false);
+          setMessage({ kind: "err", text: "超时必须是不小于 0 的整数（秒），0 表示用内置默认" });
+          return;
+        }
         fetch(AGENT_DEFAULTS_API, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(draft),
+          body: JSON.stringify(payload),
         })
           .then(function (r) { return r.json(); })
           .then(function (r2) {
             if (r2 && r2.ok) {
               setSaved(r2);
-              setDraft(Object.assign({ provider: "", model: "", reasoningEffort: "" }, r2.defaults));
+              setDraft(Object.assign({ provider: "", model: "", reasoningEffort: "", nodeTimeoutSec: 0, modelTimeoutSec: 0 }, r2.defaults));
               setMessage({ kind: "ok", text: "已保存，新发起的运行立即生效" });
             } else {
               setMessage({ kind: "err", text: (r2 && r2.error) || "保存失败" });
@@ -1133,6 +1146,17 @@ window.__ModuleLoader__.load({
           + " / " + (effective.model || "渠道首选模型")
           + (effective.reasoningEffort ? " / 思考级别 " + effective.reasoningEffort : "");
 
+      var mkTimeoutInput = function (key, placeholder) {
+        return react.createElement("input", {
+          type: "number", min: 0, max: 86400, step: 1,
+          style: selectStyle,
+          value: draft[key] === 0 || draft[key] === "" ? "" : draft[key],
+          placeholder: placeholder,
+          disabled: saving,
+          onChange: function (ev) { patchDraft({ [key]: ev.target.value === "" ? 0 : Number(ev.target.value) }); },
+        });
+      };
+
       var mkSelect = function (value, options, disabled, onChange) {
         return react.createElement(
           "select",
@@ -1161,7 +1185,7 @@ window.__ModuleLoader__.load({
         react.createElement(
           "div",
           { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)", lineHeight: "18px" } },
-          "节点没有单独配置渠道/模型/思考级别时，按这里的默认值运行；都没有时跟随 dsh 全局选择。",
+          "节点没有单独配置渠道/模型/思考级别/超时时，按这里的默认值运行；模型层都没有时跟随 dsh 全局选择，超时 0 = 内置默认（节点 500s / 单次 300s）。",
         ),
         !llmConfig
           ? react.createElement("div", { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } }, "正在读取渠道目录…")
@@ -1180,6 +1204,8 @@ window.__ModuleLoader__.load({
                   saving || !draft.model || !efforts.length,
                   function (v) { patchDraft({ reasoningEffort: v }); },
                 )),
+                defaultsField("节点超时(秒)", mkTimeoutInput("nodeTimeoutSec", "默认 500")),
+                defaultsField("单次超时(秒)", mkTimeoutInput("modelTimeoutSec", "默认 300")),
               ],
         react.createElement(
           "div",
