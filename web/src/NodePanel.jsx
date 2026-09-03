@@ -633,7 +633,7 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
               </Field>
               <Field label="模型">
                 <select value={d.model || ''} onChange={(e) => set({ model: e.target.value || undefined, reasoningEffort: undefined })} disabled={!effectiveProvider}>
-                  <option value="">{modelDefaultLabel}</option>
+                  <option value="">{defaultModelLabel}</option>
                   {d.model && !providerModels.some((model) => model.id === d.model) && (
                     <option value={d.model}>{d.model}（目录中不可用）</option>
                   )}
