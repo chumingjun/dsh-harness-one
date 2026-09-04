@@ -1,8 +1,10 @@
 // 实时轨迹单测（issue #52）：foldTraceEvent 增量折叠与 buildTrace 全量产出同语义；
 // 折叠语义回归：input/inject/assistant/tool(call+result 配对)/turn-end。
+// sessionEventsOf 兼容层：dsh-session 0.1.2-alpha.5 删除 Session.events getter 后
+// 引擎收尾（summarize/countTurns/sumUsage）不再抛「events is not iterable」。
 import assert from 'node:assert/strict';
 
-const { foldTraceEvent, finalizeTrace } = await import('../lib/index.js');
+const { foldTraceEvent, finalizeTrace, sessionEventsOf } = await import('../lib/index.js');
 
 let passed = 0;
 const test = (name, fn) => Promise.resolve()
@@ -79,6 +81,27 @@ await test('失败结果 isError=true → ok=false；成功不带 error 字段',
   foldTraceEvent(trace, { seq: 2, type: 'tool/result', data: { message: { content: [{ type: 'tool-result', toolCallId: 'x', isError: true, content: [{ type: 'text', text: 'exit 1' }] }] } } }, pending, meta);
   assert.equal(trace.entries[1].result.ok, false);
   assert.equal(trace.entries[1].result.error, undefined);
+});
+
+await test('sessionEventsOf：新 SDK（snapshotEvents 方法）优先，旧 SDK（.events 数组）回退', () => {
+  const events = [{ seq: 0, type: 'turn/start', data: {} }];
+  const modern = { snapshotEvents: () => events };
+  const legacy = { events };
+  assert.equal(sessionEventsOf(modern), events);
+  assert.equal(sessionEventsOf(legacy), events);
+  // 两者都有时新 API 优先（snapshotEvents 是当前契约）
+  const both = { snapshotEvents: () => events, events: ['stale'] };
+  assert.equal(sessionEventsOf(both), events);
+});
+
+await test('sessionEventsOf：异常形态降级为空数组，不再抛「events is not iterable」', () => {
+  assert.deepEqual(sessionEventsOf(null), []);
+  assert.deepEqual(sessionEventsOf(undefined), []);
+  assert.deepEqual(sessionEventsOf({}), []);
+  // snapshotEvents 抛错（session 已释放等）也降级为空数组
+  assert.deepEqual(sessionEventsOf({ snapshotEvents: () => { throw new Error('released'); } }), []);
+  // 旧 SDK 形态但 .events 非数组
+  assert.deepEqual(sessionEventsOf({ events: undefined }), []);
 });
 
 console.log(process.exitCode ? 'live-trace tests: FAIL' : `live-trace tests: ALL PASS (${passed})`);
