@@ -6,6 +6,7 @@ import {
   AgentDefaultsError,
   AgentDefaultsStore,
   EMPTY_AGENT_DEFAULTS,
+  agentCommonPromptSection,
   normalizeAgentDefaults,
   resolveAgentModelSelection,
   resolveAgentTimeouts,
@@ -25,11 +26,43 @@ test('normalize: 空对象与缺省字段都落成空默认值', () => {
 test('normalize: 正常字段保留并 trim；超时收整数', () => {
   assert.deepEqual(
     normalizeAgentDefaults({ provider: ' deepseek ', model: 'deepseek-chat', reasoningEffort: 'high' }),
-    { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high', nodeTimeoutSec: 0, modelTimeoutSec: 0 },
+    { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high', nodeTimeoutSec: 0, modelTimeoutSec: 0, systemPrompt: '' },
   );
   assert.deepEqual(
     normalizeAgentDefaults({ provider: 'deepseek', model: 'deepseek-chat', nodeTimeoutSec: '600', modelTimeoutSec: 240 }),
-    { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: '', nodeTimeoutSec: 600, modelTimeoutSec: 240 },
+    { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: '', nodeTimeoutSec: 600, modelTimeoutSec: 240, systemPrompt: '' },
+  );
+});
+
+// ---- systemPrompt（通用提示词，issue #129）----
+
+test('normalize: systemPrompt 保留换行、去首尾空白；空/缺省回退空串', () => {
+  const text = '- 输出统一使用中文\n- 交付物直接给结论\n\n- 物业术语遵循规范';
+  assert.equal(normalizeAgentDefaults({ systemPrompt: `\n${text}\n` }).systemPrompt, text);
+  assert.equal(normalizeAgentDefaults({}).systemPrompt, '');
+  assert.equal(normalizeAgentDefaults({ systemPrompt: undefined }).systemPrompt, '');
+  assert.equal(normalizeAgentDefaults({ systemPrompt: null }).systemPrompt, '');
+});
+
+test('normalize: systemPrompt 非字符串 / 超长都拒绝', () => {
+  assert.throws(() => normalizeAgentDefaults({ systemPrompt: 42 }), AgentDefaultsError);
+  assert.throws(() => normalizeAgentDefaults({ systemPrompt: 'x'.repeat(8001) }), /systemPrompt 最长 8000/);
+  assert.doesNotThrow(() => normalizeAgentDefaults({ systemPrompt: 'x'.repeat(8000) }));
+});
+
+test('commonPromptSection: 空串不注入（返回空），非空包成通用约束段', () => {
+  assert.equal(agentCommonPromptSection(EMPTY_AGENT_DEFAULTS), '');
+  assert.equal(agentCommonPromptSection({}), '');
+  assert.equal(agentCommonPromptSection(null), '');
+  assert.equal(agentCommonPromptSection({ systemPrompt: '   ' }), '');
+  assert.equal(
+    agentCommonPromptSection({ ...EMPTY_AGENT_DEFAULTS, systemPrompt: '输出用中文' }),
+    '## 通用约束\n\n输出用中文',
+  );
+  // 多行约束整体保留
+  assert.equal(
+    agentCommonPromptSection({ ...EMPTY_AGENT_DEFAULTS, systemPrompt: '第一条\n第二条' }),
+    '## 通用约束\n\n第一条\n第二条',
   );
 });
 
@@ -110,7 +143,7 @@ test('store: 写入后可读回，落盘 0600', () => {
   const file = join(dir, 'sub', 'agent-defaults.json');
   const store = new AgentDefaultsStore(file);
   store.write({ provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high', nodeTimeoutSec: 600, modelTimeoutSec: 240 });
-  assert.deepEqual(store.read(), { provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high', nodeTimeoutSec: 600, modelTimeoutSec: 240 });
+  assert.deepEqual(store.read(), { provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high', nodeTimeoutSec: 600, modelTimeoutSec: 240, systemPrompt: '' });
   const doc = JSON.parse(readFileSync(file, 'utf8'));
   assert.equal(doc.version, 1);
   assert.equal(doc.provider, 'deepseek');
@@ -206,6 +239,22 @@ test('resolveTimeouts: 节点显式配置永远优先（只覆盖配了的那项
     resolveAgentTimeouts({ node: { modelTimeoutSec: 30 }, defaults: { ...EMPTY_AGENT_DEFAULTS, nodeTimeoutSec: 900 } }),
     { nodeTimeoutSec: 900, modelTimeoutSec: 30 },
   );
+});
+
+test('store: 旧版存量文件（无 systemPrompt 字段）读取回退空串、写回补齐字段', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wf1-agent-defaults-'));
+  const file = join(dir, 'agent-defaults.json');
+  const store = new AgentDefaultsStore(file);
+  // 旧版五字段文件（v0.8.1 及之前落盘形态）
+  writeFileSync(file, JSON.stringify({ version: 1, provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: '', nodeTimeoutSec: 600, modelTimeoutSec: 0 }), 'utf8');
+  const read = store.read();
+  assert.equal(read.systemPrompt, '');
+  assert.equal(read.provider, 'deepseek');
+  assert.equal(read.nodeTimeoutSec, 600);
+  // 写回后含新字段
+  const written = store.write({ ...read, systemPrompt: '输出用中文' });
+  assert.equal(written.systemPrompt, '输出用中文');
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).systemPrompt, '输出用中文');
 });
 
 let failed = 0;

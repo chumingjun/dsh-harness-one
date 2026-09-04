@@ -1055,7 +1055,7 @@ window.__ModuleLoader__.load({
     function AgentDefaultsCard() {
       var a = s2(null), llmConfig = a[0], setLlmConfig = a[1];
       var b = s2(null), saved = b[0], setSaved = b[1]; // GET/PUT 回包 {defaults, effective, dsh}
-      var c = s2({ provider: "", model: "", reasoningEffort: "", nodeTimeoutSec: 0, modelTimeoutSec: 0 }), draft = c[0], setDraft = c[1];
+      var c = s2({ provider: "", model: "", reasoningEffort: "", nodeTimeoutSec: 0, modelTimeoutSec: 0, systemPrompt: "" }), draft = c[0], setDraft = c[1];
       var e = s2(false), saving = e[0], setSaving = e[1];
       var f = s2(null), message = f[0], setMessage = f[1]; // {kind:'ok'|'err', text}
 
@@ -1067,7 +1067,7 @@ window.__ModuleLoader__.load({
         systemGet(AGENT_DEFAULTS_API).then(function (d2) {
           if (dead || !d2 || !d2.ok) return;
           setSaved(d2);
-          setDraft(Object.assign({ provider: "", model: "", reasoningEffort: "", nodeTimeoutSec: 0, modelTimeoutSec: 0 }, d2.defaults));
+          setDraft(Object.assign({ provider: "", model: "", reasoningEffort: "", nodeTimeoutSec: 0, modelTimeoutSec: 0, systemPrompt: "" }, d2.defaults));
         }).catch(function () {});
         return function () { dead = true; };
       }, []);
@@ -1079,6 +1079,7 @@ window.__ModuleLoader__.load({
         || draft.reasoningEffort !== saved.defaults.reasoningEffort
         || Number(draft.nodeTimeoutSec || 0) !== Number(saved.defaults.nodeTimeoutSec || 0)
         || Number(draft.modelTimeoutSec || 0) !== Number(saved.defaults.modelTimeoutSec || 0)
+        || String(draft.systemPrompt || "") !== String(saved.defaults.systemPrompt || "")
       );
 
       var patchDraft = function (patch) {
@@ -1093,6 +1094,7 @@ window.__ModuleLoader__.load({
         var payload = Object.assign({}, draft, {
           nodeTimeoutSec: Math.max(0, Math.floor(Number(draft.nodeTimeoutSec) || 0)),
           modelTimeoutSec: Math.max(0, Math.floor(Number(draft.modelTimeoutSec) || 0)),
+          systemPrompt: String(draft.systemPrompt || ""),
         });
         if (draft.nodeTimeoutSec !== "" && (!Number.isFinite(Number(draft.nodeTimeoutSec)) || Number(draft.nodeTimeoutSec) < 0)
           || draft.modelTimeoutSec !== "" && (!Number.isFinite(Number(draft.modelTimeoutSec)) || Number(draft.modelTimeoutSec) < 0)) {
@@ -1109,7 +1111,7 @@ window.__ModuleLoader__.load({
           .then(function (r2) {
             if (r2 && r2.ok) {
               setSaved(r2);
-              setDraft(Object.assign({ provider: "", model: "", reasoningEffort: "", nodeTimeoutSec: 0, modelTimeoutSec: 0 }, r2.defaults));
+              setDraft(Object.assign({ provider: "", model: "", reasoningEffort: "", nodeTimeoutSec: 0, modelTimeoutSec: 0, systemPrompt: "" }, r2.defaults));
               setMessage({ kind: "ok", text: "已保存，新发起的运行立即生效" });
             } else {
               setMessage({ kind: "err", text: (r2 && r2.error) || "保存失败" });
@@ -1206,6 +1208,36 @@ window.__ModuleLoader__.load({
                 )),
                 defaultsField("节点超时(秒)", mkTimeoutInput("nodeTimeoutSec", "默认 500")),
                 defaultsField("单次超时(秒)", mkTimeoutInput("modelTimeoutSec", "默认 300")),
+                // 通用提示词：跨节点行为约束，注入所有 agent 节点系统提示词的末尾。
+                // 独立成块放在字段行之后（多行文本不适合 72px 标签行的紧凑布局）
+                react.createElement(
+                  "div",
+                  { key: "systemPrompt", style: { display: "flex", flexDirection: "column", gap: "4px" } },
+                  react.createElement(
+                    "div",
+                    { style: { fontSize: "13px", color: "var(--dsw-alias-text-secondary)" } },
+                    "通用提示词",
+                    react.createElement(
+                      "span",
+                      { style: { marginLeft: "6px", fontSize: "11px", opacity: 0.75 } },
+                      "注入所有 agent 节点提示词末尾的行为约束；留空不注入",
+                    ),
+                  ),
+                  react.createElement("textarea", {
+                    value: draft.systemPrompt || "",
+                    disabled: saving,
+                    placeholder: "例：\n- 输出统一使用中文\n- 交付物直接给结论，不要寒暄\n- 物业术语遵循公司规范手册",
+                    style: {
+                      width: "100%", minHeight: "72px", padding: "6px 8px", borderRadius: "8px",
+                      fontSize: "13px", lineHeight: "20px", resize: "vertical", boxSizing: "border-box",
+                      fontFamily: "inherit",
+                      border: "1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,.3))",
+                      background: "var(--dsw-alias-bg-primary, transparent)",
+                      color: "var(--dsw-alias-label-primary)",
+                    },
+                    onChange: function (ev) { patchDraft({ systemPrompt: ev.target.value }); },
+                  }),
+                ),
               ],
         react.createElement(
           "div",

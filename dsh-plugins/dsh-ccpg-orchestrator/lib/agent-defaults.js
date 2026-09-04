@@ -13,7 +13,9 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 const MAX_FIELD_LENGTH = 200;
-const ALLOWED_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'nodeTimeoutSec', 'modelTimeoutSec']);
+// 通用提示词是段落级文本：允许换行、给足长度，但设防呆上限。
+const MAX_SYSTEM_PROMPT_LENGTH = 8000;
+const ALLOWED_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'nodeTimeoutSec', 'modelTimeoutSec', 'systemPrompt']);
 // 超时字段：正整数秒，0/空 = 不设置（回退内置默认 500s / 300s）。上限 86400（一天）防呆。
 const TIMEOUT_KEYS = new Set(['nodeTimeoutSec', 'modelTimeoutSec']);
 const MAX_TIMEOUT_SEC = 86400;
@@ -39,9 +41,10 @@ export const agentDefaultsFile = () => join(
 export const EMPTY_AGENT_DEFAULTS = Object.freeze({
   provider: '', model: '', reasoningEffort: '',
   nodeTimeoutSec: 0, modelTimeoutSec: 0,
+  systemPrompt: '',
 });
 
-/** 输入整形：三个字符串字段 + 两个超时（秒，0 = 不设置）。 */
+/** 输入整形：三个字符串字段 + 两个超时（秒，0 = 不设置）+ 通用提示词（段落文本）。 */
 export function normalizeAgentDefaults(source) {
   if (source === null || typeof source !== 'object' || Array.isArray(source)) fail('请求体必须是对象');
   for (const key of Object.keys(source)) {
@@ -56,6 +59,13 @@ export function normalizeAgentDefaults(source) {
       if (!Number.isFinite(num) || num < 0 || !Number.isInteger(num)) fail(`${key} 必须是不小于 0 的整数（秒）`);
       if (num > MAX_TIMEOUT_SEC) fail(`${key} 不能超过 ${MAX_TIMEOUT_SEC} 秒`);
       result[key] = num;
+      continue;
+    }
+    if (key === 'systemPrompt') {
+      if (typeof value !== 'string') fail('systemPrompt 必须是字符串');
+      if (value.length > MAX_SYSTEM_PROMPT_LENGTH) fail(`systemPrompt 最长 ${MAX_SYSTEM_PROMPT_LENGTH} 个字符`);
+      // 保留换行与内部空白（约束文本常是多行列表），只去掉首尾空白
+      result.systemPrompt = value.trim();
       continue;
     }
     if (typeof value !== 'string') fail(`${key} 必须是字符串`);
@@ -172,4 +182,14 @@ export function resolveAgentTimeouts({ node = {}, defaults = EMPTY_AGENT_DEFAULT
     ? Number(node.modelTimeoutSec)
     : (defaults.modelTimeoutSec > 0 ? defaults.modelTimeoutSec : DEFAULT_MODEL_TIMEOUT_SEC);
   return { nodeTimeoutSec, modelTimeoutSec };
+}
+
+/**
+ * 通用提示词段（设置面板「Workflow One」配置的部署级行为约束，issue #129）。
+ * 注入系统提示词尾部：节点提示词定义「做什么」，通用约束修正「怎么做」，
+ * 尾部位置保证它覆盖前面的行为指令。空串返回空串（调用方直接跳过拼接）。
+ */
+export function agentCommonPromptSection(defaults = EMPTY_AGENT_DEFAULTS) {
+  const text = typeof defaults?.systemPrompt === 'string' ? defaults.systemPrompt.trim() : '';
+  return text ? `## 通用约束\n\n${text}` : '';
 }
