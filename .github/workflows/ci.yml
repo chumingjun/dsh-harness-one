@@ -38,8 +38,10 @@ jobs:
           # orchestrator 自有依赖（ajv/cron-parser/quickjs）+ 单测可达的 dsh SDK。
           # 本地完整 SDK 经 bootstrap-deps.sh 从 dsh 安装软链；CI 用 registry rc 版
           # （lib/index.js import 四个 SDK 包，集成测试真实加载 apply()）。
-          # document-preview 依赖由 build-document-preview.sh 自装。
+          # document-preview 单测会真实加载 rehype 管线（test/index.test.mjs），
+          # 依赖须在 test 前装好；build-document-preview.sh 的 npm ci 幂等复用。
           npm --prefix dsh-plugins/dsh-ccpg-orchestrator install --no-audit --no-fund
+          npm --prefix dsh-plugins/dsh-ccpg-document-preview install --no-audit --no-fund
           npm install --no-save --no-audit --no-fund @deepseek-ai/schemastery @deepseek-ai/dsh-llm @deepseek-ai/dsh-tools @deepseek-ai/dsh-session
 
       - name: test
