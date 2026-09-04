@@ -75,8 +75,8 @@ import {
 } from './assistant.js';
 import { ensureWorkflowSkill } from './skill-seed.js';
 import {
-  AgentDefaultsError, AgentDefaultsStore, DEFAULT_NODE_TIMEOUT_SEC, normalizeAgentDefaults,
-  resolveAgentModelSelection, resolveAgentTimeouts, validateAgentDefaults,
+  AgentDefaultsError, AgentDefaultsStore, DEFAULT_NODE_TIMEOUT_SEC, agentCommonPromptSection,
+  normalizeAgentDefaults, resolveAgentModelSelection, resolveAgentTimeouts, validateAgentDefaults,
 } from './agent-defaults.js';
 import {
   assertNonSensitiveVariableDefinitions, assertSafeContextObject, GlobalVariableStore, VariableStoreError,
@@ -1354,6 +1354,10 @@ export function apply(ctx, config) {
     if (skillIds.some((x) => x === 'feishu-cli') && larkCliAvailable()) {
       systemPrompt += `\n\n飞书操作：本机装有 lark-cli（飞书官方 CLI，在 dsh 设置「飞书账号」扫码授权一次即可）。默认身份已固定为 user，执行 lark-cli 命令默认加 --as user；user token 由宿主后台自动续约，无需关心过期。user 身份报错/授权失效时降级 --as bot 并在结果注明"需用户重新扫码"。详见技能 feishu-cli。输出 JSON 信封，成功看 ok==true。`;
     }
+    // 通用提示词（设置面板「Workflow One」，issue #129）：部署级行为约束，
+    // 尾部注入——节点提示词定义「做什么」，通用约束修正「怎么做」并覆盖前面指令
+    const commonPromptSection = agentCommonPromptSection(agentDefaults);
+    if (commonPromptSection) systemPrompt += `\n\n${commonPromptSection}`;
 
     // 用户输入 = 模板渲染 + 附件复制进工作区
     const tctx = {
@@ -1481,7 +1485,7 @@ export function apply(ctx, config) {
         let turns = 0; let preview = ''; let turnEnded = false;
         let lastStepStartSeq = -1; let stepsSeen = 0;
         try {
-          for (const ev of agent.session.events) {
+          for (const ev of sessionEventsOf(agent.session)) {
             if (ev.seq < firstSeq) continue;
             if (ev.type === 'turn/start') turns += 1;
             if (ev.type === 'turn/end') turnEnded = true;
@@ -1535,7 +1539,7 @@ export function apply(ctx, config) {
         // 视为该次模型调用卡死，cancel 本节点（区别于 timeoutSec 的节点总超时）。
         // 以事件序号驱动：step/end 或任何新事件落盘都会刷新 lastActivitySeq。
         if (!turnEnded && stepsSeen > 0) {
-          const events = agent.session.events;
+          const events = sessionEventsOf(agent.session);
           const lastSeq = events.length ? events[events.length - 1].seq : firstSeq;
           if (lastStepStartSeq > 0 && lastSeq === lastStepStartSeq && !watchState.rechecking) {
             const stepAgeMs = Date.now() - (watchState.stepStartedAt || Date.now());
@@ -1596,7 +1600,7 @@ export function apply(ctx, config) {
       await agent.whenIdle().catch(() => {});
       try { await ctx.get('sessions').flush(agent.session); } catch { /* flush 失败不影响结果 */ }
 
-      let { text, reason } = summarize(agent.session.events, firstSeq);
+      let { text, reason } = summarize(sessionEventsOf(agent.session), firstSeq);
       // 模型请求看门狗触发：取消导致的「正常收尾」要改写为显式超时错误，
       // 让引擎的重试机制（非取消类失败）能接手
       if (watchState.modelTimeout) {
@@ -1613,7 +1617,7 @@ export function apply(ctx, config) {
               source: { kind: 'user' },
             }));
             await agent.whenIdle();
-            const repaired = summarize(agent.session.events, repairSeq);
+            const repaired = summarize(sessionEventsOf(agent.session), repairSeq);
             reason = repaired.reason;
             if (reason?.kind === 'error') throw reason.error || new Error('结构化输出修复请求失败');
             return repaired.text;
@@ -1630,15 +1634,15 @@ export function apply(ctx, config) {
       }
       const inputFileSet = new Set(inputFiles);
       const artifacts = safeWsList(ws).filter((file) => !inputFileSet.has(file));
-      const usage = sumUsage(agent.session.events, firstSeq);
+      const usage = sumUsage(sessionEventsOf(agent.session), firstSeq);
       const details = {
         model: `${provider}:${model}`,
         runtime: 'dsh-plugin',
-        turns: countTurns(agent.session.events, firstSeq),
+        turns: countTurns(sessionEventsOf(agent.session), firstSeq),
         artifacts,
         sessionId: String(agent.id || ''),
         // 过程轨迹（详情弹窗数据源）：渲染后的输入 + 轮次/工具调用/助手文本时间线
-        trace: buildTrace(agent.session.events, firstSeq, { input: userPrompt, model: `${provider}:${model}` }),
+        trace: buildTrace(sessionEventsOf(agent.session), firstSeq, { input: userPrompt, model: `${provider}:${model}` }),
         input: rendered.text || '(无上游输入)',
         ...(structuredMeta ? { structuredMeta } : {}),
         ...(usage ? { usage } : {}),
@@ -3602,6 +3606,18 @@ export function apply(ctx, config) {
 
 // ---------------- helpers ----------------
 
+// dsh-session 0.1.2-alpha.5 起删除了 Session.events getter（改为 snapshotEvents() 方法）。
+// 引擎消费的是运行中 agent 的 session：新 SDK 走 snapshotEvents()，旧 SDK 回退 .events；
+// 两者都不是数组（session 已释放等异常形态）时给空数组，让收尾逻辑按「无事件」降级
+// 而不是抛「events is not iterable」吞掉整个节点结果。
+export function sessionEventsOf(session) {
+  if (!session) return [];
+  if (typeof session.snapshotEvents === 'function') {
+    try { return session.snapshotEvents() || []; } catch { return []; }
+  }
+  return Array.isArray(session.events) ? session.events : [];
+}
+
 // agent 过程轨迹：把本节点产生的 session 事件折叠成 UI 可直接渲染的时间线。
 // entries: {kind:'input'|'assistant'|'tool', ...}；工具调用与结果按 callId 配对成一条。
 function buildTrace(events, firstSeq, meta = {}) {
@@ -3668,12 +3684,13 @@ export function finalizeTrace(trace, meta = {}) {
   }
 }
 
-// 旧运行记录（无 trace 快照）按 sessionId 从 dsh 会话存档现场回放轨迹
+// 旧运行记录（无 trace 快照）按 sessionId 从 dsh 会话存档现场回放轨迹。
+// persistence.load 返回 inspection（.events 数组，新旧 SDK 同形）。
 async function replayTrace(sessionId) {
   const persistence = ctxRef?.sessionPersistence;
   if (!persistence || !sessionId) return null;
   const insp = await persistence.load(sessionId);
-  return buildTrace(insp.events, 0, { input: '', model: '' });
+  return buildTrace(Array.isArray(insp?.events) ? insp.events : [], 0, { input: '', model: '' });
 }
 
 function summarize(events, firstSeq) {

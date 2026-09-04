@@ -87,7 +87,7 @@ const test = async (name, fn) => {
 await test('GET 初始为空默认值，effective 跟随 dsh 全局选择', async () => {
   const { status, body } = await call('GET');
   assert.equal(status, 200);
-  assert.deepEqual(body.defaults, { provider: '', model: '', reasoningEffort: '', nodeTimeoutSec: 0, modelTimeoutSec: 0 });
+  assert.deepEqual(body.defaults, { provider: '', model: '', reasoningEffort: '', nodeTimeoutSec: 0, modelTimeoutSec: 0, systemPrompt: '' });
   assert.deepEqual(body.effective, { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'medium', nodeTimeoutSec: 500, modelTimeoutSec: 300 });
   assert.deepEqual(body.dsh, { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'medium' });
 });
@@ -104,7 +104,7 @@ await test('PUT 合法五件套 200，effective 生效且 GET 可读回', async 
   assert.equal(put.status, 200);
   assert.deepEqual(put.body.effective, { provider: 'glm', model: 'glm-5', reasoningEffort: null, nodeTimeoutSec: 900, modelTimeoutSec: 120 });
   const get = await call('GET');
-  assert.deepEqual(get.body.defaults, { provider: 'glm', model: 'glm-5', reasoningEffort: '', nodeTimeoutSec: 900, modelTimeoutSec: 120 });
+  assert.deepEqual(get.body.defaults, { provider: 'glm', model: 'glm-5', reasoningEffort: '', nodeTimeoutSec: 900, modelTimeoutSec: 120, systemPrompt: '' });
 });
 
 await test('PUT 非法超时 400 且不落盘', async () => {
@@ -133,6 +133,24 @@ await test('PUT 缺依赖字段 400；清空回退 dsh 全局', async () => {
   assert.deepEqual(cleared.body.effective, { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'medium', nodeTimeoutSec: 500, modelTimeoutSec: 300 });
 });
 
+// 通用提示词（issue #129）：与渠道/模型/超时同存储同端点，多行文本原样保留
+await test('PUT systemPrompt 保存并回读；超长 400；空串清空', async () => {
+  const text = '- 输出统一使用中文\n- 交付物直接给结论';
+  const put = await call('PUT', { systemPrompt: text });
+  assert.equal(put.status, 200);
+  assert.equal(put.body.defaults.systemPrompt, text);
+  const get = await call('GET');
+  assert.equal(get.body.defaults.systemPrompt, text);
+  const tooLong = await call('PUT', { systemPrompt: 'x'.repeat(8001) });
+  assert.equal(tooLong.status, 400);
+  assert.match(tooLong.body.error, /systemPrompt 最长/);
+  const badType = await call('PUT', { systemPrompt: 42 });
+  assert.equal(badType.status, 400);
+  const cleared = await call('PUT', { systemPrompt: '' });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.defaults.systemPrompt, '');
+});
+
 await test('POST 方法 405', async () => {
   const { status } = await call('POST', {});
   assert.equal(status, 405);
@@ -154,7 +172,7 @@ await test('llm-config 暴露 wf1Defaults（节点面板展示链与引擎解析
   const res = responseCapture();
   await llmRoute(request('GET', '/wf1/api/llm-config'), res);
   const body = res.json();
-  assert.deepEqual(body.wf1Defaults, { provider: 'glm', model: 'glm-5', reasoningEffort: '', nodeTimeoutSec: 800, modelTimeoutSec: 200 });
+  assert.deepEqual(body.wf1Defaults, { provider: 'glm', model: 'glm-5', reasoningEffort: '', nodeTimeoutSec: 800, modelTimeoutSec: 200, systemPrompt: '' });
   // dsh 全局选择字段保持原语义，不受 WF1 默认值影响
   assert.equal(body.defaultProvider, 'deepseek');
   assert.equal(body.defaultModel, 'deepseek-chat');
