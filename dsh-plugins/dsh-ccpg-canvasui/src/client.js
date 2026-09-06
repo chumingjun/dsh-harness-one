@@ -183,6 +183,36 @@ window.__ModuleLoader__.load({
       return true;
     }
 
+    // 消息卡「打开画布」带定位目标（runId）：开侧栏 tab 后向常驻画布 iframe 发
+    // wf1-open-run，画布据 run 详情打开对应工作流并选中该运行（不传则维持原
+    // 「只开 tab」行为）。iframe 未挂载（侧栏从没开过）时等 SidebarWorkflowTab
+    // mount 后由 pendingOpenRun 队列补发。
+    var pendingOpenRun = null;
+    function openCanvasWithRun(runId) {
+      pendingOpenRun = runId || null;
+      if (!openWorkflowSidebar()) {
+        // 无侧栏服务（老宿主）：退回新窗口打开画布，hash 直达该 run 的文稿视图
+        if (runId) window.open(CANVAS_URL + "#docs/" + encodeURIComponent(runId), "_blank");
+        else window.open(CANVAS_URL, "_blank");
+        pendingOpenRun = null;
+        return;
+      }
+      flushPendingOpenRun();
+    }
+    function flushPendingOpenRun() {
+      if (!pendingOpenRun) return;
+      var host = persistentHost;
+      var frame = host ? host.querySelector("iframe") : null;
+      if (!frame || !canvasReady) return; // 未挂载/未就绪：SidebarWorkflowTab 挂载后重试
+      try {
+        frame.contentWindow.postMessage(
+          { type: "wf1-open-run", runId: pendingOpenRun },
+          window.location.origin,
+        );
+        pendingOpenRun = null;
+      } catch (e) { /* 画布异常不炸消息流 */ }
+    }
+
     // ---- 消息流工作流卡片（tool.call.toolview）----
     // 数据源全部现成：canvas_run_workflow 的工具结果带 runId → 轮询 /wf1/api/runs/detail；
     // canvas_graph_patch 的 args/结果自带 ops 与 lint。卡片自绘 SVG 缩略图，画布本体零改动。
@@ -460,7 +490,11 @@ window.__ModuleLoader__.load({
       return result;
     }
 
-    function openCanvasFallback() {
+    function openCanvasFallback(target) {
+      if (target && target.runId) {
+        openCanvasWithRun(target.runId);
+        return;
+      }
       if (openWorkflowSidebar()) return;
       window.open(CANVAS_URL, "_blank");
     }
@@ -474,7 +508,7 @@ window.__ModuleLoader__.load({
           type: "button",
           className: "wf1-card",
           ref: props.hostRef || undefined,
-          onClick: function () { try { openCanvasFallback(); } catch (e) { /* 宿主状态异常不炸消息流 */ } },
+          onClick: function () { try { openCanvasFallback(props.target); } catch (e) { /* 宿主状态异常不炸消息流 */ } },
         },
         react.createElement(
           "div", { className: "wf1-card-head" },
@@ -672,6 +706,8 @@ window.__ModuleLoader__.load({
           width: thumbW, capacity: capacity,
         }),
         hostRef: attachHost,
+        // 点击定位到卡片正在跟踪的 run（续跑换 run 后也指向最新）
+        target: { runId: trackedRunId },
       });
     }
 
@@ -872,9 +908,13 @@ window.__ModuleLoader__.load({
           if (d.type === "wf1-ready") {
             canvasReady = true;
             setReady(true);
+            // 画布就绪即可投递「打开画布」定位请求（卡片点击可能先于 iframe 挂载/就绪）
+            flushPendingOpenRun();
           }
         }
         window.addEventListener("message", onMessage);
+        // mount 即补投：侧栏 tab 本就打开、iframe 已就绪的场景
+        flushPendingOpenRun();
         return function () {
           window.removeEventListener("message", onMessage);
         };
