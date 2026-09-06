@@ -1,7 +1,10 @@
 /* ===== 文稿视图（DocWallView）—— 原型 v2 定稿样式，令牌全部来自 styles.css :root ===== */
 
 .docwall-view { flex: 1; min-width: 0; min-height: 0; display: flex; background: var(--bg); }
-.docwall { display: flex; flex: 1; height: 100%; min-height: 0; }
+/* min-width:0 断开「内容宽→容器宽」级联：条带卡片是 flex:none，若本层随内容
+   放大（flex item 默认 min-width:auto），横向滚动会发生在 docwall-main 而不是
+   条带内——成果多时整版被撑出视口，窗口里只能看到开头两张卡且无处可滑 */
+.docwall { display: flex; flex: 1; height: 100%; min-height: 0; min-width: 0; }
 .docwall-center { flex: 1; flex-direction: column; gap: 12px; display: flex; align-items: center; justify-content: center; color: var(--fg-muted); font-size: 13px; }
 .docwall-empty { font-size: 14px; }
 .docwall-load-error { display: flex; align-items: center; gap: 8px; color: var(--danger-fg); }
@@ -20,8 +23,9 @@
 .docwall-dot-error, .docwall-dot-canceled { background: var(--danger); opacity: 1; }
 .docwall-dot-running { background: var(--accent); opacity: 1; }
 
-/* 右侧 */
-.docwall-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; }
+/* 右侧：纵向滚动归本层；横向隐藏（横向滚动只应发生在条带 .docwall-strip-cards 内，
+   auto 会在条带被撑爆时出现整版横向滚动条，掩盖条带自身的滚动） */
+.docwall-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; }
 .docwall-toolbar { display: flex; align-items: baseline; gap: 12px; padding: 14px 22px 10px; position: sticky; top: 0; background: var(--bg); z-index: 2; border-bottom: 1px solid var(--border); }
 .docwall-toolbar-meta { font-size: 12px; color: var(--fg-faint); }
 .docwall-toolbar-spacer { flex: 1; }
