@@ -1468,6 +1468,24 @@ export default function App() {
       if (d.type === 'wf1-theme' && (d.theme === 'light' || d.theme === 'dark')) {
         document.documentElement.dataset.theme = d.theme;
       }
+      if (d.type === 'wf1-open-run' && d.runId) {
+        // 宿主消息卡「打开画布」：定位到卡片对应的运行——先取 run 详情拿 workflowId
+        //（跨工作流则复用 openWorkflow 切图，同图直接选中），再进画布查看态。
+        (async () => {
+          try {
+            const res = await fetch(apiUrl(`/runs/detail?id=${encodeURIComponent(String(d.runId))}`));
+            if (!res.ok) { toast('打开画布：运行不存在或已清理', 'error'); return; }
+            const detail = await res.json();
+            const wfId = detail.workflowId || null;
+            if (wfId && wfId !== currentWfIdRef.current) {
+              const wfRes = await fetch(apiUrl(`/workflows/detail?id=${encodeURIComponent(wfId)}`));
+              if (wfRes.ok) await openWorkflowRef.current?.(await wfRes.json());
+            }
+            inspectRun(String(d.runId));
+            setView('canvas');
+          } catch { toast('打开画布：定位运行失败', 'error'); }
+        })();
+      }
       if (d.type === 'wf1-session' && d.sessionId) {
         hostSessionRef.current = d.sessionId;
         setApiSessionId(d.sessionId);
