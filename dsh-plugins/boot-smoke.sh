@@ -51,12 +51,25 @@ echo "· 启动 dsh（$PROFILE @ $PORT）…"
     sh dsh-plugins/start.sh "$PROFILE" --no-open >"$SMOKE_ROOT/boot.log" 2>&1 ) &
 BOOT_PID=$!
 
-# 探活：dsh 官方 UI 首载慢，放宽到 60s；每 2s 重试
+# 探活：dsh 官方 UI 首载慢，放宽到 60s；每 2s 重试。
+# 鉴权两代语义（0.1.2-rc.1 起）：旧版裸 GET / 即 200；新版 401，
+# 须从 boot.log 提取 token → GET /?token= 种 dsh-auth cookie → 带 cookie 才 200。
+# 两条路都试：任一拿到 200 即就绪；cookie 落 jar 供后续 better-sidebar 检查复用。
 probe() { curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$1"; }
+JAR="$SMOKE_ROOT/probe.cookies"
+probe_authorized() {
+  rm -f "$JAR"
+  code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://127.0.0.1:$PORT/" || true)
+  [ "$code" = "200" ] && return 0
+  token=$(grep -o 'token=[^ ]*' "$SMOKE_ROOT/boot.log" 2>/dev/null | tail -1 | cut -d= -f2)
+  [ -n "$token" ] || return 1
+  curl -s -o /dev/null --max-time 5 -c "$JAR" "http://127.0.0.1:$PORT/?token=$token" || true
+  code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -b "$JAR" "http://127.0.0.1:$PORT/" || true)
+  [ "$code" = "200" ]
+}
 ok=""
 for i in $(seq 1 30); do
-  code=$(probe "http://127.0.0.1:$PORT/" || true)
-  if [ "$code" = "200" ]; then ok=1; break; fi
+  if probe_authorized; then ok=1; break; fi
   sleep 2
 done
 [ -n "$ok" ] || { echo "✗ 官方 UI 未就绪（60s 内无 200）"; tail -20 "$SMOKE_ROOT/boot.log"; exit 1; }
@@ -68,9 +81,10 @@ echo "✓ 独立画布 /wf1/ 200"
 
 # better-sidebar 真挂载：官方 UI HTML 引用其 client bundle（canvasui 的侧栏 tab 依赖它）。
 # UI 200 ≠ client-modules 注入完成（首载注入有延迟），同样放宽到 60s 重试。
+# rc.1 起首页要带鉴权 cookie 才出 HTML（jar 由探活阶段产出；旧版无 jar 时 curl 忽略 -b）。
 bs_ok=""
 for i in $(seq 1 30); do
-  if curl -s --max-time 5 "http://127.0.0.1:$PORT/" | grep -q "better-sidebar/client.js"; then bs_ok=1; break; fi
+  if curl -s --max-time 5 ${JAR:+-b "$JAR"} "http://127.0.0.1:$PORT/" | grep -q "better-sidebar/client.js"; then bs_ok=1; break; fi
   sleep 2
 done
 if [ -z "$bs_ok" ]; then
