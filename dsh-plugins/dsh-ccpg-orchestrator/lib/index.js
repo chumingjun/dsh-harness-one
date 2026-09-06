@@ -1355,8 +1355,10 @@ export function apply(ctx, config) {
       systemPrompt += `\n\n飞书操作：本机装有 lark-cli（飞书官方 CLI，在 dsh 设置「飞书账号」扫码授权一次即可）。默认身份已固定为 user，执行 lark-cli 命令默认加 --as user；user token 由宿主后台自动续约，无需关心过期。user 身份报错/授权失效时降级 --as bot 并在结果注明"需用户重新扫码"。详见技能 feishu-cli。输出 JSON 信封，成功看 ok==true。`;
     }
     // 通用提示词（设置面板「Workflow One」，issue #129）：部署级行为约束，
-    // 尾部注入——节点提示词定义「做什么」，通用约束修正「怎么做」并覆盖前面指令
-    const commonPromptSection = agentCommonPromptSection(agentDefaults);
+    // 尾部注入——节点提示词定义「做什么」，通用约束修正「怎么做」并覆盖前面指令。
+    // 注意：此处 agentDefaults 尚未初始化（下方 const 声明），TDZ 直接引用会炸，
+    // 从 store 现读一份。
+    const commonPromptSection = agentCommonPromptSection(agentDefaultsStore.read());
     if (commonPromptSection) systemPrompt += `\n\n${commonPromptSection}`;
 
     // 用户输入 = 模板渲染 + 附件复制进工作区
