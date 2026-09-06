@@ -286,7 +286,8 @@ window.__ModuleLoader__.load({
     };
 
     // 取 DAG 最长路径作为卡片主流程；运行态排除明确跳过的节点。
-    function flowPreviewModel(graph, nodeStates) {
+    // capacity 为可见项上限（含省略位），超长时保头 + 尾 2（尾部通常是汇合产出节点）。
+    function flowPreviewModel(graph, nodeStates, capacity) {
       var nodes = (graph && Array.isArray(graph.nodes) ? graph.nodes : []).filter(function (n) {
         return (n.type || (n.data && n.data.nodeType)) !== "note";
       });
@@ -333,7 +334,8 @@ window.__ModuleLoader__.load({
       }, []);
       if (!path.length) path = order;
       path.forEach(function (id, index) { numberById[id] = index + 1; });
-      var visible = path.length > 5 ? path.slice(0, 2).concat(null, path.slice(-2)) : path;
+      var limit = Math.max(3, Number(capacity) > 3 ? Math.floor(Number(capacity)) : 5);
+      var visible = path.length > limit ? path.slice(0, limit - 3).concat([null], path.slice(-2)) : path;
       return {
         items: visible.map(function (id) {
           if (id === null) return null;
@@ -351,8 +353,12 @@ window.__ModuleLoader__.load({
     }
 
     // 语义化流程摘要：真实主路径 + 连续序号，比缩小整张画布更适合消息卡片。
-    function graphThumbnail(graph, run) {
-      var model = flowPreviewModel(graph, run && run.nodeStates);
+    // viewBox 宽度随卡片可用宽自适应：宽屏多展示节点，窄屏退回 5 项以内。
+    function graphThumbnail(graph, run, opts) {
+      var options = opts && typeof opts === "object" ? opts : {};
+      var W = Number(options.width) > 320 ? Math.floor(Number(options.width)) : 360;
+      var capacity = Number(options.capacity) > 0 ? Math.floor(Number(options.capacity)) : 0;
+      var model = flowPreviewModel(graph, run && run.nodeStates, capacity || undefined);
       if (!model) return null;
       var states = (run && run.nodeStates) || {};
       var colorOf = function (st) {
@@ -362,8 +368,12 @@ window.__ModuleLoader__.load({
         if (st === "waiting") return "var(--dsw-alias-state-warn-primary)";
         return "var(--dsw-alias-border-l2)";
       };
-      var W = 360, H = 108, BOX_H = 44;
-      var BOX_W = model.items.length <= 3 ? 96 : model.items.length === 4 ? 74 : 60;
+      var H = 108, BOX_H = 44;
+      // 节点框宽随项数自适应：项多时保最小可读宽 52，项少时放大到 96。
+      var boxWidths = { 1: 96, 2: 96, 3: 96, 4: 84, 5: 74 };
+      var BOX_W = model.items.length <= 5
+        ? boxWidths[model.items.length] || 96
+        : Math.max(52, Math.min(74, Math.floor((W - 24) / model.items.length)));
       var GAP = model.items.length > 1 ? (W - 24 - model.items.length * BOX_W) / (model.items.length - 1) : 0;
       var contentW = model.items.length * BOX_W + (model.items.length - 1) * GAP;
       var startX = (W - contentW) / 2, y = 17;
@@ -392,7 +402,7 @@ window.__ModuleLoader__.load({
         }
         var status = states[item.id] && states[item.id].status || "pending";
         var color = colorOf(status);
-        var maxLabel = BOX_W >= 90 ? 7 : BOX_W >= 70 ? 4 : 3;
+        var maxLabel = BOX_W >= 90 ? 7 : BOX_W >= 70 ? 4 : BOX_W >= 60 ? 3 : 2;
         var label = item.label.length > maxLabel ? item.label.slice(0, maxLabel) + "…" : item.label;
         elements.push(react.createElement("rect", {
           key: "box-" + item.id, x: x, y: y, width: BOX_W, height: BOX_H, rx: 6,
@@ -415,6 +425,7 @@ window.__ModuleLoader__.load({
           fill: "var(--dsw-alias-label-caption)", "font-size": 9,
         }, NODE_TYPE_CN[item.type] || item.type || "节点"));
       });
+      var omitted = model.pathLength - model.items.filter(Boolean).length;
       var summary = "主流程 " + model.pathLength + " 步" + (model.otherNodeCount ? " · 另有 " + model.otherNodeCount + " 个节点" : "");
       elements.push(react.createElement("text", {
         key: "summary", x: 12, y: 94, fill: "var(--dsw-alias-label-tertiary)", "font-size": 10,
@@ -424,7 +435,7 @@ window.__ModuleLoader__.load({
           className: "wf1-card-map", viewBox: "0 0 " + W + " " + H, role: "img",
           "aria-label": summary + "：" + model.items.map(function (item) {
             var status = item && states[item.id] && states[item.id].status || "pending";
-            return item ? item.number + " " + item.label + " " + RUN_STATUS_CN[status] : "省略 " + (model.pathLength - 4) + " 步";
+            return item ? item.number + " " + item.label + " " + RUN_STATUS_CN[status] : "省略 " + omitted + " 步";
           }).join("，"),
         },
         elements,
@@ -455,12 +466,14 @@ window.__ModuleLoader__.load({
     }
 
     // 卡片骨架：头（图标+标题+状态章）+ 缩略图 + 底（meta+打开按钮）。整卡可点。
+    // hostRef：骨架是卡片根元素，缩略图宽度自适应从这里实测（缺省时 ref 不挂）。
     function workflowCardShell(props) {
       return react.createElement(
         "button",
         {
           type: "button",
           className: "wf1-card",
+          ref: props.hostRef || undefined,
           onClick: function () { try { openCanvasFallback(); } catch (e) { /* 宿主状态异常不炸消息流 */ } },
         },
         react.createElement(
@@ -485,11 +498,35 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // 运行卡：canvas_run_workflow / canvas_run_status 共用。
+    // 运行卡：canvas_run_workflow / canvas_run_status / workflow_run(_status) 共用。
     // SSE 实时更新，2s 详情轮询只作断线兜底；失败续跑后自动切到同工作流的新 run。
     function WorkflowRunCard(props) {
       var block = props.block || {};
       var text = toolText(block);
+      // 缩略图宽度自适应：宿主卡片宽度未知（消息栏宽随窗口/侧栏布局变），
+      // ResizeObserver 实测宽度 + 节点框最小宽 52，算出这一行能容纳的节点数。
+      // 观察不到（挂载前/老宿主）时 width=0 → graphThumbnail 退回 360 默认档。
+      var hostRef = react.useRef(null);
+      var [thumbWidth, setThumbWidth] = react.useState(0);
+      // ref 首渲染分支未挂、setRun 切分支后才可用：把 ref.current 的非空变更也纳入
+      // 依赖（用 state 镜像触发），否则观察器装不上、拖窗口不再自适应。
+      var [hostEl, setHostEl] = react.useState(null);
+      react.useEffect(function () {
+        if (!hostEl || typeof ResizeObserver !== "function") return undefined;
+        var measure = function () {
+          setThumbWidth(Math.round(hostEl.getBoundingClientRect().width));
+        };
+        measure();
+        var observer = new ResizeObserver(measure);
+        observer.observe(hostEl);
+        return function () { observer.disconnect(); };
+      }, [hostEl]);
+      var attachHost = function (el) {
+        if (hostRef.current !== el) {
+          hostRef.current = el;
+          setHostEl(el);
+        }
+      };
       // runId 双源：canvas_run_workflow 从结果 JSON 解析；canvas_run_status 结果没有
       // runId，从调用 args 取（running/settled 两个阶段都带）。
       var argsRaw = (block.call && block.call.argsRaw) || block.argsRaw;
@@ -580,6 +617,7 @@ window.__ModuleLoader__.load({
           meta: (text || "").slice(0, 60) || "画布尚未打开或未绑定会话",
           metaError: Boolean(block.isError),
           thumbnail: null,
+          hostRef: attachHost,
         });
       }
       if (missing && !run) {
@@ -589,6 +627,7 @@ window.__ModuleLoader__.load({
           stateText: "已归档",
           meta: "运行 " + trackedRunId.slice(0, 8) + "… 记录不在当前工作区",
           thumbnail: null,
+          hostRef: attachHost,
         });
       }
       if (!run) {
@@ -600,6 +639,7 @@ window.__ModuleLoader__.load({
           stateText: "加载中",
           meta: "运行 " + trackedRunId.slice(0, 8) + "…",
           thumbnail: null,
+          hostRef: attachHost,
         });
       }
 
@@ -607,6 +647,10 @@ window.__ModuleLoader__.load({
       var progress = runCardProgress(run);
       var nodeTotal = progress.total, nodeDone = progress.done;
       var currentLabel = progress.currentLabel, errText = progress.error;
+      // viewBox 用实测宽 + 左右各 12px 边距；容量按节点框最小宽 52 估算（保持与
+      // graphThumbnail 内 BOX_W 档位一致的数量级，实际 BOX_W 会随项数自适应更大）。
+      var thumbW = thumbWidth > 0 ? thumbWidth : 0;
+      var capacity = Math.floor((Math.max(thumbW, 360) - 24) / 52);
       var secs = run && run.durationMs ? Math.round(run.durationMs / 1000) + "s" : "";
       var meta;
       if (dot === "running") {
@@ -624,7 +668,10 @@ window.__ModuleLoader__.load({
         stateText: nodeTotal ? nodeDone + "/" + nodeTotal : (RUN_STATUS_CN[run.status] || run.status || "运行中"),
         meta: meta,
         metaError: dot === "error",
-        thumbnail: graphThumbnail(run && run.graph, run),
+        thumbnail: graphThumbnail(run && run.graph, run, {
+          width: thumbW, capacity: capacity,
+        }),
+        hostRef: attachHost,
       });
     }
 
@@ -1732,10 +1779,14 @@ window.__ModuleLoader__.load({
       // 消息流工具卡：按工具名接管官方 UI 的 tool.call.toolview keyed slot
       //（官方 ask_user_question / cordis_run 同款机制）。未注册的 canvas_* 工具
       // 走官方 GenericToolCard 文本行，行为不变。
+      // workflow_run / workflow_run_status 复用运行卡：runId 双源解析（结果 JSON /
+      // 调用参数）已覆盖两工具的返回形状，sessionId 让详情轮询落到对应工作区。
       var toolviews = [
         ["canvas_graph_patch", GraphPatchCard],
         ["canvas_run_workflow", WorkflowRunCard],
         ["canvas_run_status", WorkflowRunCard],
+        ["workflow_run", WorkflowRunCard],
+        ["workflow_run_status", WorkflowRunCard],
       ];
       toolviews.forEach(function (pair) {
         ctx.slots.inject("tool.call.toolview", function () {

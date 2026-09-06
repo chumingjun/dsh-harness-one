@@ -118,6 +118,8 @@ assert.deepEqual(injectedSlots, [
   "tool.call.toolview",
   "tool.call.toolview",
   "tool.call.toolview",
+  "tool.call.toolview",
+  "tool.call.toolview",
 ]);
 assert.deepEqual(
   registeredTabs.map((tab) => tab.id),
@@ -317,6 +319,39 @@ const longPreview = client.__test.flowPreviewModel({
 });
 assert.deepEqual([...longPreview.items].map((item) => item && item.id), ["n1", "n2", null, "n6", "n7"]);
 
+// 容量参数：宽卡（capacity=8）可展示 7 节点全路径；省略数随可见头数变化
+const widePreview = client.__test.flowPreviewModel(
+  {
+    nodes: Array.from({ length: 7 }, (_, index) => ({ id: `n${index + 1}`, type: "agent", data: { label: `步骤${index + 1}` } })),
+    edges: Array.from({ length: 6 }, (_, index) => ({ source: `n${index + 1}`, target: `n${index + 2}` })),
+  },
+  null,
+  8,
+);
+assert.deepEqual([...widePreview.items].map((item) => item && item.id), ["n1", "n2", "n3", "n4", "n5", "n6", "n7"]);
+const midPreview = client.__test.flowPreviewModel(
+  {
+    nodes: Array.from({ length: 7 }, (_, index) => ({ id: `n${index + 1}`, type: "agent", data: { label: `步骤${index + 1}` } })),
+    edges: Array.from({ length: 6 }, (_, index) => ({ source: `n${index + 1}`, target: `n${index + 2}` })),
+  },
+  null,
+  6,
+);
+// capacity=6 → 头 3 + 省略 1 + 尾 2，共 6 项
+assert.deepEqual([...midPreview.items].map((item) => item && item.id), ["n1", "n2", "n3", null, "n6", "n7"]);
+// 容量下限保护：小于 3 按 5 档处理（不比旧版更窄）
+assert.deepEqual(
+  [...client.__test.flowPreviewModel(longGraphOf(7), null, 1).items].filter(Boolean).length,
+  4,
+);
+
+function longGraphOf(count) {
+  return {
+    nodes: Array.from({ length: count }, (_, index) => ({ id: `n${index + 1}`, type: "agent", data: { label: `步骤${index + 1}` } })),
+    edges: Array.from({ length: count - 1 }, (_, index) => ({ source: `n${index + 1}`, target: `n${index + 2}` })),
+  };
+}
+
 // 卡片组件渲染断言：GraphPatchCard/WorkflowRunCard 的渲染链在 vm 内闭包引用 react——
 // 用第二批 vm context 以 react shim 加载（createElement 记录调用），专门断言 props：
 // running → 应用中；settled 成功带 lint 通过 → 已应用；settled isError → 被拒绝。
@@ -373,6 +408,25 @@ const thumbnail = cardClient.__test.graphThumbnail(branchGraph, {
 });
 assert.match(thumbnail.props["aria-label"], /^主流程 4 步 · 另有 1 个节点：/);
 assert.match(thumbnail.props["aria-label"], /3 普通派单/);
+
+// 宽度自适应：viewBox 跟随传入宽度；7 项链图在宽卡（capacity=8）下不再省略
+{
+  const chain7 = {
+    nodes: Array.from({ length: 7 }, (_, i) => ({ id: `c${i}`, type: "agent", data: { label: `步骤${i + 1}` } })),
+    edges: Array.from({ length: 6 }, (_, i) => ({ source: `c${i}`, target: `c${i + 1}` })),
+  };
+  cardCalls.length = 0;
+  const wide = cardClient.__test.graphThumbnail(chain7, { nodeStates: {} }, { width: 640, capacity: 8 });
+  assert.match(wide.props.viewBox, /^0 0 640 108$/);
+  assert.doesNotMatch(wide.props["aria-label"], /省略/);
+  const boxes = cardCalls.filter((c) => c.tag === "rect" && c.props?.className === "wf1-card-node");
+  assert.equal(boxes.length, 7, "宽卡应展示全部 7 节点");
+  assert.ok(boxes.every((b) => b.props.width >= 52), "节点框不窄于最小可读宽 52");
+  // 窄卡（默认 360/无 capacity）仍走头2+省略+尾2 的省略档
+  cardCalls.length = 0;
+  const narrow = cardClient.__test.graphThumbnail(chain7, { nodeStates: {} });
+  assert.match(narrow.props["aria-label"], /省略 3 步/);
+}
 
 // GraphPatchCard：running（argsRaw 携带 ops）
 cardCalls.length = 0;
