@@ -2,9 +2,9 @@ import { Component, lazy, Suspense, useCallback, useEffect, useId, useMemo, useR
 import { createPortal } from 'react-dom';
 import { Download, Expand, Eye, Minimize, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
+import { markdownRemarkPlugins, repairMissingTableDelimiter } from './markdown-compat.mjs';
 import { markdownSanitizeSchema } from './markdown-sanitize.mjs';
 import { documentPreviewKind, loadPreviewText, normalizePreviewDocument, previewErrorMessage } from './index.js';
 import './styles.css';
@@ -68,17 +68,18 @@ function TextRenderer({ document, kind, maxTextBytes }) {
 // 标题/代码块/列表/段落，表格、粗体、行内代码、链接、引用全部原样漏出。
 // rehype-raw + sanitize 管线与画布卡片侧（web/src/MarkdownDocument.jsx）对齐：
 // 正文里嵌的 <table>/<br/> 等 raw HTML 原地渲染，白名单在 markdown-sanitize.mjs。
+// markdown-compat.mjs 补两类中文文稿高频缺陷：缺分隔行的表格、紧贴 CJK 的粗体。
 function Markdown({ text }) {
   return (
     <article className="dsh-doc-preview-scroll dsh-doc-preview-markdown">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={markdownRemarkPlugins}
         rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]]}
         components={{
           a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>,
           table: ({ node, ...props }) => <div className="md-table-wrap"><table {...props} /></div>,
         }}
-      >{text}</ReactMarkdown>
+      >{repairMissingTableDelimiter(text)}</ReactMarkdown>
     </article>
   );
 }
