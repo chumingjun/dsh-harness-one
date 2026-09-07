@@ -20,7 +20,9 @@
     "./react": "./dist/react.js",
     "./client": "./dist/client.js",
     "./styles.css": "./dist/document-preview.css",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./markdown": "./src/markdown-compat.mjs",
+    "./markdown-sanitize": "./src/markdown-sanitize.mjs"
   },
   "files": [
     "src",
@@ -40,6 +42,7 @@
     "react-markdown": ">=9",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
+    "remark-cjk-friendly": "2.3.1",
     "remark-gfm": ">=4",
     "xlsx": "0.18.5"
   },

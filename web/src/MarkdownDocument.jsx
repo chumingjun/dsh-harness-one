@@ -1,7 +1,7 @@
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
+import { markdownRemarkPlugins, repairMissingTableDelimiter } from 'dsh-ccpg-document-preview/markdown';
 import { DocumentPreviewButton } from 'dsh-ccpg-document-preview/react';
 import { findArtifactByName } from './ArtifactPreview.jsx';
 
@@ -25,7 +25,7 @@ const sanitizeSchema = {
 export default function MarkdownDocument({ content, files = [] }) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={markdownRemarkPlugins}
       rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema]]}
       components={{
         a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>,
@@ -46,7 +46,7 @@ export default function MarkdownDocument({ content, files = [] }) {
         },
       }}
     >
-      {content}
+      {repairMissingTableDelimiter(content)}
     </ReactMarkdown>
   );
 }

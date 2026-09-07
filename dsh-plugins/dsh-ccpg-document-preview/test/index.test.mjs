@@ -15,6 +15,7 @@ import {
   normalizePreviewDocument,
 } from '../src/index.js';
 import { markdownSanitizeSchema } from '../src/markdown-sanitize.mjs';
+import { markdownRemarkPlugins, repairMissingTableDelimiter } from '../src/markdown-compat.mjs';
 
 test('detects supported preview formats by extension', () => {
   const cases = {
@@ -150,6 +151,72 @@ test('markdown: unified pipeline renders raw HTML table and strips script vector
   assert.ok(!hostile.includes('iframe'), hostile);
   // style 整串透传（与卡片侧同取舍，td 的 vertical-align 需要它）：合法值保留
   assert.ok((await run('<table><tr><td style="vertical-align:top">x</td></tr></table>')).includes('vertical-align:top'));
+});
+
+// ---- markdown 兼容层：LLM 中文文稿的两类高频缺陷 ----
+
+test('markdown: repairMissingTableDelimiter 给隔离竖线段落补分隔行', () => {
+  // 缺分隔行：首行后补等宽分隔行，原文一字不动
+  const repaired = repairMissingTableDelimiter('| a | b |\n| 1 | 2 |\n| 3 | 4 |');
+  assert.equal(repaired, '| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |');
+  // 已带分隔行（含对齐变体）的合法表格不动
+  const legal = '| a | b |\n|:--|--:|\n| 1 | 2 |';
+  assert.equal(repairMissingTableDelimiter(legal), legal);
+  // 正文段落里的孤立竖线行不动（可能是普通文本）
+  assert.equal(repairMissingTableDelimiter('前文\n单行 | 竖线\n后文'), '前文\n单行 | 竖线\n后文');
+  // 围栏代码块内的竖线行不动
+  const fenced = '```\n| a | b |\n| 1 | 2 |\n```';
+  assert.equal(repairMissingTableDelimiter(fenced), fenced);
+  // 行内代码里的竖线不算表格语法
+  const inlineCode = '运行 `cmd | filter` 命令';
+  assert.equal(repairMissingTableDelimiter(inlineCode), inlineCode);
+  // \| 转义竖线是单元格内容、不参与分列：分隔行列数须与表头一致
+  assert.equal(
+    repairMissingTableDelimiter('| a \\| b | c |\n| 1 \\| 2 | 3 |'),
+    '| a \\| b | c |\n| --- | --- |\n| 1 \\| 2 | 3 |',
+  );
+  // 单列竖线行（|| 内无内容拆不出多列）不动
+  assert.equal(repairMissingTableDelimiter('| 单列 |'), '| 单列 |');
+  // 无竖线文本原样返回
+  assert.equal(repairMissingTableDelimiter('普通段落'), '普通段落');
+  assert.equal(repairMissingTableDelimiter(''), '');
+});
+
+test('markdown: 完整管线修复缺分隔行表格与 CJK 粗体', async () => {
+  const { unified } = await import('unified');
+  const remarkParse = (await import('remark-parse')).default;
+  const remarkRehype = (await import('remark-rehype')).default;
+  const rehypeRaw = (await import('rehype-raw')).default;
+  const rehypeSanitize = (await import('rehype-sanitize')).default;
+  const rehypeStringify = (await import('rehype-stringify')).default;
+  assert.deepEqual(markdownRemarkPlugins.map((plugin) => plugin.name), ['remarkCjkFriendly', 'remarkGfm']);
+
+  const run = async (text) => String(await unified()
+    .use(remarkParse)
+    .use(markdownRemarkPlugins)
+    .use(remarkRehype, { allowDangerousHtml: true })
+    .use(rehypeRaw)
+    .use(rehypeSanitize, markdownSanitizeSchema)
+    .use(rehypeStringify)
+    .process(repairMissingTableDelimiter(text)));
+
+  // 缺分隔行的中文表格：渲染成 thead/tbody，不再整段漏竖线
+  const table = await run('| 配套用房 | 1栋一层老人活动中心。 |\n| 管理用房 | 物业服务中心共计3间。 |');
+  assert.match(table, /<th>配套用房<\/th>/);
+  assert.match(table, /<th>1栋一层老人活动中心。<\/th>/);
+  assert.match(table, /<td>管理用房<\/td>/);
+  assert.ok(!table.includes('| 管理用房'), table);
+
+  // 紧贴 CJK 的粗体：闭定界符前是全角冒号、后是汉字，正常闭合为 <strong>
+  const bold = await run('**周边环境概述：**项目位于深圳市南山区海德一道200号。');
+  assert.match(bold, /<strong>周边环境概述：<\/strong>项目位于深圳市南山区/);
+
+  // 常规 markdown 不回归：空格粗体、合法表格、行内代码、链接
+  assert.match(await run('正常 **粗体** 正常'), /<strong>粗体<\/strong>/);
+  const legal = await run('| a | b |\n| --- | --- |\n| 1 | 2 |');
+  assert.match(legal, /<td>1<\/td>/);
+  assert.match(await run('`code|x`'), /<code>code\|x<\/code>/);
+  assert.match(await run('[链接](https://example.com)'), /href="https:\/\/example.com"/);
 });
 
 
