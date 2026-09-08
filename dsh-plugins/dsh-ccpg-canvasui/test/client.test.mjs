@@ -115,6 +115,7 @@ client.apply({
 assert.deepEqual(injectedSlots, [
   "settings.section",
   "conversation.input.left",
+  "conversation.input.dock",
   "tool.call.toolview",
   "tool.call.toolview",
   "tool.call.toolview",
@@ -638,8 +639,18 @@ for (const [body, expected] of [
   const filtered = await source.candidates(session, { query: "工程手册" });
   assert.equal(filtered.length, 1);
   assert.equal(filtered[0].value, "wf_a");
+  // 空态引导（#101）：过滤无命中不再返回空，列示例指令候选（默认未绑定→搭建类）
   const none = await source.candidates(session, { query: "不存在的名字" });
-  assert.equal(none.length, 0);
+  assert.ok(none.length > 0, "空态返回示例候选");
+  assert.ok(none.every((c) => String(c.value).startsWith("prompt:")));
+  assert.ok(none.some((c) => c.name.includes("工作流")));
+
+  // 示例候选 onPick：claim.token = 示例全文（Enter 即普通消息发送），不走 /trigger
+  const promptPick = { candidate: { value: "prompt:帮我搭一个报修单整理工作流" }, session };
+  const promptClaim = source.onPick(promptPick).claim;
+  assert.equal(promptClaim.token, "帮我搭一个报修单整理工作流");
+  const promptOut = await promptClaim.submit("");
+  assert.equal(promptOut.kind, "success");
 
   // onPick→claim.submit：args 为空时用 pick 的工作流 id，默认 auto（run 优先）
   const pick = { candidate: { value: "wf_a" }, session };
@@ -747,6 +758,26 @@ for (const [body, expected] of [
   // 设置面板数据源：默认值接口与模型目录接口都要在 bundle 里
   assert.equal(bundle.includes('"/wf1/api/agent-defaults"'), true);
   assert.equal(bundle.includes('"/wf1/api/llm-config"'), true);
+}
+
+// ---- 空态引导（#101）：示例表取舍与 ExampleBar 渲染 ----
+{
+  assert.equal(client.__test.examplePromptsFor(false), client.__test.examplePromptsFor(false));
+  const unbound = client.__test.examplePromptsFor(false);
+  const bound = client.__test.examplePromptsFor(true);
+  assert.ok(unbound.length >= 3 && unbound.length <= 5, "示例数量 3~5 条");
+  assert.ok(unbound.some((p) => p.name.includes("搭")), "未绑定时以搭建类为主");
+  assert.ok(bound.some((p) => p.name.includes("当前画布")), "已绑定时以运行/修改类为主");
+  assert.notEqual(unbound, bound, "绑定与否返回不同示例集");
+
+  // ExampleBar：草稿空 + plain 阶段不早退（走 createElement 分支，stub 返回 undefined）；
+  // 草稿非空 / claim 阶段早退 null。主 vm 的 createElement 是无返回 stub，
+  // 元素形状的断言留给真浏览器验证。
+  assert.equal(client.__test.WorkflowExampleBar({ input: { draft: "", phase: "plain" } }), undefined);
+  assert.equal(client.__test.WorkflowExampleBar({ input: { draft: "", phase: "plain" }, session: {} }), undefined);
+  assert.equal(client.__test.WorkflowExampleBar({ input: { draft: "已有草稿", phase: "plain" } }), null);
+  assert.equal(client.__test.WorkflowExampleBar({ input: { draft: "", phase: "claim" } }), null);
+  assert.equal(client.__test.WorkflowExampleBar({}), null);
 }
 
 console.log("canvasui client tests: passed");

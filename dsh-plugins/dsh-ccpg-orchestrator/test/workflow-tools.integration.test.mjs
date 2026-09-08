@@ -96,6 +96,20 @@ const maybeJson = (text) => { try { return JSON.parse(text); } catch { return nu
 const bound = await call('POST', '/wf1/api/assistant/bind', { sessionId: 'session-1', canvasId: 'cv_test', version: 0, graph: null });
 assert.equal(bound.status, 200, `bind 应成功，实际 ${bound.status} ${JSON.stringify(bound.body)}`);
 
+// 绑定状态只读查询（#101 空态引导数据源）：绑定后 true+canvasId；unbind 后 false
+{
+  const query = await call('GET', '/wf1/api/assistant/bound');
+  assert.equal(query.status, 200);
+  assert.equal(query.body.bound, true);
+  assert.equal(query.body.canvasId, 'cv_test');
+  await call('POST', '/wf1/api/assistant/unbind', { sessionId: 'session-1' });
+  const after = await call('GET', '/wf1/api/assistant/bound');
+  assert.equal(after.body.bound, false);
+  assert.equal(after.body.canvasId, null);
+  // 复绑，后续工具用例依赖 session-1 ↔ cv_test
+  await call('POST', '/wf1/api/assistant/bind', { sessionId: 'session-1', canvasId: 'cv_test', version: 0, graph: null });
+}
+
 const wfGraph = {
   nodes: [{ id: 'n_in', type: 'input', position: { x: 0, y: 0 }, data: { label: '输入', text: 'ok' } }],
   edges: [],

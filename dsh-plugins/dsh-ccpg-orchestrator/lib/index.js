@@ -3698,6 +3698,16 @@ export function apply(ctx, config) {
     json(res, 200, { ok: true });
   } });
 
+  // 绑定状态只读查询：canvasui 空态引导按「是否绑定画布」取舍示例指令
+  // （未绑定→搭建类；已绑定→运行/修改类），与 bind/unbind 同 scoped 模式。
+  register({ kind: 'exact', path: '/wf1/api/assistant/bound', async handler(req, res) {
+    if (req.method !== 'GET') return json(res, 405, { error: 'method' });
+    const url = new URL(req.url, 'http://wf1.local');
+    const sid = String(url.searchParams.get('sessionId') || '');
+    const cid = sid ? sessionCanvas.get(sid) : undefined;
+    json(res, 200, { ok: true, bound: Boolean(cid), canvasId: cid || null });
+  } });
+
   // 画布状态：POST 上报前端图，GET 拉服务端权威图。AI patch 的 version 更高时，
   // 旧前端上报会被拒绝，SSE 漏包后前端也能用 GET 补回完整图。
   register({ kind: 'exact', path: '/wf1/api/assistant/canvas-state', async handler(req, res) {
