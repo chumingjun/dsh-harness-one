@@ -386,9 +386,14 @@ const cardContext = {
     head: { appendChild() {} },
     createElement() { return {}; },
     getElementById() { return null; },
+    // #107 suggestion 点击填入：模拟宿主 composer 输入框
+    querySelector() { return composerFake; },
+    execCommand(cmd, show, text) { composerLog.push({ cmd, text }); },
   },
   console,
 };
+const composerFake = { focus() {} };
+const composerLog = [];
 vm.runInNewContext(bundle, cardContext, {
   filename: "dsh-ccpg-canvasui/src/client.js",
 });
@@ -904,9 +909,9 @@ for (const [body, expected] of [
     assert.match(String(find("wf1-card-meta", "span").children[0]), /停止中/);
   }
 
-  // 轮询到已取消：停止按钮消失，卡片转取消态
+  // 轮询到已取消：停止按钮消失，卡片转取消态；失败终态给下一步 suggestion
   detailRun = canceledRun;
-  intervals.splice(0).forEach((fn) => fn());
+  intervals.forEach((fn) => fn());
   await tick();
   render();
   {
@@ -914,6 +919,21 @@ for (const [body, expected] of [
     const dot = find("wf1-card-dot", "span");
     assert.equal(dot.props["data-s"], "error");
     assert.equal(String(find("wf1-card-meta", "span").children[0]), "已取消");
+    const row = find("wf1-card-suggest", "div");
+    assert.ok(row, "失败终态应渲染 suggestion");
+    const btns = (Array.isArray(row.children[0]) ? row.children[0] : row.children).filter((c) => c.tag === "button");
+    assert.deepEqual(Array.from(btns, (b) => String(b.children[0])), ["再跑一次", "基于这次结果继续改"]);
+  }
+
+  // 成功终态：3 个下一步指令（查看文稿/再跑一次/存到工作目录）
+  detailRun = { ...runningRun, status: "success", nodeStates: { n1: { status: "success" } } };
+  intervals.forEach((fn) => fn());
+  await tick();
+  render();
+  {
+    const row = find("wf1-card-suggest", "div");
+    const btns = (Array.isArray(row.children[0]) ? row.children[0] : row.children).filter((c) => c.tag === "button");
+    assert.deepEqual(Array.from(btns, (b) => String(b.children[0])), ["查看上次运行的文稿", "再跑一次", "把运行结果存到工作目录"]);
   }
 }
 
@@ -1104,6 +1124,61 @@ for (const [body, expected] of [
   confirmClient.__test.setPatchConfirmState({ state: "discarded", version: 8 });
   render();
   assert.equal(find("wf1-confirm-bar", "div"), undefined);
+}
+
+// ---- suggestion 按钮组（#107）：卡片尾部指令按钮，点击填入输入框不发送 ----
+{
+  // 纯渲染：cardSuggestRow 生成按钮组，文案保留原文
+  cardCalls.length = 0;
+  cardClient.__test.cardSuggestRow(["查看上次运行的文稿", "再跑一次"]);
+  {
+    const row = cardCalls.findLast((c) => c.tag === "div" && c.props?.className === "wf1-card-suggest");
+    assert.ok(row, "应渲染 suggestion 行");
+    const btns = (Array.isArray(row.children[0]) ? row.children[0] : row.children).filter((c) => c.tag === "button");
+    assert.equal(btns.length, 2);
+    assert.equal(btns[0].children[0], "查看上次运行的文稿");
+    assert.equal(btns[1].children[0], "再跑一次");
+  }
+
+  // 点击：selectAll + insertText 填入，不自动发送
+  composerLog.length = 0;
+  {
+    cardCalls.length = 0;
+    cardClient.__test.cardSuggestRow(["再跑一次"]);
+    const btn = cardCalls.findLast((c) => c.tag === "button" && c.children[0] === "再跑一次");
+    let stopped = false;
+    btn.props.onClick({ stopPropagation() { stopped = true; } });
+    assert.equal(stopped, true, "点击不触发整卡打开");
+    assert.deepEqual(composerLog.map((x) => x.cmd), ["selectAll", "insertText"], "填入应 selectAll+insertText");
+    assert.equal(composerLog[1].text, "再跑一次");
+  }
+
+  // GraphPatchCard 已应用态：尾部 3 按钮；被拒不渲染
+  cardCalls.length = 0;
+  cardClient.__test.GraphPatchCard({
+    block: {
+      kind: "tool-result",
+      isError: false,
+      call: { name: "canvas_graph_patch", argsRaw: JSON.stringify({ ops: [{ op: "addNode" }] }) },
+      content: [{ type: "text", text: "已应用 1 个操作到画布。\nlint: 通过" }],
+    },
+  });
+  {
+    const row = cardCalls.findLast((c) => c.tag === "div" && c.props?.className === "wf1-card-suggest");
+    assert.ok(row, "已应用态应渲染 suggestion");
+    const btns = (Array.isArray(row.children[0]) ? row.children[0] : row.children).filter((c) => c.tag === "button");
+    assert.deepEqual(Array.from(btns, (b) => String(b.children[0])), ["撤销刚才那批修改", "运行这个工作流", "保存为工作流"]);
+  }
+  cardCalls.length = 0;
+  cardClient.__test.GraphPatchCard({
+    block: {
+      kind: "tool-result",
+      isError: true,
+      call: { name: "canvas_graph_patch", argsRaw: JSON.stringify({ ops: [{ op: "bogus" }] }) },
+      content: [{ type: "text", text: "整批拒绝（未做任何修改）" }],
+    },
+  });
+  assert.equal(cardCalls.findLast((c) => c.tag === "div" && c.props?.className === "wf1-card-suggest"), undefined, "被拒不渲染 suggestion");
 }
 
 console.log("canvasui client tests: passed");
