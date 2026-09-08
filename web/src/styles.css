@@ -292,11 +292,16 @@ body {
   .view-tab { padding: 5px 8px; }
   .tb-add-btn { width: 34px; height: 30px; padding: 0; justify-content: center; }
   .tb-add-label, .tb-add-btn .tb-caret { display: none; }
+  /* #110 窄屏：弹窗近全屏，历史列表不再横向滚动 */
+  .modal-box { min-width: 0; width: calc(100vw - 24px); max-width: none; max-height: calc(100dvh - 24px); }
+  .rh-list { min-width: 0; }
 }
 @media (max-width: 360px) {
   .view-tab { padding-inline: 6px; }
   .tb-run-btn { width: 34px; padding: 6px; justify-content: center; }
   .tb-run-label { display: none; }
+  /* #110 极窄：文稿墙卡片满宽，不横向滚动 */
+  .docwall-card, .docwall-card-image, .docwall-card-video { width: 100%; }
 }
 
 /* 双击/右键画布弹出的浮动加节点菜单 */

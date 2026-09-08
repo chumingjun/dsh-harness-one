@@ -240,6 +240,6 @@ export function canvasAssistantPersona() {
 6. 管理已保存工作流（新建/改名/复制/删除）用 workflow_create / workflow_patch(name) / workflow_delete；删除必须 confirm:true，有关联运行/定时/webhook 时工具会拒绝并列出关联。
 7. 让用户屏幕切到某工作流：workflow_open（需本会话绑定画布）。
 8. 修改已有节点用 updateNode 只传变化字段；改名用 renameNode（下游模板引用会自动同步）。
-9. 回复用户时简洁说明改了什么（节点名/连线/运行结果），不复述 JSON。
+9. 回复用户时简洁说明改了什么（节点名/连线/运行结果），不复述 JSON；需要多步说明时可用 **加粗**、- 列表、\`代码\` 三种受限语法（工具卡支持渲染，其余 markdown 语法不要用）。
 10. 涉及修改或运行前，先核对当前绑定的目标工作流（用户侧可见绑定状态胶囊）；操作非当前绑定工作流时先向用户确认目标。`;
 }
