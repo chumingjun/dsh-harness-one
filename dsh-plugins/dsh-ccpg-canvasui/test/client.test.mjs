@@ -129,7 +129,7 @@ assert.deepEqual(
   registeredTabs.map((tab) => tab.id),
   ["ccpg:workflow"],
 );
-assert.deepEqual(registeredSources.map((s) => s.name), ["workflow-one"]);
+assert.deepEqual(registeredSources.map((s) => s.name + s.trigger), ["workflow-one/", "引用@"]);
 
 const opened = [];
 client.__test.setBetterSidebarService({
@@ -635,7 +635,7 @@ for (const [body, expected] of [
       void dependencies;
     },
   });
-  assert.equal(registered.length, 1, "inputTriggers 服务在场时 source 注册");
+  assert.equal(registered.length, 2, "inputTriggers 服务在场时两个触发源都注册（/ 与 @）");
   const source = registered[0];
   assert.equal(source.trigger, "/");
   assert.equal(source.name, "workflow-one");
@@ -694,6 +694,7 @@ for (const [body, expected] of [
     return Promise.resolve({ ok: true, json: () => Promise.resolve({ workflows }) });
   };
   const scoped2 = loadClientInContext({ globals: { fetch: errFetch } });
+  const errRegistered = [];
   scoped2.apply({
     slots: {
       inject() {},
@@ -702,7 +703,7 @@ for (const [body, expected] of [
       },
     },
     get(name) {
-      if (name === "inputTriggers") return service;
+      if (name === "inputTriggers") return { registerSource(src) { errRegistered.push(src); return function () {}; } };
       throw new Error(`unexpected service: ${name}`);
     },
     effect(fn) {
@@ -713,8 +714,8 @@ for (const [body, expected] of [
       void dependencies;
     },
   });
-  // 第二个 scoped client 往同一 service 注册第二个 source（闭包绑定 errFetch）
-  const secondSource = registered[registered.length - 1];
+  // 第二个 scoped client（闭包绑定 errFetch）：取 / 触发源验证报错路径
+  const secondSource = errRegistered.find((s) => s.trigger === "/");
   const { claim: claim2 } = secondSource.onPick(pick);
   const out3 = await claim2.submit("");
   assert.equal(out3.kind, "error");
@@ -1300,6 +1301,74 @@ for (const [body, expected] of [
   // 空文本/纯文本回退
   assert.equal(cardClient.__test.renderCardMarkdown("").length, 0);
   assert.equal(cardClient.__test.renderCardMarkdown("平平无奇").length, 1);
+}
+
+// ---- @ 引用触发源（#108）：节点/工作流候选与可读引用 claim ----
+{
+  let boundPayload = { ok: true, bound: true, canvasId: "cv_at", workflowName: "海印一期", nodeCount: 3 };
+  const graphPayload = {
+    ok: true, version: 4,
+    graph: {
+      nodes: [
+        { id: "n_in", type: "input", data: { label: "工单输入" } },
+        { id: "n_ag", type: "agent", data: { label: "工单整理" } },
+        { id: "n_note", type: "note", data: { label: "备注" } },
+      ],
+      edges: [],
+    },
+  };
+  const atFetch = (url) => {
+    const u = String(url);
+    if (u.includes("/assistant/bound")) return Promise.resolve({ ok: true, json: () => Promise.resolve(boundPayload) });
+    if (u.includes("/assistant/canvas-state")) return Promise.resolve({ ok: true, json: () => Promise.resolve(graphPayload) });
+    if (u.includes("/workflows")) return Promise.resolve({ ok: true, json: () => Promise.resolve({ workflows: [{ id: "wf_a", name: "工程手册" }] }) });
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+  };
+  const atScoped = loadClientInContext({ globals: { fetch: atFetch } });
+  const atRegistered = [];
+  atScoped.apply({
+    slots: { inject() {}, register() { return function () {}; } },
+    get(name) {
+      if (name === "inputTriggers") return { registerSource(src) { atRegistered.push(src); return function () {}; } };
+      throw new Error(`unexpected service: ${name}`);
+    },
+    effect(fn) { fn(); },
+    inject(dependencies, callback) { callback({ betterSidebar: sidebarService, effect(fn) { fn(); } }); void dependencies; },
+  });
+  const atSource = atRegistered.find((s) => s.trigger === "@");
+  assert.ok(atSource, "@ 触发源应注册");
+  const atSession = { sessionId: "sess_at" };
+
+  // 节点候选：全量 + 按名过滤；描述带类型中文与 id
+  const nodes = await atSource.candidates(atSession, { query: "" });
+  assert.equal(nodes.length, 3);
+  assert.equal(nodes[0].name, "工单输入");
+  assert.match(nodes[1].description, /^智能体 · n_ag$/);
+  const hit = await atSource.candidates(atSession, { query: "整理" });
+  assert.equal(hit.length, 1);
+  assert.equal(hit[0].value.id, "n_ag");
+
+  // 节点 Pick：claim.token = 人类可读引用（@名（类型）+ 空格），Enter 即普通消息
+  const nodeClaim = atSource.onPick({ candidate: hit[0], session: atSession }).claim;
+  assert.equal(nodeClaim.token, "@工单整理（智能体） ");
+  const submitOut = await nodeClaim.submit("随便");
+  assert.equal(submitOut.kind, "success");
+
+  // @工作流 前缀：工作流候选；Pick 引用（工作流）
+  const wfs = await atSource.candidates(atSession, { query: "工作流 手册" });
+  assert.equal(wfs.length, 1);
+  assert.equal(wfs[0].value.kind, "workflow");
+  const wfClaim = atSource.onPick({ candidate: wfs[0], session: atSession }).claim;
+  assert.equal(wfClaim.token, "@工程手册（工作流） ");
+
+  // 未绑定：单一指引候选，Pick 后 claim 空文本（不落 @ 半截字符）
+  boundPayload = { ok: true, bound: false, canvasId: null };
+  const guide = await atSource.candidates(atSession, { query: "" });
+  assert.equal(guide.length, 1);
+  assert.equal(guide[0].value.kind, "guide");
+  const guideClaim = atSource.onPick({ candidate: guide[0], session: atSession }).claim;
+  assert.equal(guideClaim.token, "");
+  assert.match(guideClaim.hint, /工作流标签页/);
 }
 
 console.log("canvasui client tests: passed");

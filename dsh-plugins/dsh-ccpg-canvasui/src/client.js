@@ -384,6 +384,7 @@ window.__ModuleLoader__.load({
     var NODE_TYPE_CN = {
       input: "输入", agent: "智能体", condition: "条件", http: "HTTP",
       script: "脚本", output: "输出",
+      notify: "通知", note: "注释", subworkflow: "子工作流",
     };
 
     // 取 DAG 最长路径作为卡片主流程；运行态排除明确跳过的节点。
@@ -2101,16 +2102,122 @@ window.__ModuleLoader__.load({
       return result.data.error || (action === "open" ? "打开失败" : "运行发起失败");
     }
 
-    function registerWorkflowTriggerSource(ctx) {
+    function fetchWorkflows(sessionId) {
+      return fetch(wfScopedApi("/workflows", sessionId))
+        .then(function (r) { return r.ok ? r.json() : { workflows: [] }; })
+        .then(function (data) { return data.workflows || []; })
+        .catch(function () { return []; });
+    }
+
+    // #108 @ 引用：绑定画布的节点清单（复用 canvas-state GET，零新接口）
+    function fetchBoundNodes(sessionId) {
+      return fetchBoundInfo(sessionId).then(function (info) {
+        if (!info || !info.bound || !info.canvasId) return { bound: false, nodes: [] };
+        return fetch(wfScopedApi("/assistant/canvas-state?canvasId=" + encodeURIComponent(info.canvasId), sessionId))
+          .then(function (r) { return r.ok ? r.json() : { graph: null }; })
+          .then(function (data) {
+            var nodes = (data.graph && Array.isArray(data.graph.nodes) ? data.graph.nodes : []).map(function (n) {
+              return { id: n.id, type: n.type, label: (n.data && n.data.label) || n.id };
+            });
+            return { bound: true, nodes: nodes };
+          })
+          .catch(function () { return { bound: true, nodes: [] }; });
+      });
+    }
+
+    function readableRef(label, typeCn) {
+      return "@" + label + "（" + typeCn + "） ";
+    }
+
+    function registerNodeReferenceSource(ctx) {
       var inputTriggers = ctx.get("inputTriggers");
       if (!inputTriggers || !inputTriggers.registerSource) return;
 
-      var fetchWorkflows = function (sessionId) {
-        return fetch(wfScopedApi("/workflows", sessionId))
-          .then(function (r) { return r.ok ? r.json() : { workflows: [] }; })
-          .then(function (data) { return data.workflows || []; })
-          .catch(function () { return []; });
+      var source = {
+        trigger: "@",
+        name: "引用",
+        order: 4,
+        warm: function (session) {
+          fetchBoundNodes(session.sessionId);
+        },
+        candidates: function (session, req) {
+          var query = String(req.query || "").trim().toLowerCase();
+          // @工作流 / @wf 前缀 → 工作流列表；否则 → 绑定画布节点
+          if (query.indexOf("工作流") === 0 || query.indexOf("wf") === 0) {
+            var tail = query.replace(/^工作流\s*|^wf\s*/, "");
+            return fetchWorkflows(session.sessionId).then(function (workflows) {
+              return workflows
+                .filter(function (wf) { return !tail || wf.name.toLowerCase().indexOf(tail) >= 0; })
+                .slice(0, 20)
+                .map(function (wf) {
+                  return {
+                    name: wf.name,
+                    description: "引用工作流 · Pick 后继续描述",
+                    icon: "⇥",
+                    section: "Workflow One",
+                    value: { kind: "workflow", name: wf.name },
+                  };
+                });
+            });
+          }
+          return fetchBoundNodes(session.sessionId).then(function (result) {
+            if (!result.bound) {
+              return [{
+                name: "先绑定画布再引用节点",
+                description: "打开「工作流」标签页即可绑定当前会话",
+                icon: "⚠",
+                section: "Workflow One",
+                value: { kind: "guide" },
+              }];
+            }
+            return result.nodes
+              .filter(function (n) {
+                return !query
+                  || n.label.toLowerCase().indexOf(query) >= 0
+                  || n.id.toLowerCase().indexOf(query) >= 0;
+              })
+              .slice(0, 30)
+              .map(function (n) {
+                return {
+                  name: n.label,
+                  description: (NODE_TYPE_CN[n.type] || n.type || "节点") + " · " + n.id,
+                  icon: "⊙",
+                  section: "Workflow One 节点",
+                  value: { kind: "node", id: n.id, type: n.type, label: n.label },
+                };
+              });
+          });
+        },
+        onPick: function (pick) {
+          var v = pick.candidate && pick.candidate.value || {};
+          if (v.kind === "guide") {
+            try { openWorkflowSidebar(); } catch (e) { /* 无侧栏服务静默 */ }
+            return { claim: { token: "", hint: "已打开工作流标签页，绑定后即可用 @ 引用节点" } };
+          }
+          if (v.kind === "workflow") {
+            return {
+              claim: {
+                token: readableRef(v.name, "工作流"),
+                hint: "已引用工作流 · 继续说要做的事，Enter 发送",
+                submit: function () { return Promise.resolve({ kind: "success", text: "" }); },
+              },
+            };
+          }
+          return {
+            claim: {
+              token: readableRef(v.label, NODE_TYPE_CN[v.type] || v.type || "节点"),
+              hint: "已引用节点 · 继续说要做的事，Enter 发送",
+              submit: function () { return Promise.resolve({ kind: "success", text: "" }); },
+            },
+          };
+        },
       };
+      return inputTriggers.registerSource(source);
+    }
+
+    function registerWorkflowTriggerSource(ctx) {
+      var inputTriggers = ctx.get("inputTriggers");
+      if (!inputTriggers || !inputTriggers.registerSource) return;
 
       var source = {
         trigger: "/",
@@ -2332,6 +2439,15 @@ window.__ModuleLoader__.load({
         registerWorkflowTriggerSource(ctx);
       } catch (e) {
         /* 老运行时无 inputTriggers：跳过触发源 */
+      }
+
+      // ---- #108 @ 引用触发源：@ 弹绑定画布节点（官方输入机原生支持 '@' 触发符）----
+      // @工作流 前缀切工作流列表；未绑定画布时给出绑定指引。Pick 后草稿插入
+      // 人类可读引用（@名（类型）），作为普通消息发送，AI 按 persona 规则精确匹配。
+      try {
+        registerNodeReferenceSource(ctx);
+      } catch (e) {
+        /* 老运行时无 inputTriggers：跳过 */
       }
 
       // 消息流工具卡：按工具名接管官方 UI 的 tool.call.toolview keyed slot
