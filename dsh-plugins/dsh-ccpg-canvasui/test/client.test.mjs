@@ -921,7 +921,7 @@ for (const [body, expected] of [
     assert.equal(String(find("wf1-card-meta", "span").children[0]), "已取消");
     const row = find("wf1-card-suggest", "div");
     assert.ok(row, "失败终态应渲染 suggestion");
-    const btns = (Array.isArray(row.children[0]) ? row.children[0] : row.children).filter((c) => c.tag === "button");
+    const btns = (Array.isArray(row.children[0]) ? row.children[0] : row.children).filter((c) => c.tag === "span");
     assert.deepEqual(Array.from(btns, (b) => String(b.children[0])), ["再跑一次", "基于这次结果继续改"]);
   }
 
@@ -932,7 +932,7 @@ for (const [body, expected] of [
   render();
   {
     const row = find("wf1-card-suggest", "div");
-    const btns = (Array.isArray(row.children[0]) ? row.children[0] : row.children).filter((c) => c.tag === "button");
+    const btns = (Array.isArray(row.children[0]) ? row.children[0] : row.children).filter((c) => c.tag === "span");
     assert.deepEqual(Array.from(btns, (b) => String(b.children[0])), ["查看上次运行的文稿", "再跑一次", "把运行结果存到工作目录"]);
   }
 }
@@ -1134,7 +1134,7 @@ for (const [body, expected] of [
   {
     const row = cardCalls.findLast((c) => c.tag === "div" && c.props?.className === "wf1-card-suggest");
     assert.ok(row, "应渲染 suggestion 行");
-    const btns = (Array.isArray(row.children[0]) ? row.children[0] : row.children).filter((c) => c.tag === "button");
+    const btns = (Array.isArray(row.children[0]) ? row.children[0] : row.children).filter((c) => c.tag === "span");
     assert.equal(btns.length, 2);
     assert.equal(btns[0].children[0], "查看上次运行的文稿");
     assert.equal(btns[1].children[0], "再跑一次");
@@ -1145,7 +1145,7 @@ for (const [body, expected] of [
   {
     cardCalls.length = 0;
     cardClient.__test.cardSuggestRow(["再跑一次"]);
-    const btn = cardCalls.findLast((c) => c.tag === "button" && c.children[0] === "再跑一次");
+    const btn = cardCalls.findLast((c) => c.tag === "span" && c.children[0] === "再跑一次");
     let stopped = false;
     btn.props.onClick({ stopPropagation() { stopped = true; } });
     assert.equal(stopped, true, "点击不触发整卡打开");
@@ -1166,7 +1166,7 @@ for (const [body, expected] of [
   {
     const row = cardCalls.findLast((c) => c.tag === "div" && c.props?.className === "wf1-card-suggest");
     assert.ok(row, "已应用态应渲染 suggestion");
-    const btns = (Array.isArray(row.children[0]) ? row.children[0] : row.children).filter((c) => c.tag === "button");
+    const btns = (Array.isArray(row.children[0]) ? row.children[0] : row.children).filter((c) => c.tag === "span");
     assert.deepEqual(Array.from(btns, (b) => String(b.children[0])), ["撤销刚才那批修改", "运行这个工作流", "保存为工作流"]);
   }
   cardCalls.length = 0;

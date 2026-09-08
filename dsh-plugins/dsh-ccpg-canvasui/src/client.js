@@ -973,19 +973,25 @@ window.__ModuleLoader__.load({
       } catch (e) { /* 输入框形态变化时静默，用户仍可手动输入 */ }
       return false;
     }
-    // 卡片尾部 suggestion 按钮组（#107）：点击只填入不发送；文案=可直接发送的指令
+    // 卡片尾部 suggestion 按钮组（#107）：点击只填入不发送；文案=可直接发送的指令。
+    // 卡片根是 <button> 不能嵌套交互元素，与停止动作同款 span[role=button] 承载
     function cardSuggestRow(labels) {
       return react.createElement(
         "div",
         { className: "wf1-card-suggest" },
         labels.map(function (label) {
           return react.createElement(
-            "button",
+            "span",
             {
               key: label,
-              type: "button",
               className: "wf1-card-suggest-btn",
+              role: "button",
+              tabIndex: 0,
               onClick: function (e) { e.stopPropagation(); fillComposer(label); },
+              onKeyDown: function (e) {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.stopPropagation(); e.preventDefault(); fillComposer(label);
+              },
             },
             label,
           );
