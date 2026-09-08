@@ -79,6 +79,13 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // 会话作用域 URL：/wf1/api 路由靠 ?sessionId= 定位宿主会话工作区（跨会话互不串）
+    function scopedApiUrl(path) {
+      var sessionId = currentDshSessionId(null);
+      if (!sessionId) return path;
+      return path + (path.indexOf("?") >= 0 ? "&" : "?") + "sessionId=" + encodeURIComponent(sessionId);
+    }
+
     var RUN_EVENT_NAMES = ["snapshot", "run-start", "node-status", "agent-progress", "run-end", "run-error"];
     var runEventHub = { sessionId: null, source: null, listeners: new Set(), timer: null };
     function ensureRunEventHub() {
@@ -167,6 +174,9 @@ window.__ModuleLoader__.load({
         ".wf1-card-foot{display:flex;align-items:center;gap:8px;min-width:0;}",
         ".wf1-card-meta{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:18px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}",
         ".wf1-card-meta[data-error]{color:var(--dsw-alias-state-error-primary);}",
+        ".wf1-card-action{flex:none;display:inline-flex;align-items:center;padding:2px 10px;border-radius:999px;border:1px solid var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px;cursor:pointer;transition:background-color 100ms ease;}",
+        ".wf1-card-action:hover{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent);}",
+        ".wf1-card-action:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
         ".wf1-card-open{flex:none;display:inline-flex;align-items:center;gap:3px;color:var(--dsw-alias-label-caption);font-size:12px;line-height:18px;opacity:0;transition:opacity 100ms ease;}",
         ".wf1-card:hover .wf1-card-open,.wf1-card:focus-visible .wf1-card-open{opacity:1;}",
         // ---- 空会话示例指令条（conversation.input.dock）----
@@ -505,8 +515,10 @@ window.__ModuleLoader__.load({
       window.open(CANVAS_URL, "_blank");
     }
 
-    // 卡片骨架：头（图标+标题+状态章）+ 缩略图 + 底（meta+打开按钮）。整卡可点。
+    // 卡片骨架：头（图标+标题+状态章）+ 缩略图 + 底（meta+动作+打开按钮）。整卡可点。
     // hostRef：骨架是卡片根元素，缩略图宽度自适应从这里实测（缺省时 ref 不挂）。
+    // action：可选行内动作（如运行卡「停止」）。卡片根是 <button> 不能嵌套交互元素，
+    // 用 span[role=button] + stopPropagation 承载。
     function workflowCardShell(props) {
       return react.createElement(
         "button",
@@ -533,6 +545,7 @@ window.__ModuleLoader__.load({
             "span", { className: "wf1-card-meta", "data-error": props.metaError || undefined },
             props.meta,
           ),
+          props.action || null,
           react.createElement("span", { className: "wf1-card-open" }, "打开画布 ↗"),
         ),
       );
@@ -577,6 +590,8 @@ window.__ModuleLoader__.load({
       var [trackedRunId, setTrackedRunId] = react.useState(runId);
       var [run, setRun] = react.useState(null);
       var [missing, setMissing] = react.useState(false);
+      // 停止按钮状态：点击后乐观置位，SSE/轮询到终态自动出清；取消失败则回退可重试
+      var [canceling, setCanceling] = react.useState(false);
 
       react.useEffect(function () {
         setTrackedRunId(runId);
@@ -587,11 +602,7 @@ window.__ModuleLoader__.load({
         var stopped = false;
         var latestRun = null;
         var timer = null;
-        var scopedUrl = function (path) {
-          var sessionId = currentDshSessionId(null);
-          if (!sessionId) return path;
-          return path + (path.indexOf("?") >= 0 ? "&" : "?") + "sessionId=" + encodeURIComponent(sessionId);
-        };
+        var scopedUrl = scopedApiUrl;
         var followCurrentRun = function (current) {
           if (!current || ["interrupted", "error", "canceled"].indexOf(current.status) < 0) return;
           fetch(scopedUrl("/wf1/api/runs"))
@@ -639,6 +650,7 @@ window.__ModuleLoader__.load({
         });
         setRun(null);
         setMissing(false);
+        setCanceling(false);
         fetchRun();
         timer = window.setInterval(fetchRun, 2000);
         return function () {
@@ -687,6 +699,22 @@ window.__ModuleLoader__.load({
         });
       }
 
+      var stopRun = function () {
+        if (canceling || !trackedRunId) return;
+        setCanceling(true);
+        fetch(scopedApiUrl("/wf1/api/run/cancel"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ runId: trackedRunId }),
+        })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) {
+            // 取消失败（运行已结束/跨工作区）：回退按钮，卡片仍由轮询驱动真实状态
+            if (!d || !d.ok) setCanceling(false);
+          })
+          .catch(function () { setCanceling(false); });
+      };
+
       var dot = runDotState(run);
       var progress = runCardProgress(run);
       var nodeTotal = progress.total, nodeDone = progress.done;
@@ -698,7 +726,9 @@ window.__ModuleLoader__.load({
       var secs = run && run.durationMs ? Math.round(run.durationMs / 1000) + "s" : "";
       var meta;
       if (dot === "running") {
-        meta = (currentLabel ? "「" + currentLabel + "」执行中" : "执行中") + (secs ? " · " + secs : "");
+        meta = canceling
+          ? "停止中，等待节点中断…"
+          : (currentLabel ? "「" + currentLabel + "」执行中" : "执行中") + (secs ? " · " + secs : "");
       } else if (dot === "error") {
         meta = errText || run.status && (RUN_STATUS_CN[run.status] || run.status) || "运行失败";
       } else if (dot === "success") {
@@ -706,6 +736,21 @@ window.__ModuleLoader__.load({
       } else {
         meta = RUN_STATUS_CN[run.status] || run.status || "";
       }
+      var stopAction = dot === "running" ? react.createElement(
+        "span",
+        {
+          className: "wf1-card-action",
+          role: "button",
+          tabIndex: 0,
+          "aria-label": "停止该运行",
+          onClick: function (e) { e.stopPropagation(); stopRun(); },
+          onKeyDown: function (e) {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.stopPropagation(); e.preventDefault(); stopRun();
+          },
+        },
+        canceling ? "停止中…" : "停止",
+      ) : null;
       return workflowCardShell({
         title: "工作流 · " + (run && run.workflowName ? run.workflowName : "草稿图"),
         dotState: dot,
@@ -716,6 +761,7 @@ window.__ModuleLoader__.load({
           width: thumbW, capacity: capacity,
         }),
         hostRef: attachHost,
+        action: stopAction,
         // 点击定位到卡片正在跟踪的 run（续跑换 run 后也指向最新）
         target: { runId: trackedRunId },
       });
