@@ -132,3 +132,47 @@ test('full scenario: build leak-repair chain via ops', () => {
   assert.equal(r3.ok, true);
   assert.equal(r3.graph.edges.some((e) => e.branch === 'true'), true);
 });
+
+// ---- #104：错误行尾附「修复建议」hint ----
+test('reject errors carry fix hints (#104)', () => {
+  const g = baseGraph();
+  // 成环：反向连一条边
+  const cycle = validateGraphOps(g, [
+    { op: 'addNode', type: 'output', label: '输出' },
+    { op: "connect", from: "n_agent_1", to: "n_input_1" },
+  ]);
+  assert.equal(cycle.ok, false);
+  assert.ok(cycle.errors.some((e) => /构成环/.test(e) && e.includes('修复建议')), '成环错误应带修复建议');
+
+  // 引用不存在节点
+  const missing = validateGraphOps(g, [{ op: 'updateNode', id: 'ghost', data: { x: 1 } }]);
+  assert.equal(missing.ok, false);
+  assert.ok(missing.errors.some((e) => /节点 "ghost" 不存在/.test(e) && e.includes('先 addNode')), '引用不存在节点应带建议');
+
+  // 缺必填字段
+  const badData = validateGraphOps(g, [{ op: 'updateNode', id: 'n_agent_1', data: 'oops' }]);
+  assert.equal(badData.ok, false);
+  assert.ok(badData.errors.some((e) => /data 必须是对象/.test(e) && e.includes('修复建议')), '缺字段错误应带建议');
+});
+
+test('checkPatchResult issues carry hints (#104)', () => {
+  // 成环图：A→B→A
+  const g = {
+    nodes: [
+      { id: 'a', type: 'input', position: { x: 0, y: 0 }, data: { label: 'A', text: 'x' } },
+      { id: 'b', type: 'agent', position: { x: 1, y: 0 }, data: { label: 'B', prompt: 'p' } },
+    ],
+    edges: [
+      { id: 'e1', source: 'a', target: 'b' },
+      { id: 'e2', source: 'b', target: 'a' },
+    ],
+  };
+  const r = checkPatchResult(g);
+  assert.ok(r.issues.some((x) => /存在环/.test(x) && x.includes('修复建议')), 'lint 环错误应带修复建议');
+});
+
+test('withPatchHint leaves unmatched lines untouched', async () => {
+  const { withPatchHint } = await import('../lib/assistant.js');
+  assert.equal(withPatchHint('普通错误消息'), '普通错误消息');
+  assert.match(withPatchHint('ops[2]: 这条边会构成环'), /—— 修复建议：删掉形成环的那条连线/);
+});

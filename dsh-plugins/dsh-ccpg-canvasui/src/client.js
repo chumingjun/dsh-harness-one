@@ -177,6 +177,12 @@ window.__ModuleLoader__.load({
         ".wf1-card-action{flex:none;display:inline-flex;align-items:center;padding:2px 10px;border-radius:999px;border:1px solid var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px;cursor:pointer;transition:background-color 100ms ease;}",
         ".wf1-card-action:hover{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent);}",
         ".wf1-card-action:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
+        ".wf1-card-toggle{flex:none;display:inline-flex;align-items:center;padding:2px 10px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;cursor:pointer;transition:background-color 100ms ease;}",
+        ".wf1-card-toggle:hover{background:var(--dsw-alias-interactive-bg-hover-solid);}",
+        ".wf1-card-toggle:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
+        ".wf1-card-detail{display:flex;flex-direction:column;gap:2px;max-height:72px;overflow-y:auto;border-radius:8px;padding:6px 10px;background:color-mix(in srgb,var(--dsw-alias-border-l1) 18%,transparent);}",
+        ".wf1-card-detail-line{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:pre-wrap;word-break:break-word;}",
+        ".wf1-card-detail[data-error] .wf1-card-detail-line{color:var(--dsw-alias-state-error-primary);}",
         ".wf1-card-open{flex:none;display:inline-flex;align-items:center;gap:3px;color:var(--dsw-alias-label-caption);font-size:12px;line-height:18px;opacity:0;transition:opacity 100ms ease;}",
         ".wf1-card:hover .wf1-card-open,.wf1-card:focus-visible .wf1-card-open{opacity:1;}",
         // ---- 空会话示例指令条（conversation.input.dock）----
@@ -539,6 +545,7 @@ window.__ModuleLoader__.load({
           ),
         ),
         props.thumbnail || null,
+        props.detail || null,
         react.createElement(
           "div", { className: "wf1-card-foot" },
           react.createElement(
@@ -797,10 +804,40 @@ window.__ModuleLoader__.load({
       var lintOk = ok && text ? text.indexOf("lint: 通过") >= 0 : false;
       var dotState = !settled ? "running" : ok ? (lintOk ? "success" : "pending") : "error";
       var stateText = !settled ? "应用中" : ok ? (lintOk ? "已应用" : "已应用·有告警") : "被拒绝";
+      // 完整详情（#104）：被拒的全部错误行 / 已应用时的 lint 告警行，默认收起，
+      // 点击展开（超 3 条区域内滚动）；服务端已在行尾附「修复建议」
+      var [expanded, setExpanded] = react.useState(false);
+      var detailLines = settled && text
+        ? text.split("\n").map(function (l) { return l.trim(); }).filter(Boolean)
+        : [];
+      var hasDetail = settled && detailLines.length > 1 && (!ok || !lintOk);
       var meta;
       if (!settled) meta = opSummary;
-      else if (!ok) meta = (text || "整批被拒绝").split("\n")[0].slice(0, 60);
+      else if (!ok) meta = detailLines[0] ? detailLines[0].slice(0, 60) : "整批被拒绝";
       else meta = opSummary + (lintOk ? "" : " · lint 有告警");
+
+      var toggle = hasDetail ? react.createElement(
+        "span",
+        {
+          className: "wf1-card-toggle",
+          role: "button",
+          tabIndex: 0,
+          "aria-expanded": expanded,
+          onClick: function (e) { e.stopPropagation(); setExpanded(!expanded); },
+          onKeyDown: function (e) {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.stopPropagation(); e.preventDefault(); setExpanded(!expanded);
+          },
+        },
+        expanded ? "收起" : "展开 " + (detailLines.length - 1) + " 条",
+      ) : null;
+      var detail = expanded && hasDetail ? react.createElement(
+        "div",
+        { className: "wf1-card-detail", "data-error": !ok || undefined },
+        detailLines.map(function (line, index) {
+          return react.createElement("div", { key: index, className: "wf1-card-detail-line" }, line);
+        }),
+      ) : null;
 
       return workflowCardShell({
         title: "建图 · " + opSummary.slice(0, 40),
@@ -809,6 +846,8 @@ window.__ModuleLoader__.load({
         meta: meta,
         metaError: settled && !ok,
         thumbnail: null,
+        action: toggle,
+        detail: detail,
       });
     }
 
