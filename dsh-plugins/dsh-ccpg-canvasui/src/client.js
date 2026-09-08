@@ -203,6 +203,13 @@ window.__ModuleLoader__.load({
         ".wf1-confirm-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
         ".wf1-confirm-discard:hover{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary);}",
         ".wf1-confirm-countdown{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;}",
+        // ---- 绑定状态胶囊（#106）：与确认条/示例条同 dock ----
+        ".wf1-bind-pill{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:2px 12px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;cursor:pointer;transition:border-color 100ms ease,color 100ms ease;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
+        ".wf1-bind-pill:hover{border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);}",
+        ".wf1-bind-pill:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
+        ".wf1-bind-pill[data-bound]{color:var(--dsw-alias-label-secondary);}",
+        ".wf1-bind-dot{width:6px;height:6px;border-radius:999px;flex:none;background:var(--dsw-alias-border-l2);}",
+        ".wf1-bind-dot[data-s=on]{background:var(--dsw-alias-state-success-primary);}",
       ].join("\n");
       document.head.appendChild(el);
     }
@@ -1028,6 +1035,42 @@ window.__ModuleLoader__.load({
             p.name,
           );
         }),
+      );
+    }
+
+    // ---- #106 绑定状态胶囊（conversation.input.dock）：输入框上方常驻 ----
+    // 已绑定：工作流名 · 节点数；未绑定给出下一步指引；点击均打开工作流侧栏
+    // （打开画布即自动绑定会话）。2s 轮询 + 触发源 warm 双路刷新，切换画布/保存
+    // 后胶囊 ≤2s 跟上（服务端 cv 由画布上报同步，无新接口）。
+    function WorkflowBindCapsule() {
+      var [info, setInfo] = react.useState(wfBoundInfo);
+      react.useEffect(function () {
+        var stopped = false;
+        var load = function () {
+          fetchBoundInfo(currentDshSessionId(null)).then(function (data) {
+            if (!stopped && data) setInfo(data);
+          });
+        };
+        load();
+        var timer = window.setInterval(load, 2000);
+        return function () { stopped = true; window.clearInterval(timer); };
+      }, []);
+      if (!info) return null; // 首拉前不渲染，避免闪「未绑定」
+      var bound = Boolean(info.bound);
+      var label = bound
+        ? "已绑定：" + (info.workflowName || "草稿图") + " · " + (info.nodeCount || 0) + " 节点"
+        : "未绑定画布 · 打开「工作流」标签页即可绑定";
+      return react.createElement(
+        "button",
+        {
+          type: "button",
+          className: "wf1-bind-pill",
+          "data-bound": bound || undefined,
+          title: bound ? "点击打开工作流画布" : "点击打开工作流标签页完成绑定",
+          onClick: function () { try { openWorkflowSidebar(); } catch (e) { /* 无侧栏服务时静默 */ } },
+        },
+        react.createElement("span", { className: "wf1-bind-dot", "data-s": bound ? "on" : "off" }),
+        label,
       );
     }
 
@@ -1951,13 +1994,22 @@ window.__ModuleLoader__.load({
     }
 
     function fetchBoundState(sessionId) {
+      return fetchBoundInfo(sessionId).then(function (data) {
+        wfBoundState = Boolean(data && data.bound);
+        return wfBoundState;
+      });
+    }
+    // #106 绑定胶囊数据：bound + 工作流名 + 节点数；wfBoundInfo 存最近一次快照
+    var wfBoundInfo = null;
+    function fetchBoundInfo(sessionId) {
+      if (!sessionId) return Promise.resolve(null);
       return fetch(wfScopedApi("/assistant/bound", sessionId))
         .then(function (r) { return r.ok ? r.json() : { bound: false }; })
         .then(function (data) {
-          wfBoundState = Boolean(data.bound);
-          return wfBoundState;
+          wfBoundInfo = data || { bound: false };
+          return wfBoundInfo;
         })
-        .catch(function () { return false; });
+        .catch(function () { return null; });
     }
 
     function wfScopedApi(path, sessionId) {
@@ -2176,8 +2228,20 @@ window.__ModuleLoader__.load({
       });
 
       // 空会话示例指令条：dock slot 在空白会话（hero 态）渲染于输入框上方。
-      // 修改类补丁确认条（#105）同 dock 常驻（order 靠后，紧邻输入框）。
+      // 绑定状态胶囊（#106）/ 修改类补丁确认条（#105）/ 示例条（#101）同 dock。
       // 老宿主无该 slot 时 inject 静默失败，不影响其余功能。
+      try {
+        ctx.slots.inject("conversation.input.dock", function () {
+          return ctx.slots.register(
+            {
+              name: "conversation.input.dock",
+              id: "ccpg-workflow-bind-capsule",
+              order: 5,
+            },
+            WorkflowBindCapsule,
+          );
+        });
+      } catch (e) { /* 无 dock slot 的宿主跳过 */ }
       try {
         ctx.slots.inject("conversation.input.dock", function () {
           return ctx.slots.register(
@@ -2326,6 +2390,8 @@ window.__ModuleLoader__.load({
       setPatchConfirmState: setPatchConfirmState,
       cardSuggestRow: cardSuggestRow,
       fillComposer: fillComposer,
+      WorkflowBindCapsule: WorkflowBindCapsule,
+      setWfBoundInfoForTest: function (v) { wfBoundInfo = v; },
       WorkflowExampleBar: WorkflowExampleBar,
       examplePromptsFor: examplePromptsFor,
       setWfBoundState: function (v) { wfBoundState = v; },

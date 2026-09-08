@@ -96,18 +96,33 @@ const maybeJson = (text) => { try { return JSON.parse(text); } catch { return nu
 const bound = await call('POST', '/wf1/api/assistant/bind', { sessionId: 'session-1', canvasId: 'cv_test', version: 0, graph: null });
 assert.equal(bound.status, 200, `bind 应成功，实际 ${bound.status} ${JSON.stringify(bound.body)}`);
 
-// 绑定状态只读查询（#101 空态引导数据源）：绑定后 true+canvasId；unbind 后 false
+// 绑定状态只读查询（#101 空态引导数据源）：绑定后 true+canvasId；unbind 后 false；
+// #106 胶囊数据：带工作流名与节点数（服务端 cv 已由画布上报同步）
 {
   const query = await call('GET', '/wf1/api/assistant/bound');
   assert.equal(query.status, 200);
   assert.equal(query.body.bound, true);
   assert.equal(query.body.canvasId, 'cv_test');
+  assert.equal(query.body.workflowName, null, "未上报图/未挂工作流时名称为 null");
+  assert.equal(query.body.nodeCount, 0);
+  // 上报带节点的草稿图 → 节点数跟上
+  const g2 = await call('POST', '/wf1/api/assistant/canvas-state', {
+    canvasId: 'cv_test', version: 1,
+    graph: { nodes: [
+      { id: 'a', type: 'input', data: { label: 'A' } },
+      { id: 'b', type: 'agent', data: { label: 'B' } },
+    ], edges: [] },
+  });
+  assert.equal(g2.body.applied, true, `图上报应生效：${JSON.stringify(g2.body)}`);
+  const q2 = await call('GET', '/wf1/api/assistant/bound');
+  assert.equal(q2.body.nodeCount, 2, "胶囊节点数应随上报图更新");
   await call('POST', '/wf1/api/assistant/unbind', { sessionId: 'session-1' });
   const after = await call('GET', '/wf1/api/assistant/bound');
   assert.equal(after.body.bound, false);
   assert.equal(after.body.canvasId, null);
+  assert.equal(after.body.nodeCount, 0, "未绑定时不带节点数");
   // 复绑，后续工具用例依赖 session-1 ↔ cv_test
-  await call('POST', '/wf1/api/assistant/bind', { sessionId: 'session-1', canvasId: 'cv_test', version: 0, graph: null });
+  await call('POST', '/wf1/api/assistant/bind', { sessionId: 'session-1', canvasId: 'cv_test', version: 1, graph: null });
 }
 
 const wfGraph = {

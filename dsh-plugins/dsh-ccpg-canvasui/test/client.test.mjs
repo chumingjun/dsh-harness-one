@@ -116,6 +116,7 @@ client.apply({
 assert.deepEqual(injectedSlots, [
   "settings.section",
   "conversation.input.left",
+  "conversation.input.dock", // #106 绑定胶囊
   "conversation.input.dock", // #105 确认条
   "conversation.input.dock", // #101 示例条
   "tool.call.toolview",
@@ -1179,6 +1180,89 @@ for (const [body, expected] of [
     },
   });
   assert.equal(cardCalls.findLast((c) => c.tag === "div" && c.props?.className === "wf1-card-suggest"), undefined, "被拒不渲染 suggestion");
+}
+
+// ---- 绑定状态胶囊（#106）：已绑定/未绑定文案，点击开侧栏，首拉前不渲染 ----
+{
+  const capCalls = [];
+  const fetchLog = [];
+  let boundPayload = { ok: true, bound: true, canvasId: "cv_x", workflowName: "海印一期", nodeCount: 41 };
+  let cursor = 0;
+  const slots = [];
+  const effects = [];
+  const reactShim = {
+    createElement(tag, props, ...children) { capCalls.push({ tag, props, children }); return { tag, props, children }; },
+    useState(initial) {
+      const i = cursor++;
+      if (!slots[i]) slots[i] = { value: typeof initial === "function" ? initial() : initial };
+      const slot = slots[i];
+      return [slot.value, (v) => { slot.value = typeof v === "function" ? v(slot.value) : v; }];
+    },
+    useEffect(fn) { effects.push(fn); },
+  };
+  let capClient;
+  const capContext = {
+    console,
+    fetch: (url) => {
+      fetchLog.push(String(url));
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(boundPayload) });
+    },
+    setInterval: () => 0,
+    clearInterval: () => {},
+    document: {
+      head: { appendChild() {} },
+      createElement: () => ({}),
+      getElementById: () => null,
+      body: {},
+    },
+    window: {
+      localStorage: { getItem: (k) => (k === "dsh.sessions.current" ? JSON.stringify({ sessionId: "sess_cap" }) : null) },
+      fetch: (url) => {
+        fetchLog.push(String(url));
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(boundPayload) });
+      },
+      setInterval: () => 0,
+      clearInterval: () => {},
+      __ModuleLoader__: {
+        load({ factory }) { capClient = factory((name) => (name === "react" ? reactShim : (() => { throw new Error("unexpected require: " + name); })())); },
+      },
+    },
+  };
+  vm.runInNewContext(bundle, capContext, { filename: "dsh-ccpg-canvasui/src/client.js" });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const render = () => { cursor = 0; capCalls.length = 0; return capClient.__test.WorkflowBindCapsule(); };
+  const pill = () => capCalls.findLast((c) => c.tag === "button" && String(c.props?.className).includes("wf1-bind-pill"));
+
+  // 首拉前（info=null）：不渲染
+  render();
+  assert.equal(pill(), undefined, "首次数据到达前不渲染，避免闪未绑定");
+
+  // 挂 effect（轮询启动）→ 首拉返回已绑定
+  effects.splice(0).forEach((fn) => fn());
+  await tick();
+  render();
+  {
+    const p = pill();
+    assert.ok(p, "已绑定应渲染胶囊");
+    assert.equal(p.props["data-bound"], true);
+    assert.match(String(p.children[p.children.length - 1]), /已绑定：海印一期 · 41 节点/);
+    assert.equal(capCalls.findLast((c) => c.props?.className === "wf1-bind-dot").props["data-s"], "on");
+    // 请求带 sessionId 作用域
+    assert.ok(fetchLog.some((u) => u.includes("/wf1/api/assistant/bound") && u.includes("sessionId=sess_cap")), "bound 查询须带 sessionId");
+  }
+
+  // 未绑定：指引文案 + off 点
+  boundPayload = { ok: true, bound: false, canvasId: null, workflowName: null, nodeCount: 0 };
+  effects.splice(0).forEach((fn) => fn()); // 重挂 effect 再拉一轮
+  await tick();
+  render();
+  {
+    const p = pill();
+    assert.ok(p);
+    assert.equal(p.props["data-bound"], undefined);
+    assert.match(String(p.children[p.children.length - 1]), /未绑定画布 · 打开「工作流」标签页/);
+    assert.equal(capCalls.findLast((c) => c.props?.className === "wf1-bind-dot").props["data-s"], "off");
+  }
 }
 
 console.log("canvasui client tests: passed");
