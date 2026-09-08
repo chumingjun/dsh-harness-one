@@ -20,6 +20,34 @@ export function newCanvasEdgeId() {
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
+// ---- 常见校验错误的修复提示（#104）：命中即在错误行尾追加「修复建议」----
+// 单点维护在服务端，前端工具卡直接展示完整行，不做第二套映射。
+// 规则按实际错误文案匹配（validateGraphOps 的 ops 错误 + lintGraph 的 issue 文案）。
+const PATCH_HINTS = [
+  [/构成环|存在环/, '删掉形成环的那条连线（回边），或改连到环外节点'],
+  [/不能自连/, '节点不能连自己，需要中转时中间加一个节点'],
+  [/引用的节点 ".+?" 不存在/, '先在同批 addNode 创建该节点，或改用画布摘要里已有的节点 id'],
+  [/节点 ".+?" 不存在/, 'id 必须来自画布摘要；新节点先 addNode 再引用'],
+  [/变量引用没有该节点/, '模板只能引用存在的节点：先 addNode 或改引用别的节点'],
+  [/变量只能引用直接上游节点/, '把该节点连成上游，或改引用已连通的上游节点'],
+  [/边已存在/, '这条连线已存在，无需重复 connect'],
+  [/边不存在/, '用画布摘要里已有的边 id，或改用 from/to 定位'],
+  [/未知节点类型/, 'type 用注册类型之一：input/agent/script/condition/http/output/notify/note/subworkflow'],
+  [/未知操作/, 'op 用 addNode/updateNode/renameNode/deleteNode/connect/deleteEdge/updateEdge'],
+  [/缺少 op 字段/, '每个操作必须带 op 字段'],
+  [/label 不能为空/, 'renameNode 需要非空 label'],
+  [/data 必须是对象/, 'updateNode 的 data 传 {字段: 值} 对象'],
+  [/没有上游连线/, '从上游节点 connect 一条边到该输出节点'],
+  [/多个名为「.+?」的节点/, '用 renameNode 消除同名，避免模板引用歧义'],
+  [/单批 ops 上限/, '一批最多 60 个操作，拆成多批'],
+];
+export const withPatchHint = (line) => {
+  for (const [re, hint] of PATCH_HINTS) {
+    if (re.test(line)) return `${line} —— 修复建议：${hint}`;
+  }
+  return line;
+};
+
 // 成环检测：在图上加 from→to 后是否出现环（DFS）
 export function wouldCreateCycle(nodes, edges, from, to) {
   const adj = new Map();
@@ -47,10 +75,10 @@ export function wouldCreateCycle(nodes, edges, from, to) {
 export function validateGraphOps(graph, ops) {
   const errors = [];
   if (!isPlainObject(graph) || !Array.isArray(graph.nodes) || !Array.isArray(graph.edges)) {
-    return { ok: false, errors: ['缺少有效画布图（先让用户打开工作流画布）'] };
+    return { ok: false, errors: [withPatchHint('缺少有效画布图（先让用户打开工作流画布）')] };
   }
-  if (!Array.isArray(ops) || ops.length === 0) return { ok: false, errors: ['ops 必须是非空数组'] };
-  if (ops.length > 60) return { ok: false, errors: [`单批 ops 上限 60，收到 ${ops.length}`] };
+  if (!Array.isArray(ops) || ops.length === 0) return { ok: false, errors: [withPatchHint('ops 必须是非空数组')] };
+  if (ops.length > 60) return { ok: false, errors: [withPatchHint(`单批 ops 上限 60，收到 ${ops.length}`)] };
 
   // 工作副本：逐 op 应用到副本，全部成功才对外可见
   const nodes = graph.nodes.map((n) => ({ ...n, data: { ...n.data } }));
@@ -58,7 +86,7 @@ export function validateGraphOps(graph, ops) {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const patch = [];
 
-  const fail = (i, msg) => errors.push(`ops[${i}]: ${msg}`);
+  const fail = (i, msg) => errors.push(withPatchHint(`ops[${i}]: ${msg}`));
 
   ops.forEach((op, i) => {
     if (!isPlainObject(op) || typeof op.op !== 'string') { fail(i, '缺少 op 字段'); return; }
@@ -182,7 +210,7 @@ export function checkPatchResult(nextGraph) {
   const lint = lintGraph(nextGraph);
   return {
     lintOk: lint.ok,
-    issues: lint.issues.map((x) => `[${x.level}]${x.nodeId ? `(${x.nodeId})` : ''} ${x.message}`),
+    issues: lint.issues.map((x) => withPatchHint(`[${x.level}]${x.nodeId ? `(${x.nodeId})` : ''} ${x.message}`)),
   };
 }
 

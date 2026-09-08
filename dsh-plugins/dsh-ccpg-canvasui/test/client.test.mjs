@@ -914,4 +914,106 @@ for (const [body, expected] of [
   }
 }
 
+// ---- 建图卡错误展开（#104）：默认收起，点击展开完整错误行（含服务端修复建议）----
+{
+  const expandCalls = [];
+  let cursor = 0;
+  const slots = [];
+  const reactShim = {
+    createElement(tag, props, ...children) { expandCalls.push({ tag, props, children }); return { tag, props, children }; },
+    useState(initial) {
+      const i = cursor++;
+      if (!slots[i]) slots[i] = { value: typeof initial === "function" ? initial() : initial };
+      const slot = slots[i];
+      return [slot.value, (v) => { slot.value = typeof v === "function" ? v(slot.value) : v; }];
+    },
+  };
+  let expandClient;
+  const expandContext = {
+    console,
+    document: {
+      head: { appendChild() {} },
+      createElement: () => ({}),
+      getElementById: () => null,
+      body: {},
+    },
+    window: {
+      localStorage: { getItem: () => null },
+      __ModuleLoader__: {
+        load({ factory }) { expandClient = factory((name) => (name === "react" ? reactShim : (() => { throw new Error("unexpected require: " + name); })())); },
+      },
+    },
+  };
+  vm.runInNewContext(bundle, expandContext, { filename: "dsh-ccpg-canvasui/src/client.js" });
+
+  // 5 行错误（含服务端修复建议）：成环 + 引用不存在 + 缺字段等
+  const rejectedText = [
+    "整批拒绝（未做任何修改）：",
+    'ops[1]: connect from 节点 "ghost" 不存在 —— 修复建议：先在同批 addNode 创建该节点，或改用画布摘要里已有的节点 id',
+    "ops[2]: 这条边会构成环 —— 修复建议：删掉形成环的那条连线（回边），或改连到环外节点",
+    "ops[3]: data 必须是对象 —— 修复建议：updateNode 的 data 传 {字段: 值} 对象",
+    "ops[4]: label 不能为空 —— 修复建议：renameNode 需要非空 label",
+    "请修正后重发整批 ops。",
+  ].join("\n");
+  const render = () => {
+    cursor = 0;
+    expandCalls.length = 0;
+    return expandClient.__test.GraphPatchCard({
+      block: {
+        kind: "tool-result",
+        isError: true,
+        call: { name: "canvas_graph_patch", argsRaw: JSON.stringify({ ops: [{ op: "connect" }] }) },
+        content: [{ type: "text", text: rejectedText }],
+      },
+    });
+  };
+  const find = (className, tag) => expandCalls.findLast((c) => c.tag === tag && c.props?.className === className);
+
+  render();
+  {
+    const toggle = find("wf1-card-toggle", "span");
+    assert.ok(toggle, "被拒多行错误应渲染展开入口");
+    assert.match(String(toggle.children[0]), /^展开 \d+ 条$/);
+    assert.equal(toggle.props["aria-expanded"], false);
+    assert.equal(find("wf1-card-detail", "div"), undefined, "默认收起");
+    // meta 仍是首行摘要，不撑爆卡片
+    assert.match(String(find("wf1-card-meta", "span").children[0]), /^整批拒绝/);
+
+    // 点击展开（stopPropagation 不触发整卡打开）
+    let stopped = false;
+    toggle.props.onClick({ stopPropagation() { stopped = true; } });
+    assert.equal(stopped, true);
+  }
+  render();
+  {
+    const detail = find("wf1-card-detail", "div");
+    assert.ok(detail, "展开后渲染完整错误列表");
+    assert.equal(detail.props["data-error"], true, "被拒态错误行用错误色");
+    // createElement shim 单数组参数不展开，先展平再断言
+    const lines = Array.isArray(detail.children[0]) ? detail.children[0] : detail.children;
+    assert.equal(lines.length, 6, "全部错误行均展示（超 3 条靠滚动）");
+    assert.match(String(lines[2].children[0]), /构成环 —— 修复建议：删掉形成环的那条连线/);
+    const toggle = find("wf1-card-toggle", "span");
+    assert.equal(toggle.children[0], "收起");
+    assert.equal(toggle.props["aria-expanded"], true);
+
+    // 再点收起
+    toggle.props.onClick({ stopPropagation() {} });
+  }
+  render();
+  assert.equal(find("wf1-card-detail", "div"), undefined, "点击收起后详情隐藏");
+
+  // lint 通过的成功卡：不渲染展开入口
+  expandCalls.length = 0;
+  expandClient.__test.GraphPatchCard({
+    block: {
+      kind: "tool-result",
+      isError: false,
+      call: { name: "canvas_graph_patch", argsRaw: JSON.stringify({ ops: [{ op: "addNode" }] }) },
+      content: [{ type: "text", text: "已应用 1 个操作到画布。\nlint: 通过" }],
+    },
+  });
+  assert.equal(find("wf1-card-toggle", "span"), undefined, "lint 通过不渲染展开");
+}
+
 console.log("canvasui client tests: passed");
