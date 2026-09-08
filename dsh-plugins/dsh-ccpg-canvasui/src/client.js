@@ -821,6 +821,15 @@ window.__ModuleLoader__.load({
     // 官方 dock slot 在「已建会话的空白态（hero）」渲染于 hero 区与输入框之间，
     // props 带 {session, input}；input 是状态快照（无写 API），点击 chip 用
     // contenteditable 注入在用户手势内生效。草稿非空时隐藏，避免干扰输入。
+    // 输入框定位不能依赖 DOM 父子关系（dock 容器与编辑器不同子树），按官方
+    // 编辑器标记 data-composer-input 全文档找，找不到再退 contenteditable。
+    function findComposerInput() {
+      return (
+        document.querySelector("[data-composer-input='true']") ||
+        document.querySelector("textarea[placeholder]") ||
+        null
+      );
+    }
     function WorkflowExampleBar(props) {
       var visible =
         props.input && (props.input.draft === "" || props.input.draft == null) &&
@@ -829,17 +838,13 @@ window.__ModuleLoader__.load({
       var prompts = examplePromptsFor(wfBoundState === true);
       var fill = function (text, ev) {
         ev.preventDefault();
-        var host = ev.currentTarget.closest(".wf1-example-bar");
-        var editable = host && host.parentElement
-          ? host.parentElement.querySelector("[contenteditable='true'], textarea")
-          : null;
-        if (editable) {
-          editable.focus();
-          try {
-            document.execCommand("selectAll");
-            document.execCommand("insertText", false, text);
-          } catch (e) { /* 输入框形态变化时静默，用户仍可手动输入 */ }
-        }
+        var editable = findComposerInput();
+        if (!editable) return;
+        editable.focus();
+        try {
+          document.execCommand("selectAll");
+          document.execCommand("insertText", false, text);
+        } catch (e) { /* 输入框形态变化时静默，用户仍可手动输入 */ }
       };
       return react.createElement(
         "div",
