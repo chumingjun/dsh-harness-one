@@ -11,6 +11,7 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import { apiUrl, setApiSessionId } from './api.js';
+import { isModifyClassPatch, summarizePendingOps, PATCH_CONFIRM_TIMEOUT_MS } from './patch-confirm.js';
 import {
   normalizeWorkflowDocument,
   serializeGraph,
@@ -122,6 +123,9 @@ export default function App() {
   nodesRef.current = nodes;
   const assistantOpsRef = useRef(null); // SSE assistant-patch → applyAssistantOps 桥（定义在后段）
   const assistantGraphRef = useRef(null); // 漏失 patch 时用服务端权威完整图恢复
+  const pendingConfirmRef = useRef(null); // #105 修改类补丁挂起确认（定义在后段 resolve）
+  const resolvePendingConfirmRef = useRef(null);
+  const notifyPatchConfirmRef = useRef(null);
   const assistantVersionRef = useRef(0);
   const openWorkflowRef = useRef(null); // SSE assistant-open-workflow → openWorkflow 桥（定义在后段）
   const dirtyRef = useRef(dirty); // 脏草稿守卫：AI 请求切换前先静默保存，避免丢未存改动
@@ -538,10 +542,36 @@ export default function App() {
       const version = Number(p.version) || 0;
       if (version && version <= assistantVersionRef.current) return;
       if (version && version !== assistantVersionRef.current + 1 && p.graph) {
+        // 版本跳变：服务端权威整图恢复（含挂起批次，确认作废——已随整图落地），
+        // 确认条同步收起
+        if (pendingConfirmRef.current) {
+          const superseded = pendingConfirmRef.current;
+          clearTimeout(superseded.timer);
+          pendingConfirmRef.current = null;
+          notifyPatchConfirmRef.current?.('applied', superseded.version, 'superseded');
+        }
         assistantGraphRef.current?.(p.graph, version, true);
         return;
       }
-      assistantOpsRef.current?.(p.patch || [], version);
+      const ops = p.patch || [];
+      // #105 修改类补丁（删节点/改已有节点）先挂起确认再落图；服务端状态已先行，
+      // 挂起只挡前端落图，放弃时以旧图回写覆盖。搭建类直接落图不变。
+      if (version && isModifyClassPatch(ops)) {
+        clearTimeout(pendingConfirmRef.current?.timer);
+        const deadline = Date.now() + PATCH_CONFIRM_TIMEOUT_MS;
+        pendingConfirmRef.current = {
+          ops, version, deadline, resolved: false, workflowId: currentWfIdRef.current || null,
+          timer: setTimeout(() => resolvePendingConfirmRef.current?.(true, 'auto'), PATCH_CONFIRM_TIMEOUT_MS),
+        };
+        try {
+          window.parent.postMessage({
+            type: 'wf1-patch-confirm-state', state: 'pending', canvasId: canvasIdRef.current,
+            version, deadline, summary: summarizePendingOps(ops, nodesRef.current),
+          }, window.location.origin);
+        } catch { /* 宿主无确认条（独立窗口画布）→ 30s 自动应用 */ }
+        return;
+      }
+      assistantOpsRef.current?.(ops, version);
     });
     es.addEventListener('assistant-open-workflow', (e) => {
       // AI 请求把本画布切到指定工作流（workflow_open）：复用 openWorkflow 既有加载路径。
@@ -1406,6 +1436,14 @@ export default function App() {
   // 让对话侧 canvas_* 工具同步指向最新工作流。此前依赖 reportCanvasState 身份变化触发
   // 嵌入 effect 重跑——是隐式耦合，调整任意一侧 hook 依赖都会无声断掉。
   useEffect(() => {
+    // 挂起期间切到别的工作流：旧批次不落到新图上，作废收尾（服务端已先行，
+    // 重开该工作流时随整图恢复落地；确认条同步收起）
+    const pending = pendingConfirmRef.current;
+    if (pending && !pending.resolved && (pending.workflowId || null) !== (currentWfIdRef.current || null)) {
+      clearTimeout(pending.timer);
+      pendingConfirmRef.current = null;
+      notifyPatchConfirmRef.current?.('applied', pending.version, 'superseded');
+    }
     reportCanvasStateRef.current?.(true);
   }, [currentWf?.id]);
 
@@ -1458,6 +1496,39 @@ export default function App() {
   }, [setNodes, setEdges, snapshot, markDirty, toast, fitView, reportCanvasState]);
   assistantOpsRef.current = applyAssistantOps;
 
+  // #105 挂起批次裁决：approve → 正常落图；放弃 → 前端不落图，认领版本后把旧图
+  // 回写画布状态并立即静默保存（覆盖服务端已持久化的补丁图，Cmd+Z 基线也回到旧图）
+  const notifyPatchConfirm = (state, version, via) => {
+    try {
+      window.parent.postMessage({ type: 'wf1-patch-confirm-state', state, version, via, canvasId: canvasIdRef.current }, window.location.origin);
+    } catch { /* 独立窗口画布无确认条 */ }
+  };
+  const resolvePendingConfirm = useCallback((approve, via = 'user') => {
+    const pending = pendingConfirmRef.current;
+    if (!pending || pending.resolved) return;
+    pending.resolved = true;
+    clearTimeout(pending.timer);
+    pendingConfirmRef.current = null;
+    if (approve) {
+      applyAssistantOps(pending.ops, pending.version);
+      notifyPatchConfirm('applied', pending.version, via);
+      return;
+    }
+    assistantVersionRef.current = Math.max(assistantVersionRef.current, pending.version);
+    markDirty();
+    Promise.resolve(saveRef.current?.({ silent: true })).catch(() => {});
+    reportCanvasState(true);
+    toast('已放弃 AI 本批修改', 'warn', 3000);
+    notifyPatchConfirm('discarded', pending.version, via);
+  }, [applyAssistantOps, markDirty, reportCanvasState, toast]);
+  resolvePendingConfirmRef.current = resolvePendingConfirm;
+  notifyPatchConfirmRef.current = notifyPatchConfirm;
+  // 卸载：只停掉计时器。服务端状态已先行，重开后经 bind/整图恢复自然落地，
+  // 无需（也无法）在已卸载组件上落图。
+  useEffect(() => () => {
+    clearTimeout(pendingConfirmRef.current?.timer);
+  }, []);
+
   // 宿主 postMessage：wf1-session（官方 UI 会话绑定）→ 绑定 + 拿 persona；
   // wf1-theme（官方 UI 主题切换）→ 画布跟随切换 data-theme
   useEffect(() => {
@@ -1485,6 +1556,13 @@ export default function App() {
             setView('canvas');
           } catch { toast('打开画布：定位运行失败', 'error'); }
         })();
+      }
+      if (d.type === 'wf1-patch-confirm' && d.canvasId === canvasIdRef.current) {
+        // 确认条（宿主 canvasui）回传裁决：只认严格匹配的挂起版本
+        const pending = pendingConfirmRef.current;
+        if (pending && !pending.resolved && Number(d.version) === pending.version) {
+          resolvePendingConfirmRef.current?.(Boolean(d.approve));
+        }
       }
       if (d.type === 'wf1-session' && d.sessionId) {
         hostSessionRef.current = d.sessionId;
