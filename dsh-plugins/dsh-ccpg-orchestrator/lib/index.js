@@ -13,7 +13,7 @@
 //
 // HTTP 全部挂 ctx.webServer（/wf1 前缀，避开 dsh 自己的 /api）。
 
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, copyFileSync, cpSync, unlinkSync, renameSync, realpathSync, rmSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
 import { join, dirname, extname, isAbsolute, relative, resolve, sep, basename } from 'node:path';
@@ -53,7 +53,7 @@ import {
 import { FeishuClient } from './feishu.js';
 import { createFeishuNotificationChannel } from './notification-feishu.js';
 import { collectInstallReport, compareSemver, executePlan, planUpgrade, PACKAGE as UPGRADE_PACKAGE } from './system-upgrade.js';
-import { NotificationChannelRegistry, WorkflowNotificationManager } from './notifications.js';
+import { NotificationChannelRegistry, WorkflowNotificationManager, summarizeNotificationText } from './notifications.js';
 import { listFeishuCreds, addFeishuCred, removeFeishuCred, setDefaultFeishuCred, getFeishuCredOrEnv } from './credentials.js';
 import { Orchestrator, lintGraph, getKind } from './engine.js';
 import { validateWorkflowInputs } from './workflow-inputs.js';
@@ -98,6 +98,8 @@ const RUNS_KEEP = 100; // 运行历史保留条数（按开始时间新→旧）
 const REQUEST_BODY_LIMIT = 8_000_000;
 const MAX_MANUAL_REVISION_CONTENT = 400 * 1024; // 手工编辑正文上限（字符），防超大写入库表
 const TERMINAL_NODE_STATUSES = new Set(['success', 'error', 'canceled', 'skipped']);
+const HOOK_SIGNATURE_TOLERANCE_SEC = 5 * 60; // HMAC 时间窗，窗外拒绝（防重放）
+const HOOK_IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000; // 幂等键窗口，窗口内同 key 复用首次 runId
 let runIdSeq = 0;
 let ctxRef = null;
 
@@ -108,6 +110,61 @@ class RequestBodyError extends Error {
     this.code = code;
   }
 }
+
+// ---- webhook 加固纯函数（导出供测试直接断言）----
+
+// 常数时间字符串比较：长度不等先短路（timingSafeEqual 要求等长 Buffer）。
+export const secureTokenMatch = (presented, expected) => {
+  if (typeof presented !== 'string' || typeof expected !== 'string' || !presented || !expected) return false;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+};
+
+// HMAC 验签：X-WF1-Signature: sha256=<hex>，覆盖 raw body 字节 + 时间戳。
+// 返回 null 表示通过；否则返回拒绝原因（路由层转 401 文案）。
+export const verifyHookSignature = ({ signingSecret, raw, signatureHeader, timestampHeader, now = Date.now() }) => {
+  if (!signingSecret) return null; // 未配置签名密钥的存量 hook 只走 token
+  const m = /^sha256=([0-9a-f]{64})$/i.exec(String(signatureHeader || '').trim());
+  if (!m) return '缺少或格式错误的 X-WF1-Signature（应为 sha256=<hex>）';
+  const ts = Number(String(timestampHeader || '').trim());
+  if (!Number.isFinite(ts)) return '缺少或非法的 X-WF1-Timestamp（unix 秒）';
+  if (Math.abs(now / 1000 - ts) > HOOK_SIGNATURE_TOLERANCE_SEC) return 'X-WF1-Timestamp 超出时间窗（±5 分钟）';
+  const expected = createHmac('sha256', signingSecret).update(Buffer.from(raw || Buffer.alloc(0))).update(String(timestampHeader).trim()).digest('hex');
+  const presented = m[1].toLowerCase();
+  return presented === expected.toLowerCase() ? null : '签名不匹配';
+};
+
+// 幂等命中判定：同 key 且窗口内 → 复用 runId；窗口外/异 key → 不命中。
+export const matchHookIdempotency = (hook, key, now = Date.now()) => {
+  if (!key || !hook?.lastIdempotency) return null;
+  const { key: lastKey, runId, at } = hook.lastIdempotency;
+  if (lastKey !== key) return null;
+  const age = now - Date.parse(at || '');
+  if (!Number.isFinite(age) || age < 0 || age > HOOK_IDEMPOTENCY_WINDOW_MS) return null;
+  return runId || null;
+};
+
+// 完成回调负载：与通知事件同款脱敏（summarizeNotificationText）+ 截断。
+export const buildHookCallbackPayload = ({ hookId, run }) => ({
+  event: 'workflow_run.finished',
+  hookId,
+  runId: run?.runId ?? null,
+  status: run?.status ?? null,
+  workflowId: run?.workflowId ?? null,
+  workflowName: run?.workflowName ?? null,
+  startedAt: run?.startedAt ?? null,
+  finishedAt: run?.finishedAt ?? null,
+  durationMs: typeof run?.durationMs === 'number' ? run.durationMs : null,
+  summary: summarizeNotificationText(run?.summary || summarizeOutputsForCallback(run)),
+});
+
+const summarizeOutputsForCallback = (run) => {
+  try {
+    const first = Object.values(run?.outputs || {})[0];
+    return typeof first === 'string' ? first : JSON.stringify(first ?? '');
+  } catch { return ''; }
+};
 
 // 原子写入：临时文件 + rename，进程中途挂掉不会留截断 JSON
 const atomicWrite = (file, data) => {
@@ -262,7 +319,10 @@ export function apply(ctx, config) {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(body));
   };
-  const readBody = (req) => new Promise((resolve, reject) => {
+  // raw:true 供 webhook HMAC 验签：resolve { raw, body }——签名必须覆盖原始
+  // body 字节，JSON.parse 后的代理对象无法还原（键序/空白不同即签名漂移）。
+  // 不传选项的行为与历史完全一致（只回解析后的对象）。
+  const readBody = (req, options = {}) => new Promise((resolve, reject) => {
     const chunks = [];
     let bytes = 0;
     let failed = false;
@@ -285,8 +345,10 @@ export function apply(ctx, config) {
     req.on('end', () => {
       if (failed) return;
       try {
-        const text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks, bytes));
-        resolve(JSON.parse(text || '{}'));
+        const raw = Buffer.concat(chunks, bytes);
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(raw);
+        const body = JSON.parse(text || '{}');
+        resolve(options.raw ? { raw, body } : body);
       } catch {
         reject(new RequestBodyError('请求体不是有效的 UTF-8 JSON', 400, 'invalid-request-body'));
       }
@@ -1142,6 +1204,32 @@ export function apply(ctx, config) {
     return { ...result, artifacts: safeWsList(ws) };
   };
 
+  // ---- webhook 完成回调（失败隔离：只记日志/内存元数据，绝不影响运行状态）----
+  const pendingHookCallbacks = new Map(); // runId → hook
+  const fireHookCallback = (hook, runId) => {
+    pendingHookCallbacks.set(runId, hook);
+  };
+  const firePendingHookCallbacks = (runId, run) => {
+    const hook = pendingHookCallbacks.get(runId);
+    pendingHookCallbacks.delete(runId);
+    if (!hook?.callbackUrl || !run) return;
+    const payload = buildHookCallbackPayload({ hookId: hook.id, run });
+    fetch(hook.callbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-WF1-Event': payload.event, 'X-WF1-Hook': hook.id },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10_000),
+    }).then((r) => {
+      if (!r.ok) throw new Error(`callback HTTP ${r.status}`);
+      hook.lastCallbackAt = new Date().toISOString();
+      delete hook.lastCallbackError;
+    }).catch((error) => {
+      // 失败只记内存元数据 + 日志（与通知失败隔离同款约定），不重试、不改 run 状态
+      hook.lastCallbackError = String(error?.message || error);
+      ctx.logger?.warn?.(`[webhook] 完成回调失败（${hook.id} → ${hook.callbackUrl}）：${hook.lastCallbackError}`);
+    });
+  };
+
   const startRun = (graph, {
     triggerInput, workflowName, workflowId, canvasId, source,
     globalVariables = {}, workflowVariables = {}, runInputs = {}, runId: providedRunId, replayOf, resume, revises,
@@ -1184,6 +1272,7 @@ export function apply(ctx, config) {
         ctx.logger?.warn?.(`[notify] 运行通知收尾失败（${runId}）：${error.message}`);
       }
       persistRun(run, graph, workflowName, workflowId);
+      firePendingHookCallbacks(runId, run);
       return run;
     })).catch((error) => {
       notifications.discard(runId);
@@ -2553,7 +2642,7 @@ export function apply(ctx, config) {
   } });
 
   // ---- webhook + 定时触发（落盘 state/triggers.json，重启自动恢复）----
-  // hooks: [{ id, token, workflowId, workflowName, createdAt }]
+  // hooks: [{ id, token, workflowId, workflowName, createdAt, signingSecret?, callbackUrl?, lastIdempotency? }]
   // schedules meta 字段见 lib/schedule.js normalizeScheduleMeta
   const loadTriggers = () => {
     const store = currentStore();
@@ -2577,7 +2666,12 @@ export function apply(ctx, config) {
     try {
       const store = currentStore();
       atomicJson(store.triggersFile, {
-        hooks: [...currentHooks().values()].map(({ id, token, workflowId, workflowName, createdAt }) => ({ id, token, workflowId, workflowName, createdAt })),
+        hooks: [...currentHooks().values()].map(({ id, token, workflowId, workflowName, createdAt, signingSecret, callbackUrl, lastIdempotency }) => ({
+          id, token, workflowId, workflowName, createdAt,
+          ...(signingSecret ? { signingSecret } : {}),
+          ...(callbackUrl ? { callbackUrl } : {}),
+          ...(lastIdempotency ? { lastIdempotency } : {}),
+        })),
         schedules: [...currentSchedulerMeta().entries()].map(([key, m]) => persistableScheduleMeta({ ...m, key })),
       });
     } catch { /* 落盘失败不影响运行 */ }
@@ -2585,7 +2679,13 @@ export function apply(ctx, config) {
 
   register({ kind: 'exact', path: '/wf1/api/hooks', async handler(req, res) {
     if (req.method === 'GET') {
-      return json(res, 200, { hooks: [...currentHooks().values()].map((h) => ({ ...h, url: `/wf1/api/hooks/${h.id}` })) });
+      // signingSecret 不回传（只暴露是否配置）；token 维持历史行为原样返回
+      const hooks = [...currentHooks().values()].map(({ signingSecret, ...h }) => ({
+        ...h,
+        hasSigningSecret: Boolean(signingSecret),
+        url: `/wf1/api/hooks/${h.id}`,
+      }));
+      return json(res, 200, { hooks });
     }
     if (req.method === 'POST') {
       const body = await readBody(req);
@@ -2598,6 +2698,33 @@ export function apply(ctx, config) {
       publicHooks.set(id, { store: currentStore(), hook });
       persistTriggers();
       return json(res, 200, { ok: true, id, token, url: `/wf1/api/hooks/${id}` });
+    }
+    if (req.method === 'PATCH') {
+      const body = await readBody(req);
+      const hook = currentHooks().get(String(body?.id || ''));
+      if (!hook) return json(res, 404, { error: 'hook 不存在' });
+      if ('signingSecret' in (body || {})) {
+        const secret = String(body.signingSecret || '').trim();
+        if (secret) {
+          if (secret.length < 16) return json(res, 400, { error: 'signingSecret 至少 16 个字符' });
+          hook.signingSecret = secret;
+        } else delete hook.signingSecret;
+      }
+      if ('callbackUrl' in (body || {})) {
+        const url = String(body.callbackUrl || '').trim();
+        if (url) {
+          try { if (!['http:', 'https:'].includes(new URL(url).protocol)) throw new Error('protocol'); }
+          catch { return json(res, 400, { error: 'callbackUrl 必须是合法的 http(s) URL' }); }
+          hook.callbackUrl = url;
+        } else delete hook.callbackUrl;
+      }
+      if (body?.token) {
+        hook.token = randomUUID().replace(/-/g, ''); // 轮换由服务端生成，不接受外部指定值
+      }
+      currentHooks().set(hook.id, hook);
+      publicHooks.set(hook.id, { store: currentStore(), hook });
+      persistTriggers();
+      return json(res, 200, { ok: true, id: hook.id, token: hook.token, hasSigningSecret: Boolean(hook.signingSecret), callbackUrl: hook.callbackUrl || '' });
     }
     if (req.method === 'DELETE') {
       const url = new URL(req.url, 'http://x');
@@ -2627,32 +2754,57 @@ export function apply(ctx, config) {
       const hook = owner.hook;
       const u = new URL(req.url, 'http://x');
       const presented = u.searchParams.get('token')
-        || String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')
+        || (/^Bearer\s+/i.test(String(req.headers.authorization || '')) ? String(req.headers.authorization).replace(/^Bearer\s+/i, '') : '')
         || String(req.headers['x-hook-token'] || '');
-      if (!presented || presented !== hook.token) {
+      if (!presented || !secureTokenMatch(presented, hook.token)) {
         return json(res, 401, { error: '缺少或错误的 hook token（?token= 或 Authorization: Bearer 或 X-Hook-Token）' });
       }
       const wf = readWf(hook.workflowId);
       if (!wf) return json(res, 404, { error: 'hook 指向的工作流已删除' });
       let triggerInput = '';
       let runInputs = {};
+      let rawBody = Buffer.alloc(0);
       try {
         triggerInput = u.searchParams.get('input') || '';
         if (req.method === 'POST') {
-          const body = await readBody(req);
+          const { raw, body } = await readBody(req, { raw: true });
+          rawBody = raw;
           if (!triggerInput) triggerInput = String(body?.input || body?.text || (typeof body === 'string' ? body : ''));
           runInputs = assertSafeContextObject(body?.inputs, 'inputs');
         }
       } catch (error) { return routeError(res, error); }
-      let globals; try { globals = globalContext(); } catch (error) { return routeError(res, error); }
-      const { runId } = startRun(wf.graph, {
-        triggerInput, workflowName: wf.name, workflowId: wf.id,
-        globalVariables: globals.globalVariables,
-        workflowVariables: variableDefinitionsToValues(wf.variables),
-        runInputs,
-        source: 'webhook',
-      });
-      return json(res, 200, { ok: true, triggered: wf.name, runId });
+      // 配置了 signingSecret 的 hook 强制验签（覆盖 raw body 字节 + 时间戳）
+      if (hook.signingSecret) {
+        const rejected = verifyHookSignature({
+          signingSecret: hook.signingSecret,
+          raw: rawBody,
+          signatureHeader: req.headers['x-wf1-signature'],
+          timestampHeader: req.headers['x-wf1-timestamp'],
+        });
+        if (rejected) return json(res, 401, { error: `验签失败：${rejected}` });
+      }
+      // 幂等键：窗口内同 key 复用首次 runId，不起新 run
+      const idempotencyKey = String(req.headers['idempotency-key'] || '').trim()
+        || (typeof runInputs?.idempotencyKey === 'string' ? runInputs.idempotencyKey.trim() : '');
+      if (idempotencyKey) {
+        const hit = matchHookIdempotency(hook, idempotencyKey);
+        if (hit) return json(res, 200, { ok: true, triggered: wf.name, runId: hit, idempotent: true });
+      }
+      // 与 manual/assistant 同一条校验链（lint + inputSchema）；失败映射 422
+      const started = startWorkflowRun(wf, { triggerInput, runInputs, source: 'webhook' });
+      if (!started.ok) {
+        const status = ['workflow-invalid-graph', 'workflow-input-invalid'].includes(started.code) ? 422 : 400;
+        return json(res, status, { ok: false, error: started.error, code: started.code });
+      }
+      if (idempotencyKey) {
+        hook.lastIdempotency = { key: idempotencyKey, runId: started.runId, at: new Date().toISOString() };
+        persistTriggers();
+      }
+      // 完成回调：fire-and-forget，失败只记日志与内存元数据，不碰运行状态
+      if (hook.callbackUrl) {
+        fireHookCallback(hook, started.runId);
+      }
+      return json(res, 200, { ok: true, triggered: wf.name, runId: started.runId });
     });
   } }, { scoped: false });
 

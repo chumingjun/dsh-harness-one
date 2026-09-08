@@ -197,11 +197,21 @@ Workflow One 嵌在 dsh 官方界面中，推荐从 AI 对话开始创建复杂�
 | 运行 | `POST /run`、`POST /run/cancel`、`GET /runs`、`GET /runs/detail`、`GET /runs/export`、`POST /runs/replay`、`GET /run-results`、`GET /run-artifact` |
 | 节点 | `POST /node/test`（试运行）、`GET /node-detail` |
 | 产物 | `GET /artifact`（节点工作区文件，支持 preview/Range）、`GET/POST /attachments` |
-| 触发 | `GET/POST/DELETE /hooks`（webhook，token 鉴权）、`GET/POST/PATCH/DELETE /schedule`（cron，含 overlap/misfirePolicy/启停）、`POST /schedule/preview`（下 3 次触发）、`POST /schedule/run`（立即运行） |
+| 触发 | `GET/POST/PATCH/DELETE /hooks`（webhook，token 鉴权 + 可选 HMAC 签名/幂等键/完成回调）、`GET/POST/PATCH/DELETE /schedule`（cron，含 overlap/misfirePolicy/启停）、`POST /schedule/preview`（下 3 次触发）、`POST /schedule/run`（立即运行） |
 | 变量/模板 | `GET /variables/describe`、`GET/POST /global-variables`、`POST /template/render`、`POST /template/validate` |
 | 配置 | `GET /tools`、`GET /skills`、`GET /llm-config`、`GET/POST /runtime-config`、`GET/POST/DELETE /feishu-credentials`、`GET/POST /lark-auth` |
 | AI 助手 | `POST /assistant/bind` / `unbind`、`GET /assistant/canvas-state` |
 | 实时 | `GET /events`（SSE）、`GET /state` |
+
+### webhook 对接协议（可选加固，全部向后兼容）
+
+`POST /wf1/api/hooks/<id>` 触发（GET 也可，经 `?input=`）。基础鉴权用 token（`?token=` / `Authorization: Bearer` / `X-Hook-Token` 三选一，常数时间比较）。三项可选能力按 hook 配置启用，未配置的存量 hook 行为零变化：
+
+- **HMAC 签名**（`PATCH /hooks { id, signingSecret }` 配置，≥16 字符）：请求必须带 `X-WF1-Timestamp`（unix 秒，±5 分钟窗口）与 `X-WF1-Signature: sha256=<hex>`；签名为 HMAC-SHA256(secret, rawBodyBytes + timestamp) 的 hex——覆盖**原始 body 字节**（GET 无 body 时对空字节签名），不要先 JSON 序列化再签
+- **幂等键**：请求头 `Idempotency-Key`（或 body.inputs.idempotencyKey）；24h 窗口内同 key 直接返回首次 runId（`{ ok, runId, idempotent: true }`）不起新 run
+- **完成回调**（`PATCH /hooks { id, callbackUrl }` 配置）：run 终态（success/error/canceled）POST 回调负载 `X-WF1-Event: workflow_run.finished`：`{ event, hookId, runId, status, workflowId, workflowName, startedAt, finishedAt, durationMs, summary }`（summary 脱敏+截断）；发送失败只记日志与内存元数据，不重试、不影响运行状态
+
+触发与手动/助手路径走同一条校验链（图 lint + 输入 schema）：坏图/坏输入返回 422 `{ ok: false, error, code }`。
 
 ## 环境变量
 
