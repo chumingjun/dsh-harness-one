@@ -169,6 +169,12 @@ window.__ModuleLoader__.load({
         ".wf1-card-meta[data-error]{color:var(--dsw-alias-state-error-primary);}",
         ".wf1-card-open{flex:none;display:inline-flex;align-items:center;gap:3px;color:var(--dsw-alias-label-caption);font-size:12px;line-height:18px;opacity:0;transition:opacity 100ms ease;}",
         ".wf1-card:hover .wf1-card-open,.wf1-card:focus-visible .wf1-card-open{opacity:1;}",
+        // ---- 空会话示例指令条（conversation.input.dock）----
+        ".wf1-example-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:2px 4px 10px;max-width:var(--dsh-composer-card-max-width,720px);margin:0 auto;width:100%;}",
+        ".wf1-example-lead{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;}",
+        ".wf1-example-chip{flex:none;padding:4px 12px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;cursor:pointer;transition:border-color 100ms ease,color 100ms ease;}",
+        ".wf1-example-chip:hover{border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);}",
+        ".wf1-example-chip:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
       ].join("\n");
       document.head.appendChild(el);
     }
@@ -643,12 +649,16 @@ window.__ModuleLoader__.load({
       }, [trackedRunId]);
 
       if (!runId) {
-        // 起跑失败（画布未开/lint 拒绝）或会话未绑定：文本降级 + 保留跳转
+        // 起跑失败（画布未开/lint 拒绝）或会话未绑定：文本降级 + 保留跳转；
+        // 未绑定场景追加输入引导（#101），让用户知道下一步可以直接在输入框说话
         return workflowCardShell({
           title: "工作流运行",
           dotState: text && block.isError ? "error" : "pending",
           stateText: block.isError ? "未启动" : "就绪",
-          meta: (text || "").slice(0, 60) || "画布尚未打开或未绑定会话",
+          meta: (text || "").slice(0, 60)
+            || (wfBoundState === false
+              ? "会话未绑定画布——可在输入框说「帮我搭一个工作流」或输入 / 选工作流"
+              : "画布尚未打开或未绑定会话"),
           metaError: Boolean(block.isError),
           thumbnail: null,
           hostRef: attachHost,
@@ -804,6 +814,53 @@ window.__ModuleLoader__.load({
             d: "M4.6 4h2.15A2.25 2.25 0 0 1 9 6.25v4.25A2.25 2.25 0 0 0 11.25 12.75h.15M9 7V5.5a2.25 2.25 0 0 1 2.25-2.25h.15",
           }),
         ),
+      );
+    }
+
+    // ---- 空会话示例指令条（#101）：conversation.input.dock 注入 ----
+    // 官方 dock slot 在「已建会话的空白态（hero）」渲染于 hero 区与输入框之间，
+    // props 带 {session, input}；input 是状态快照（无写 API），点击 chip 用
+    // contenteditable 注入在用户手势内生效。草稿非空时隐藏，避免干扰输入。
+    function WorkflowExampleBar(props) {
+      var visible =
+        props.input && (props.input.draft === "" || props.input.draft == null) &&
+        props.input.phase === "plain";
+      if (!visible) return null;
+      var prompts = examplePromptsFor(wfBoundState === true);
+      var fill = function (text, ev) {
+        ev.preventDefault();
+        var host = ev.currentTarget.closest(".wf1-example-bar");
+        var editable = host && host.parentElement
+          ? host.parentElement.querySelector("[contenteditable='true'], textarea")
+          : null;
+        if (editable) {
+          editable.focus();
+          try {
+            document.execCommand("selectAll");
+            document.execCommand("insertText", false, text);
+          } catch (e) { /* 输入框形态变化时静默，用户仍可手动输入 */ }
+        }
+      };
+      return react.createElement(
+        "div",
+        { className: "wf1-example-bar" },
+        react.createElement(
+          "span",
+          { className: "wf1-example-lead" },
+          "试试：",
+        ),
+        prompts.map(function (p) {
+          return react.createElement(
+            "button",
+            {
+              key: p.name,
+              type: "button",
+              className: "wf1-example-chip",
+              onClick: function (ev) { fill(p.name, ev); },
+            },
+            p.name,
+          );
+        }),
       );
     }
 
@@ -1661,6 +1718,36 @@ window.__ModuleLoader__.load({
     var WF_TRIGGER_NAME = "workflow-one";
     var wfLexiconListeners = new Set();
     var wfLexiconNames = null; // 热快照：null=未 warm；数组=当前工作流名集
+    var wfBoundState = null; // 绑定状态热快照：null=未知；true/false=是否绑定画布
+
+    // ---- 空态示例指令（#101）：按「是否绑定画布」取舍 ----
+    // claim.token 复用触发源二段式协议：pick 后草稿替换为完整示例文本，
+    // Enter 即按普通消息发送（不带 / 前缀不触发任何源）。
+    var WF_EXAMPLE_PROMPTS_UNBOUND = [
+      { name: "帮我搭一个报修单整理工作流", description: "让 AI 在画布上编排节点式工作流" },
+      { name: "把当前画布的工作流跑一次", description: "运行已打开的工作流" },
+      { name: "给上次的文稿写一段总结", description: "整理运行产物" },
+      { name: "有哪些工作流可以跑", description: "浏览本工作区的流程库" },
+    ];
+    var WF_EXAMPLE_PROMPTS_BOUND = [
+      { name: "把当前画布的工作流跑一次", description: "运行绑定画布上的工作流" },
+      { name: "在画布上加一个条件分支", description: "修改当前工作流结构" },
+      { name: "上次运行的结果怎么样", description: "查看最近运行状态" },
+      { name: "把运行结果存到工作目录", description: "落地运行产物" },
+    ];
+    function examplePromptsFor(bound) {
+      return bound ? WF_EXAMPLE_PROMPTS_BOUND : WF_EXAMPLE_PROMPTS_UNBOUND;
+    }
+
+    function fetchBoundState(sessionId) {
+      return fetch(wfScopedApi("/assistant/bound", sessionId))
+        .then(function (r) { return r.ok ? r.json() : { bound: false }; })
+        .then(function (data) {
+          wfBoundState = Boolean(data.bound);
+          return wfBoundState;
+        })
+        .catch(function () { return false; });
+    }
 
     function wfScopedApi(path, sessionId) {
       var url = "/wf1/api" + path;
@@ -1714,6 +1801,7 @@ window.__ModuleLoader__.load({
               try { listener(); } catch (e) { /* 单个监听器失败不影响其他 */ }
             });
           });
+          fetchBoundState(session.sessionId);
         },
         lexicon: function () {
           return wfLexiconNames;
@@ -1741,7 +1829,7 @@ window.__ModuleLoader__.load({
             if (forced) nameQuery = "";
             else if (nameQuery.indexOf("run ") === 0) nameQuery = nameQuery.slice(4).trim();
             else if (nameQuery.indexOf("open ") === 0) nameQuery = nameQuery.slice(5).trim();
-            return workflows
+            var matched = workflows
               .filter(function (wf) {
                 return selectingSource || !nameQuery || wf.name.toLowerCase().indexOf(nameQuery) >= 0;
               })
@@ -1758,12 +1846,40 @@ window.__ModuleLoader__.load({
                   value: wf.id,
                 };
               });
+            if (matched.length) return matched;
+            // 空态引导（#101）：无工作流/过滤无命中时列示例指令候选（按绑定取舍），
+            // 点击把完整示例文本填入草稿，Enter 即作为普通消息发给 AI。
+            return examplePromptsFor(wfBoundState === true).map(function (p) {
+              return {
+                name: p.name,
+                description: p.description + " · 点击填入后 Enter 发送",
+                icon: "✦",
+                section: "Workflow One 示例",
+                value: "prompt:" + p.name,
+              };
+            });
           });
         },
         onPick: function (pick) {
           // 二段式：Pick 工作流 → 草稿认领 '/workflow-one '，Enter 提交执行。
           // 优先 pick 的 candidate.value（工作流 id）；用户越过 token 另输入时以 args 覆盖。
           var workflowId = pick.candidate && pick.candidate.value;
+          // 示例指令候选（value 以 "prompt:" 前缀标识）：claim.token = 示例全文，
+          // Enter 时官方 input 机把它当普通消息发送（无 / 前缀不触发源）
+          if (typeof workflowId === "string" && workflowId.indexOf("prompt:") === 0) {
+            var promptText = workflowId.slice("prompt:".length);
+            return {
+              claim: {
+                token: promptText,
+                hint: "已填入示例 · 可编辑后 Enter 发送",
+                submit: function () {
+                  // claim 阶段 Enter：官方机直接把草稿文本当普通消息提交，
+                  // 触发源无需接管——返回 error-outcome 会打断，这里给空实现
+                  return Promise.resolve({ kind: "success", text: "" });
+                },
+              },
+            };
+          }
           var claim = {
             token: "/" + WF_TRIGGER_NAME + " ",
             hint: "Enter 执行 · 追加 run/open 定动作",
@@ -1839,6 +1955,21 @@ window.__ModuleLoader__.load({
           WorkflowOpenButton,
         );
       });
+
+      // 空会话示例指令条：dock slot 在空白会话（hero 态）渲染于输入框上方。
+      // 老宿主无该 slot 时 inject 静默失败，不影响其余功能。
+      try {
+        ctx.slots.inject("conversation.input.dock", function () {
+          return ctx.slots.register(
+            {
+              name: "conversation.input.dock",
+              id: "ccpg-workflow-examples",
+              order: 10,
+            },
+            WorkflowExampleBar,
+          );
+        });
+      } catch (e) { /* 无 dock slot 的宿主跳过 */ }
 
       // ---- /workflow-one 第一方触发源（#63）----
       // inputTriggers 服务不存在（老运行时/关闭）时静默跳过，不影响其余功能。
@@ -1959,6 +2090,9 @@ window.__ModuleLoader__.load({
       graphThumbnail: graphThumbnail,
       WorkflowRunCard: WorkflowRunCard,
       GraphPatchCard: GraphPatchCard,
+      WorkflowExampleBar: WorkflowExampleBar,
+      examplePromptsFor: examplePromptsFor,
+      setWfBoundState: function (v) { wfBoundState = v; },
       modelOptionsFor: modelOptionsFor,
       effortOptionsFor: effortOptionsFor,
       providerNameOf: providerNameOf,
