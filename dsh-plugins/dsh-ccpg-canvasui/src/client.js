@@ -244,6 +244,41 @@ window.__ModuleLoader__.load({
       return false;
     }
 
+    // ---- #109 指令注入官方聊天：能力探测 + 双层降级 ----
+    // 首选官方 conversation.send(text)（同一聊天会话的 AI 执行，无第二写者）；
+    // 服务不在场/scope 不命中/发送抛错 → fillComposer 填入宿主输入框（#107 同机制）。
+    // 回执 wf1-command-result 发回画布 toast。
+    var hostCtxRef = null;
+    var conversationSvcCache;
+    function deliverCommandToChat(text) {
+      var ack = function (ok, via) {
+        postToCanvas({ type: "wf1-command-result", ok: ok, via: via, text: text });
+      };
+      var fallbackFill = function () {
+        fillComposer(text);
+        ack(false, "filled");
+      };
+      if (!conversationSvcCache) {
+        // 不缓存阴性结果：conversation 服务可能晚于本插件注册，
+        // 每次重探（一次属性访问，代价可忽略），晚到也能命中
+        try {
+          // tracker 优先（属性访问重绑 scope），不存在再退 get（可能抛错）
+          conversationSvcCache = hostCtxRef && hostCtxRef.conversation || null;
+          if (!conversationSvcCache && hostCtxRef) {
+            try { conversationSvcCache = hostCtxRef.get("conversation") || null; } catch (e0) { /* 未声明依赖 */ }
+          }
+        } catch (e) { /* 宿主无该服务 */ }
+      }
+      if (conversationSvcCache && typeof conversationSvcCache.send === "function") {
+        Promise.resolve()
+          .then(function () { return conversationSvcCache.send(text); })
+          .then(function () { ack(true, "chat"); })
+          .catch(function () { fallbackFill(); });
+        return;
+      }
+      fallbackFill();
+    }
+
     function openWorkflowSidebar() {
       if (!betterSidebarRef.svc) return false;
       betterSidebarRef.svc.openTab({
@@ -2358,12 +2393,22 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       ensureStyle();
-      // 画布 iframe（App）推送的确认状态（#105）：pending/applied/discarded → 确认条
+      hostCtxRef = ctx;
+      // 画布 iframe（App）推送的确认状态（#105）与指令注入（#109）：pending/applied/discarded → 确认条
       window.addEventListener("message", function (ev) {
         if (ev.origin !== window.location.origin) return;
         var d = ev.data;
-        if (d && typeof d === "object" && d.type === "wf1-patch-confirm-state") {
+        if (!d || typeof d !== "object") return;
+        if (d.type === "wf1-patch-confirm-state") {
           setPatchConfirmState(d);
+        }
+        if (d.type === "wf1-command" && typeof d.text === "string" && d.text.trim()) {
+          // 只接受常驻画布 iframe 的指令：同源页面可能有其他 iframe，
+          // 不校验 source 会把任意同源帧的文本注入聊天
+          var cmdFrame = persistentHost ? persistentHost.querySelector("iframe") : null;
+          if (cmdFrame && ev.source === cmdFrame.contentWindow) {
+            deliverCommandToChat(String(d.text).trim());
+          }
         }
       });
 
@@ -2565,6 +2610,9 @@ window.__ModuleLoader__.load({
       setPatchConfirmState: setPatchConfirmState,
       cardSuggestRow: cardSuggestRow,
       fillComposer: fillComposer,
+      deliverCommandToChat: deliverCommandToChat,
+      setHostCtxForTest: function (v) { hostCtxRef = v; conversationSvcCache = undefined; },
+      setPersistentHostForTest: function (v) { persistentHost = v; },
       WorkflowBindCapsule: WorkflowBindCapsule,
       setWfBoundInfoForTest: function (v) { wfBoundInfo = v; },
       renderCardMarkdown: renderCardMarkdown,

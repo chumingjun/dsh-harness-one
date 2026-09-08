@@ -1135,6 +1135,23 @@ export default function App() {
     }
   }, [startRunFlow]);
 
+  // #109 指令条：快捷钮纯 API，自由文本经宿主注入官方聊天
+  const sendCmdbarCommand = useCallback((raw) => {
+    const text = String(raw || '').trim();
+    if (!text) return;
+    try {
+      window.parent.postMessage({ type: 'wf1-command', text, canvasId: canvasIdRef.current }, window.location.origin);
+    } catch {
+      toast('发送失败：宿主通道不可用', 'error');
+    }
+  }, [toast]);
+  const showCmdbarStatus = useCallback(() => {
+    const latest = runList[0];
+    toast(latest
+      ? `最近运行：${latest.workflowName || '草稿'} · ${STATUS_CN[latest.status] || latest.status}`
+      : '还没有运行记录', latest?.status === 'error' ? 'error' : 'info');
+  }, [runList, toast]);
+
   const cancelRun = useCallback(async () => {
     const runId = inspectedRunIdRef.current;
     if (!runId) return;
@@ -1563,6 +1580,10 @@ export default function App() {
         if (pending && !pending.resolved && Number(d.version) === pending.version) {
           resolvePendingConfirmRef.current?.(Boolean(d.approve));
         }
+      }
+      if (d.type === 'wf1-command-result' && d.text != null) {
+        // 指令送达回执（#109）：直达聊天成功 / 降级填入宿主输入框
+        toast(d.ok ? `已发送到对话：${d.text}` : '官方会话通道不可用，指令已填入聊天输入框，请切到对话发送', d.ok ? 'success' : 'warn', 3200);
       }
       if (d.type === 'wf1-session' && d.sessionId) {
         hostSessionRef.current = d.sessionId;
@@ -2093,6 +2114,10 @@ export default function App() {
         <PromptModal title={modal.title} initial={modal.initial} placeholder={modal.placeholder} confirmText={modal.confirmText}
           onCancel={() => setModal(null)} onConfirm={modal.onConfirm} />
       )}
+      {/* #109 画布内轻量指令条：快捷钮走纯 API，自由文本经宿主注入官方聊天（能力探测+降级） */}
+      {view === 'canvas' && hostSession.id && (
+        <CanvasCommandBar onRun={run} onStatus={showCmdbarStatus} onSend={sendCmdbarCommand} />
+      )}
     </div>
   );
 
@@ -2183,4 +2208,32 @@ function findFreeSpot(nodes) {
     }
   }
   return { x: 120 + Math.random() * 480, y: 100 + Math.random() * 260 };
+}
+
+// #109 画布内轻量指令条：右下角悬浮；快捷钮走纯 API（运行/最近状态），
+// 自由文本经宿主 conversation 通道注入官方聊天（不可用时宿主会填入输入框降级）。
+function CanvasCommandBar({ onRun, onStatus, onSend }) {
+  const [text, setText] = useState('');
+  const submit = (e) => {
+    e.preventDefault();
+    if (!text.trim()) return;
+    onSend(text);
+    setText('');
+  };
+  return (
+    <div className="wf1-cmdbar" role="toolbar" aria-label="画布快捷指令">
+      <button type="button" className="wf1-cmdbar-btn" onClick={onRun} title="运行当前工作流">▶ 跑一次</button>
+      <button type="button" className="wf1-cmdbar-btn" onClick={onStatus} title="查看最近一次运行状态">⏱ 最近状态</button>
+      <form className="wf1-cmdbar-form" onSubmit={submit}>
+        <input
+          className="wf1-cmdbar-input"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="描述指令（复杂修改会由对话里的 AI 执行）"
+          aria-label="画布指令"
+        />
+        <button type="submit" className="wf1-cmdbar-btn wf1-cmdbar-send" disabled={!text.trim()}>发送</button>
+      </form>
+    </div>
+  );
 }
