@@ -15,6 +15,7 @@ const context = {
         return storage.get(key) ?? null;
       },
     },
+    addEventListener() {},
     __ModuleLoader__: {
       load({ factory }) {
         client = factory((name) => {
@@ -115,7 +116,8 @@ client.apply({
 assert.deepEqual(injectedSlots, [
   "settings.section",
   "conversation.input.left",
-  "conversation.input.dock",
+  "conversation.input.dock", // #105 确认条
+  "conversation.input.dock", // #101 示例条
   "tool.call.toolview",
   "tool.call.toolview",
   "tool.call.toolview",
@@ -522,6 +524,7 @@ function loadClientInContext(overrides) {
     window: {
       location: { origin: "https://dsh.local" },
       localStorage: { getItem: () => null },
+      addEventListener() {},
       __ModuleLoader__: {
         load({ factory }) {
           scoped = factory(() => ({ createElement() {}, useRef() {}, useState() {}, useEffect() {} }));
@@ -1014,6 +1017,93 @@ for (const [body, expected] of [
     },
   });
   assert.equal(find("wf1-card-toggle", "span"), undefined, "lint 通过不渲染展开");
+}
+
+// ---- 修改类补丁确认条（#105）：挂起渲染摘要/倒计时/按钮，裁决回传后收起 ----
+{
+  const confirmCalls = [];
+  const decisions = [];
+  let cursor = 0;
+  const slots = [];
+  const effects = [];
+  const reactShim = {
+    createElement(tag, props, ...children) { confirmCalls.push({ tag, props, children }); return { tag, props, children }; },
+    useState(initial) {
+      const i = cursor++;
+      if (!slots[i]) slots[i] = { value: typeof initial === "function" ? initial() : initial };
+      const slot = slots[i];
+      return [slot.value, (v) => { slot.value = typeof v === "function" ? v(slot.value) : v; }];
+    },
+    useEffect(fn) { effects.push(fn); },
+  };
+  let confirmClient;
+  const confirmContext = {
+    console,
+    document: {
+      head: { appendChild() {} },
+      createElement: () => ({}),
+      getElementById: () => null,
+      body: {},
+    },
+    window: {
+      localStorage: { getItem: () => null },
+      setInterval: () => 0,
+      clearInterval: () => {},
+      __ModuleLoader__: {
+        load({ factory }) { confirmClient = factory((name) => (name === "react" ? reactShim : (() => { throw new Error("unexpected require: " + name); })())); },
+      },
+    },
+  };
+  vm.runInNewContext(bundle, confirmContext, { filename: "dsh-ccpg-canvasui/src/client.js" });
+  const render = () => {
+    cursor = 0;
+    confirmCalls.length = 0;
+    return confirmClient.__test.PatchConfirmBar({ onDecide: (msg) => decisions.push(msg) });
+  };
+  const find = (className, tag) => confirmCalls.findLast((c) => c.tag === tag && c.props?.className && c.props.className.indexOf(className) >= 0);
+  // 无状态时：不渲染（首渲染后跑 effect：订阅监听）
+  render();
+  effects.splice(0).forEach((fn) => fn());
+  assert.equal(find("wf1-confirm-bar", "div"), undefined, "无挂起状态不渲染确认条");
+  // 挂起：摘要 + 双按钮 + 倒计时（deadline 未来 30s）；监听已在，推送即达
+  confirmClient.__test.setPatchConfirmState({
+    state: "pending", canvasId: "cv_1", version: 7, summary: "删除 1 个节点（工单输出）、修改 2 个节点",
+    deadline: Date.now() + 30000,
+  });
+  render();
+  {
+    const bar = find("wf1-confirm-bar", "div");
+    assert.ok(bar, "挂起时渲染确认条");
+    assert.equal(bar.props.role, "alert");
+    assert.match(String(find("wf1-confirm-summary", "span").children[0]), /删除 1 个节点（工单输出）、修改 2 个节点/);
+    const btns = confirmCalls.filter((c) => c.tag === "button");
+    assert.equal(btns.length, 2);
+    assert.equal(btns[0].children[0], "应用");
+    assert.equal(btns[1].children[0], "放弃");
+    assert.match(String(find("wf1-confirm-countdown", "span").children[0]), /^\d+s 后自动应用$/);
+  }
+  // 点「应用」：乐观收起 + 回传 approve 与版本/canvasId（vm realm 对象不 deepEqual，逐字段）
+  confirmCalls.findLast((c) => c.tag === "button" && c.children[0] === "应用").props.onClick();
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].type, "wf1-patch-confirm");
+  assert.equal(decisions[0].canvasId, "cv_1");
+  assert.equal(decisions[0].version, 7);
+  assert.equal(decisions[0].approve, true);
+  render();
+  assert.equal(find("wf1-confirm-bar", "div"), undefined, "裁决后确认条收起");
+  // 再挂起一批，点「放弃」
+  confirmClient.__test.setPatchConfirmState({
+    state: "pending", canvasId: "cv_1", version: 8, summary: "删除 1 个节点",
+    deadline: Date.now() + 30000,
+  });
+  render();
+  confirmCalls.findLast((c) => c.tag === "button" && c.children[0] === "放弃").props.onClick();
+  assert.equal(decisions[1].version, 8);
+  assert.equal(decisions[1].approve, false);
+  // App 推送 applied/applied 之外的终态：同样不渲染
+  confirmClient.__test.setPatchConfirmState({ state: "discarded", version: 8 });
+  render();
+  assert.equal(find("wf1-confirm-bar", "div"), undefined);
 }
 
 console.log("canvasui client tests: passed");

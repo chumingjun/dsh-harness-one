@@ -191,8 +191,37 @@ window.__ModuleLoader__.load({
         ".wf1-example-chip{flex:none;padding:4px 12px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;cursor:pointer;transition:border-color 100ms ease,color 100ms ease;}",
         ".wf1-example-chip:hover{border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);}",
         ".wf1-example-chip:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
+        // ---- 修改类补丁确认条（#105）：与示例条同 dock，挂起期间常驻 ----
+        ".wf1-confirm-bar{gap:10px;}",
+        ".wf1-confirm-summary{flex:1;min-width:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
+        ".wf1-confirm-btn{flex:none;padding:4px 14px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;cursor:pointer;transition:border-color 100ms ease,color 100ms ease;}",
+        ".wf1-confirm-btn:hover{border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);}",
+        ".wf1-confirm-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
+        ".wf1-confirm-discard:hover{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary);}",
+        ".wf1-confirm-countdown{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;}",
       ].join("\n");
       document.head.appendChild(el);
+    }
+
+    // ---- #105 修改类补丁确认条：画布 iframe（App）↔ 宿主确认条双向桥 ----
+    // App 挂起修改类补丁后推送 {state,version,summary,deadline}；确认条回传
+    // {approve}。消息只在本源（同 origin）内传递，确认条无独立会话身份。
+    var patchConfirmState = null;
+    var patchConfirmListeners = new Set();
+    function setPatchConfirmState(next) {
+      patchConfirmState = next;
+      patchConfirmListeners.forEach(function (fn) { try { fn(next); } catch (e) { /* 单个监听异常不炸 */ } });
+    }
+    // 向常驻画布 iframe 发裁决消息；未挂载/未就绪返回 false（调用方自行降级）
+    function postToCanvas(msg) {
+      try {
+        var frame = persistentHost ? persistentHost.querySelector("iframe") : null;
+        if (frame && frame.contentWindow) {
+          frame.contentWindow.postMessage(msg, window.location.origin);
+          return true;
+        }
+      } catch (e) { /* 画布异常不炸确认条 */ }
+      return false;
     }
 
     function openWorkflowSidebar() {
@@ -951,6 +980,50 @@ window.__ModuleLoader__.load({
             p.name,
           );
         }),
+      );
+    }
+
+    // ---- #105 修改类补丁确认条（conversation.input.dock）：挂起期间输入框上方 ----
+    // 常驻展示「将删除 N 个节点（…）」摘要 + 应用/放弃 + 30s 倒计时；
+    // App 30s 自动应用，倒计时归零后本条自行收起等状态消息。onDecide 可注入（测试）。
+    function PatchConfirmBar(props) {
+      var onDecide = props && props.onDecide || postToCanvas;
+      var [state, setState] = react.useState(patchConfirmState);
+      var [, forceTick] = react.useState(0);
+      react.useEffect(function () {
+        var listener = function (next) { setState(next); };
+        patchConfirmListeners.add(listener);
+        return function () { patchConfirmListeners.delete(listener); };
+      }, []);
+      react.useEffect(function () {
+        if (!state || state.state !== "pending") return undefined;
+        var timer = window.setInterval(function () { forceTick(function (n) { return n + 1; }); }, 500);
+        return function () { window.clearInterval(timer); };
+      }, [state]);
+      if (!state || state.state !== "pending") return null;
+      var remaining = Math.max(0, Math.ceil(((state.deadline || 0) - Date.now()) / 1000));
+      var decide = function (approve) {
+        // 乐观收起：裁决已发出，后续状态消息不再展开
+        setPatchConfirmState({ ...state, state: approve ? "applied" : "discarded" });
+        onDecide({ type: "wf1-patch-confirm", canvasId: state.canvasId, version: state.version, approve: approve });
+      };
+      return react.createElement(
+        "div",
+        { className: "wf1-example-bar wf1-confirm-bar", role: "alert" },
+        react.createElement(
+          "span", { className: "wf1-confirm-summary" },
+          "AI 修改画布待确认：" + (state.summary || ""),
+        ),
+        react.createElement(
+          "button", { type: "button", className: "wf1-confirm-btn", onClick: function () { decide(true); } }, "应用",
+        ),
+        react.createElement(
+          "button", { type: "button", className: "wf1-confirm-btn wf1-confirm-discard", onClick: function () { decide(false); } }, "放弃",
+        ),
+        react.createElement(
+          "span", { className: "wf1-confirm-countdown", "aria-live": "off" },
+          remaining + "s 后自动应用",
+        ),
       );
     }
 
@@ -2019,6 +2092,14 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       ensureStyle();
+      // 画布 iframe（App）推送的确认状态（#105）：pending/applied/discarded → 确认条
+      window.addEventListener("message", function (ev) {
+        if (ev.origin !== window.location.origin) return;
+        var d = ev.data;
+        if (d && typeof d === "object" && d.type === "wf1-patch-confirm-state") {
+          setPatchConfirmState(d);
+        }
+      });
 
       ctx.slots.inject("settings.section", function () {
         return ctx.slots.register(
@@ -2047,7 +2128,20 @@ window.__ModuleLoader__.load({
       });
 
       // 空会话示例指令条：dock slot 在空白会话（hero 态）渲染于输入框上方。
+      // 修改类补丁确认条（#105）同 dock 常驻（order 靠后，紧邻输入框）。
       // 老宿主无该 slot 时 inject 静默失败，不影响其余功能。
+      try {
+        ctx.slots.inject("conversation.input.dock", function () {
+          return ctx.slots.register(
+            {
+              name: "conversation.input.dock",
+              id: "ccpg-workflow-patch-confirm",
+              order: 20,
+            },
+            PatchConfirmBar,
+          );
+        });
+      } catch (e) { /* 无 dock slot 的宿主跳过 */ }
       try {
         ctx.slots.inject("conversation.input.dock", function () {
           return ctx.slots.register(
@@ -2180,6 +2274,8 @@ window.__ModuleLoader__.load({
       graphThumbnail: graphThumbnail,
       WorkflowRunCard: WorkflowRunCard,
       GraphPatchCard: GraphPatchCard,
+      PatchConfirmBar: PatchConfirmBar,
+      setPatchConfirmState: setPatchConfirmState,
       WorkflowExampleBar: WorkflowExampleBar,
       examplePromptsFor: examplePromptsFor,
       setWfBoundState: function (v) { wfBoundState = v; },
