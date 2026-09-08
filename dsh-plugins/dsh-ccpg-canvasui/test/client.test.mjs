@@ -780,4 +780,138 @@ for (const [body, expected] of [
   assert.equal(client.__test.WorkflowExampleBar({}), null);
 }
 
+// ---- 运行卡停止按钮（#103）：有状态 react shim 驱动 运行中→停止中→已取消 流转 ----
+{
+  const stopCalls = [];
+  const fetchLog = [];
+  const intervals = [];
+  const runningRun = {
+    runId: "run_stop_case", status: "running", workflowName: "停止测试",
+    graph: { nodes: [{ id: "n1", type: "agent", data: { label: "步骤1" } }], edges: [] },
+    nodeStates: { n1: { status: "running" } },
+  };
+  const canceledRun = { ...runningRun, status: "canceled", nodeStates: { n1: { status: "canceled" } } };
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  // 有状态 hooks：slot 按 hook 序号复用，组件重调即「重渲染」；effect 仅首渲染后跑
+  let cursor = 0;
+  const slots = [];
+  const effects = [];
+  const reactShim = {
+    createElement(tag, props, ...children) { stopCalls.push({ tag, props, children }); return { tag, props, children }; },
+    useRef() { const i = cursor++; if (!slots[i]) slots[i] = { ref: true, value: { current: null } }; return slots[i].value; },
+    useState(initial) {
+      const i = cursor++;
+      if (!slots[i]) slots[i] = { value: typeof initial === "function" ? initial() : initial };
+      const slot = slots[i];
+      return [slot.value, (v) => { slot.value = typeof v === "function" ? v(slot.value) : v; }];
+    },
+    useEffect(fn) { effects.push(fn); },
+    useMemo(fn) { return fn(); },
+  };
+
+  let stopClient;
+  let cancelOk = true;
+  let detailRun = runningRun;
+  const fetchStub = (url, opts) => {
+    const u = String(url);
+    fetchLog.push({ url: u, opts });
+    if (u.includes("/wf1/api/run/cancel")) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: cancelOk, runId: "run_stop_case" }) });
+    }
+    if (u.includes("/wf1/api/runs/detail")) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(detailRun) });
+    }
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ runs: [] }) });
+  };
+  const setIntervalStub = (fn) => { intervals.push(fn); return intervals.length; };
+  const clearIntervalStub = () => {};
+  const stopContext = {
+    console,
+    // 裸 fetch/interval（vm realm 全局）与 window.* 两种引用路径都要有
+    fetch: fetchStub,
+    setInterval: setIntervalStub,
+    clearInterval: clearIntervalStub,
+    document: {
+      head: { appendChild() {} },
+      createElement: () => ({}),
+      getElementById: () => null,
+      body: {},
+    },
+    window: {
+      localStorage: { getItem: (k) => (k === "dsh.sessions.current" ? JSON.stringify({ sessionId: "sess_stop" }) : null) },
+      fetch: fetchStub,
+      setInterval: setIntervalStub,
+      clearInterval: clearIntervalStub,
+    },
+  };
+  stopContext.window.__ModuleLoader__ = {
+    load({ factory }) { stopClient = factory((name) => (name === "react" ? reactShim : (() => { throw new Error("unexpected require: " + name); })())); },
+  };
+  vm.runInNewContext(bundle, stopContext, { filename: "dsh-ccpg-canvasui/src/client.js" });
+
+  const render = () => {
+    cursor = 0;
+    stopCalls.length = 0;
+    return stopClient.__test.WorkflowRunCard({
+      block: {
+        kind: "tool-result",
+        isError: false,
+        content: [{ type: "text", text: JSON.stringify({ started: true, runId: "run_stop_case" }) }],
+      },
+    });
+  };
+  const find = (className, tag) => stopCalls.findLast((c) => c.tag === tag && c.props?.className === className);
+
+  render();
+  effects.splice(0).forEach((fn) => fn());
+  await tick(); // 首次详情拉回 running
+  render();
+  {
+    const action = find("wf1-card-action", "span");
+    assert.ok(action, "运行中应渲染停止按钮");
+    assert.equal(action.props.role, "button");
+    assert.equal(action.children[0], "停止");
+    const meta = find("wf1-card-meta", "span");
+    assert.match(String(meta.children[0]), /步骤1」执行中/);
+  }
+
+  // 先验证取消失败回退：点停止但服务端回 ok:false → 按钮回到「停止」可重试
+  cancelOk = false;
+  find("wf1-card-action", "span").props.onClick({ stopPropagation() {} });
+  await tick();
+  render();
+  assert.equal(find("wf1-card-action", "span").children[0], "停止", "取消失败应回退到可重试态");
+
+  // 成功路径：stopPropagation + POST cancel（带 sessionId 作用域与 runId）
+  cancelOk = true;
+  let propagationStopped = false;
+  find("wf1-card-action", "span").props.onClick({ stopPropagation() { propagationStopped = true; } });
+  assert.equal(propagationStopped, true, "停止点击不得触发整卡打开画布");
+  await tick();
+  const cancelCall = fetchLog.findLast((f) => f.url.includes("/wf1/api/run/cancel"));
+  assert.ok(cancelCall, "应发 POST /wf1/api/run/cancel");
+  assert.match(cancelCall.url, /[?&]sessionId=sess_stop/, "cancel 请求须带 sessionId 作用域");
+  assert.equal(cancelCall.opts?.method, "POST");
+  assert.deepEqual(JSON.parse(cancelCall.opts.body), { runId: "run_stop_case" });
+
+  render();
+  {
+    assert.equal(find("wf1-card-action", "span").children[0], "停止中…");
+    assert.match(String(find("wf1-card-meta", "span").children[0]), /停止中/);
+  }
+
+  // 轮询到已取消：停止按钮消失，卡片转取消态
+  detailRun = canceledRun;
+  intervals.splice(0).forEach((fn) => fn());
+  await tick();
+  render();
+  {
+    assert.equal(find("wf1-card-action", "span"), undefined, "终态后不再渲染停止按钮");
+    const dot = find("wf1-card-dot", "span");
+    assert.equal(dot.props["data-s"], "error");
+    assert.equal(String(find("wf1-card-meta", "span").children[0]), "已取消");
+  }
+}
+
 console.log("canvasui client tests: passed");
