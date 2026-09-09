@@ -180,6 +180,10 @@ window.__ModuleLoader__.load({
         ".wf1-card-toggle{flex:none;display:inline-flex;align-items:center;padding:2px 10px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;cursor:pointer;transition:background-color 100ms ease;}",
         ".wf1-card-toggle:hover{background:var(--dsw-alias-interactive-bg-hover-solid);}",
         ".wf1-card-toggle:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
+        ".wf1-card-suggest{display:flex;flex-wrap:wrap;gap:6px;}",
+        ".wf1-card-suggest-btn{padding:2px 10px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;cursor:pointer;transition:border-color 100ms ease,color 100ms ease;}",
+        ".wf1-card-suggest-btn:hover{border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);}",
+        ".wf1-card-suggest-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
         ".wf1-card-detail{display:flex;flex-direction:column;gap:2px;max-height:72px;overflow-y:auto;border-radius:8px;padding:6px 10px;background:color-mix(in srgb,var(--dsw-alias-border-l1) 18%,transparent);}",
         ".wf1-card-detail-line{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:pre-wrap;word-break:break-word;}",
         ".wf1-card-detail[data-error] .wf1-card-detail-line{color:var(--dsw-alias-state-error-primary);}",
@@ -584,6 +588,7 @@ window.__ModuleLoader__.load({
           props.action || null,
           react.createElement("span", { className: "wf1-card-open" }, "打开画布 ↗"),
         ),
+        props.footer || null,
       );
     }
 
@@ -800,6 +805,13 @@ window.__ModuleLoader__.load({
         action: stopAction,
         // 点击定位到卡片正在跟踪的 run（续跑换 run 后也指向最新）
         target: { runId: trackedRunId },
+        // #107 suggestion：成功/失败终态给下一步指令（≤3 个，点击只填入）；
+        // 「导出 ZIP」无后端能力支撑不做
+        footer: dot === "success"
+          ? cardSuggestRow(["查看上次运行的文稿", "再跑一次", "把运行结果存到工作目录"])
+          : dot === "error" && run.status !== "waiting"
+            ? cardSuggestRow(["再跑一次", "基于这次结果继续改"])
+            : null,
       });
     }
 
@@ -877,6 +889,10 @@ window.__ModuleLoader__.load({
         thumbnail: null,
         action: toggle,
         detail: detail,
+        // #107 suggestion：已应用（含告警）态的下一步指令；运行中/被拒不显示
+        footer: settled && ok
+          ? cardSuggestRow(["撤销刚才那批修改", "运行这个工作流", "保存为工作流"])
+          : null,
       });
     }
 
@@ -944,6 +960,44 @@ window.__ModuleLoader__.load({
         null
       );
     }
+    // 填入输入框不发送（#107 suggestion 按钮 / #101 示例条共用）：
+    // 按钮文案即可直接发送的指令，用户确认后 Enter
+    function fillComposer(text) {
+      var editable = findComposerInput();
+      if (!editable) return false;
+      editable.focus();
+      try {
+        document.execCommand("selectAll");
+        document.execCommand("insertText", false, text);
+        return true;
+      } catch (e) { /* 输入框形态变化时静默，用户仍可手动输入 */ }
+      return false;
+    }
+    // 卡片尾部 suggestion 按钮组（#107）：点击只填入不发送；文案=可直接发送的指令。
+    // 卡片根是 <button> 不能嵌套交互元素，与停止动作同款 span[role=button] 承载
+    function cardSuggestRow(labels) {
+      return react.createElement(
+        "div",
+        { className: "wf1-card-suggest" },
+        labels.map(function (label) {
+          return react.createElement(
+            "span",
+            {
+              key: label,
+              className: "wf1-card-suggest-btn",
+              role: "button",
+              tabIndex: 0,
+              onClick: function (e) { e.stopPropagation(); fillComposer(label); },
+              onKeyDown: function (e) {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.stopPropagation(); e.preventDefault(); fillComposer(label);
+              },
+            },
+            label,
+          );
+        }),
+      );
+    }
     function WorkflowExampleBar(props) {
       var visible =
         props.input && (props.input.draft === "" || props.input.draft == null) &&
@@ -952,13 +1006,7 @@ window.__ModuleLoader__.load({
       var prompts = examplePromptsFor(wfBoundState === true);
       var fill = function (text, ev) {
         ev.preventDefault();
-        var editable = findComposerInput();
-        if (!editable) return;
-        editable.focus();
-        try {
-          document.execCommand("selectAll");
-          document.execCommand("insertText", false, text);
-        } catch (e) { /* 输入框形态变化时静默，用户仍可手动输入 */ }
+        fillComposer(text);
       };
       return react.createElement(
         "div",
@@ -2276,6 +2324,8 @@ window.__ModuleLoader__.load({
       GraphPatchCard: GraphPatchCard,
       PatchConfirmBar: PatchConfirmBar,
       setPatchConfirmState: setPatchConfirmState,
+      cardSuggestRow: cardSuggestRow,
+      fillComposer: fillComposer,
       WorkflowExampleBar: WorkflowExampleBar,
       examplePromptsFor: examplePromptsFor,
       setWfBoundState: function (v) { wfBoundState = v; },
