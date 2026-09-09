@@ -1019,10 +1019,10 @@ for (const [body, expected] of [
     const detail = find("wf1-card-detail", "div");
     assert.ok(detail, "展开后渲染完整错误列表");
     assert.equal(detail.props["data-error"], true, "被拒态错误行用错误色");
-    // createElement shim 单数组参数不展开，先展平再断言
-    const lines = Array.isArray(detail.children[0]) ? detail.children[0] : detail.children;
-    assert.equal(lines.length, 6, "全部错误行均展示（超 3 条靠滚动）");
-    assert.match(String(lines[2].children[0]), /构成环 —— 修复建议：删掉形成环的那条连线/);
+    // #110 后详情走受限 markdown 渲染：每行一个 <p>；shim 单数组参数不展开，先展平
+    const blocks = Array.isArray(detail.children[0]) ? detail.children[0] : detail.children;
+    assert.equal(blocks.length, 6, "全部错误行均展示（超 3 条靠滚动）");
+    assert.match(JSON.stringify(blocks[2]), /构成环 —— 修复建议：删掉形成环的那条连线/);
     const toggle = find("wf1-card-toggle", "span");
     assert.equal(toggle.children[0], "收起");
     assert.equal(toggle.props["aria-expanded"], true);
@@ -1263,6 +1263,43 @@ for (const [body, expected] of [
   await tick();
   render();
   assert.equal(pill(), undefined, "未绑定时胶囊不渲染");
+}
+
+// ---- 受限 markdown 渲染（#110）：加粗/代码/列表，纯元素构造无 XSS 面 ----
+{
+  const flat = (nodes) => {
+    const out = [];
+    const walk = (n) => {
+      if (Array.isArray(n)) { n.forEach(walk); return; }
+      if (n && typeof n === "object" && n.tag) { walk(n.children); out.push(n); return; }
+      if (n && typeof n === "object" && n.props) { walk(n.children); return; }
+      if (typeof n === "string") out.push(n);
+    };
+    walk(nodes);
+    return out;
+  };
+  const blocks = cardClient.__test.renderCardMarkdown("第一段 **加粗** 与 `code here`\n- 列表项 **强**\n- 第二项\n尾段");
+  {
+    const tags = flat(blocks).map((n) => n.tag);
+    assert.ok(tags.includes("p") && tags.includes("ul") && tags.includes("li"), "应有段落/列表结构");
+    const strongs = flat(blocks).filter((n) => n.tag === "strong");
+    assert.equal(strongs.length, 2);
+    assert.equal(strongs[0].children[0], "加粗");
+    const codes = flat(blocks).filter((n) => n.tag === "code");
+    assert.equal(codes.length, 1);
+    assert.equal(codes[0].children[0], "code here");
+  }
+  // XSS：恶意标签只是文本，不存在对应元素类型
+  {
+    const evil = cardClient.__test.renderCardMarkdown("<script>alert(1)</script> **<img onerror=x>** `- <b>`");
+    const tags = flat(evil).map((n) => n.tag);
+    assert.equal(tags.includes("script"), false, "script 不成为元素");
+    assert.equal(tags.includes("img"), false);
+    assert.ok(evil.some((b) => JSON.stringify(b).includes("<script>alert")), "原文保留为文本");
+  }
+  // 空文本/纯文本回退
+  assert.equal(cardClient.__test.renderCardMarkdown("").length, 0);
+  assert.equal(cardClient.__test.renderCardMarkdown("平平无奇").length, 1);
 }
 
 console.log("canvasui client tests: passed");

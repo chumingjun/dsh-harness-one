@@ -185,8 +185,10 @@ window.__ModuleLoader__.load({
         ".wf1-card-suggest-btn:hover{border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);}",
         ".wf1-card-suggest-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
         ".wf1-card-detail{display:flex;flex-direction:column;gap:2px;max-height:72px;overflow-y:auto;border-radius:8px;padding:6px 10px;background:color-mix(in srgb,var(--dsw-alias-border-l1) 18%,transparent);}",
-        ".wf1-card-detail-line{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:pre-wrap;word-break:break-word;}",
-        ".wf1-card-detail[data-error] .wf1-card-detail-line{color:var(--dsw-alias-state-error-primary);}",
+        ".wf1-card-detail p{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;overflow-wrap:break-word;}",
+        ".wf1-card-detail ul{margin:0;padding-left:18px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;overflow-wrap:break-word;}",
+        ".wf1-card-detail code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;padding:0 4px;border-radius:4px;background:color-mix(in srgb,var(--dsw-alias-border-l1) 30%,transparent);}",
+        ".wf1-card-detail[data-error] p,.wf1-card-detail[data-error] ul{color:var(--dsw-alias-state-error-primary);}",
         ".wf1-card-open{flex:none;display:inline-flex;align-items:center;gap:3px;color:var(--dsw-alias-label-caption);font-size:12px;line-height:18px;opacity:0;transition:opacity 100ms ease;}",
         ".wf1-card:hover .wf1-card-open,.wf1-card:focus-visible .wf1-card-open{opacity:1;}",
         // ---- 空会话示例指令条（conversation.input.dock）----
@@ -215,6 +217,8 @@ window.__ModuleLoader__.load({
         ".wf1-bind-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
         ".wf1-bind-dot{width:6px;height:6px;border-radius:999px;flex:none;background:var(--dsw-alias-border-l2);}",
         ".wf1-bind-dot[data-s=on]{background:var(--dsw-alias-state-success-primary);}",
+        // ---- 窄屏（#110）：<520 收窄卡片内距，动作/建议按钮自然换行 ----
+        "@media (max-width:520px){.wf1-card{padding:8px 10px;gap:4px;}.wf1-card-title{max-width:52%;}.wf1-example-bar{padding:2px 2px 8px;}}",
       ].join("\n");
       document.head.appendChild(el);
     }
@@ -887,9 +891,7 @@ window.__ModuleLoader__.load({
       var detail = expanded && hasDetail ? react.createElement(
         "div",
         { className: "wf1-card-detail", "data-error": !ok || undefined },
-        detailLines.map(function (line, index) {
-          return react.createElement("div", { key: index, className: "wf1-card-detail-line" }, line);
-        }),
+        renderCardMarkdown(text),
       ) : null;
 
       return workflowCardShell({
@@ -1131,6 +1133,45 @@ window.__ModuleLoader__.load({
           remaining + "s 后自动应用",
         ),
       );
+    }
+
+    // ---- #110 受限 markdown：只放行 **加粗**、`代码`、- 列表、换行 ----
+    // 直接构造 React 元素（不经 innerHTML），文本节点由 React 转义，无 XSS 面。
+    var CARD_INLINE_RE = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+    function cardInlineNodes(text, keyPrefix) {
+      var out = [];
+      String(text).split(CARD_INLINE_RE).forEach(function (part, i) {
+        if (!part) return;
+        if (/^\*\*[^*]+\*\*$/.test(part)) {
+          out.push(react.createElement("strong", { key: keyPrefix + "b" + i }, part.slice(2, -2)));
+        } else if (/^`[^`]+`$/.test(part)) {
+          out.push(react.createElement("code", { key: keyPrefix + "c" + i }, part.slice(1, -1)));
+        } else {
+          out.push(part);
+        }
+      });
+      return out;
+    }
+    function renderCardMarkdown(text) {
+      var blocks = [];
+      var listItems = [];
+      var seq = 0;
+      var flushList = function () {
+        if (!listItems.length) return;
+        blocks.push(react.createElement("ul", { key: "ul" + seq++ }, listItems));
+        listItems = [];
+      };
+      String(text || "").split("\n").forEach(function (line) {
+        var item = line.match(/^\s*-\s+(.*)$/);
+        if (item) {
+          listItems.push(react.createElement("li", { key: "li" + seq++ }, cardInlineNodes(item[1], "li" + seq)));
+          return;
+        }
+        flushList();
+        if (line.trim()) blocks.push(react.createElement("p", { key: "p" + seq++ }, cardInlineNodes(line, "p" + seq)));
+      });
+      flushList();
+      return blocks;
     }
 
     // ---- 画布半：常驻 iframe（侧栏折叠或切换 tab 时不重载）----
@@ -2410,6 +2451,7 @@ window.__ModuleLoader__.load({
       fillComposer: fillComposer,
       WorkflowBindCapsule: WorkflowBindCapsule,
       setWfBoundInfoForTest: function (v) { wfBoundInfo = v; },
+      renderCardMarkdown: renderCardMarkdown,
       WorkflowExampleBar: WorkflowExampleBar,
       examplePromptsFor: examplePromptsFor,
       setWfBoundState: function (v) { wfBoundState = v; },
