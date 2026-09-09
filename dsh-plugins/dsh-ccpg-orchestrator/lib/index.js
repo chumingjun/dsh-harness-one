@@ -3705,7 +3705,15 @@ export function apply(ctx, config) {
     const url = new URL(req.url, 'http://wf1.local');
     const sid = String(url.searchParams.get('sessionId') || '');
     const cid = sid ? sessionCanvas.get(sid) : undefined;
-    json(res, 200, { ok: true, bound: Boolean(cid), canvasId: cid || null });
+    // #106 绑定胶囊数据源：工作流名 + 节点数（服务端 cv 已由画布上报同步）
+    let workflowName = null;
+    let nodeCount = 0;
+    if (cid) {
+      const cv = canvasOf(String(cid));
+      nodeCount = (cv.graph?.nodes || []).length;
+      if (cv.workflowId) workflowName = readWf(cv.workflowId)?.name || null;
+    }
+    json(res, 200, { ok: true, bound: Boolean(cid), canvasId: cid || null, workflowName, nodeCount });
   } });
 
   // 画布状态：POST 上报前端图，GET 拉服务端权威图。AI patch 的 version 更高时，

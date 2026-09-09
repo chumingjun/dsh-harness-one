@@ -190,7 +190,7 @@ window.__ModuleLoader__.load({
         ".wf1-card-open{flex:none;display:inline-flex;align-items:center;gap:3px;color:var(--dsw-alias-label-caption);font-size:12px;line-height:18px;opacity:0;transition:opacity 100ms ease;}",
         ".wf1-card:hover .wf1-card-open,.wf1-card:focus-visible .wf1-card-open{opacity:1;}",
         // ---- 空会话示例指令条（conversation.input.dock）----
-        ".wf1-example-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:2px 4px 10px;max-width:var(--dsh-composer-card-max-width,720px);margin:0 auto;width:100%;}",
+        ".wf1-example-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:2px 16px 10px;max-width:var(--dsh-composer-card-max-width,720px);margin:0 auto;width:100%;box-sizing:border-box;}",
         ".wf1-example-lead{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;}",
         ".wf1-example-chip{flex:none;padding:4px 12px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;cursor:pointer;transition:border-color 100ms ease,color 100ms ease;}",
         ".wf1-example-chip:hover{border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);}",
@@ -203,6 +203,18 @@ window.__ModuleLoader__.load({
         ".wf1-confirm-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
         ".wf1-confirm-discard:hover{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary);}",
         ".wf1-confirm-countdown{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;}",
+        // ---- 绑定状态胶囊（#106）：与确认条/示例条同 dock ----
+        // dock 槽位经 display:contents 挂进 composerStack（flex 列）：外层行套
+        // composer card 宽度约束（与示例条同款）保证与输入框左缘对齐；胶囊本体
+        // 显式 min-height + 内容宽度，不依赖槽位布局。
+        ".wf1-bind-dock-row{width:100%;max-width:var(--dsh-composer-card-max-width,720px);margin:0 auto;display:flex;align-items:center;padding-inline:16px;box-sizing:border-box;}",,
+        ".wf1-bind-pill{display:inline-flex;align-items:center;gap:6px;width:fit-content;max-width:100%;box-sizing:border-box;min-height:28px;padding:4px 12px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;cursor:pointer;transition:border-color 100ms ease,color 100ms ease;}",
+        ".wf1-bind-pill:hover{border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);}",
+        ".wf1-bind-pill:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
+        ".wf1-bind-pill[data-bound]{color:var(--dsw-alias-label-secondary);}",
+        ".wf1-bind-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
+        ".wf1-bind-dot{width:6px;height:6px;border-radius:999px;flex:none;background:var(--dsw-alias-border-l2);}",
+        ".wf1-bind-dot[data-s=on]{background:var(--dsw-alias-state-success-primary);}",
       ].join("\n");
       document.head.appendChild(el);
     }
@@ -999,11 +1011,20 @@ window.__ModuleLoader__.load({
       );
     }
     function WorkflowExampleBar(props) {
+      // 仅绑定画布后展示（owner 决策：未绑定时不显示示例条，绑定引导交给画布侧栏）。
+      // 绑定态走订阅（轮询刷新后重渲染），不赌宿主槽位随模块变量重渲染
+      var [bound, setBound] = react.useState(wfBoundState);
+      react.useEffect(function () {
+        var listener = function (v) { setBound(Boolean(v)); };
+        wfBoundListeners.add(listener);
+        return function () { wfBoundListeners.delete(listener); };
+      }, []);
       var visible =
+        bound === true &&
         props.input && (props.input.draft === "" || props.input.draft == null) &&
         props.input.phase === "plain";
       if (!visible) return null;
-      var prompts = examplePromptsFor(wfBoundState === true);
+      var prompts = examplePromptsFor(true);
       var fill = function (text, ev) {
         ev.preventDefault();
         fillComposer(text);
@@ -1028,6 +1049,43 @@ window.__ModuleLoader__.load({
             p.name,
           );
         }),
+      );
+    }
+
+    // ---- #106 绑定状态胶囊（conversation.input.dock）：输入框上方常驻 ----
+    // 已绑定：工作流名 · 节点数；未绑定给出下一步指引；点击均打开工作流侧栏
+    // （打开画布即自动绑定会话）。2s 轮询 + 触发源 warm 双路刷新，切换画布/保存
+    // 后胶囊 ≤2s 跟上（服务端 cv 由画布上报同步，无新接口）。
+    function WorkflowBindCapsule() {
+      var [info, setInfo] = react.useState(wfBoundInfo);
+      react.useEffect(function () {
+        var stopped = false;
+        var load = function () {
+          fetchBoundInfo(currentDshSessionId(null)).then(function (data) {
+            if (!stopped && data) setInfo(data);
+          });
+        };
+        load();
+        var timer = window.setInterval(load, 2000);
+        return function () { stopped = true; window.clearInterval(timer); };
+      }, []);
+      if (!info || !info.bound) return null; // 首拉前/未绑定不渲染（未绑定不展示引导，owner 决策）
+      var label = "已绑定：" + (info.workflowName || "草稿图") + " · " + (info.nodeCount || 0) + " 节点";
+      return react.createElement(
+        "div",
+        { className: "wf1-bind-dock-row" },
+        react.createElement(
+          "button",
+          {
+            type: "button",
+            className: "wf1-bind-pill",
+            "data-bound": true,
+            title: "点击打开工作流画布",
+            onClick: function () { try { openWorkflowSidebar(); } catch (e) { /* 无侧栏服务时静默 */ } },
+          },
+          react.createElement("span", { className: "wf1-bind-dot", "data-s": "on" }),
+          react.createElement("span", { className: "wf1-bind-label" }, label),
+        ),
       );
     }
 
@@ -1950,14 +2008,26 @@ window.__ModuleLoader__.load({
       return bound ? WF_EXAMPLE_PROMPTS_BOUND : WF_EXAMPLE_PROMPTS_UNBOUND;
     }
 
-    function fetchBoundState(sessionId) {
+    // #106/#101 绑定态订阅：轮询刷新后通知监听者（ExampleBar 等宿主不随模块变量重渲染）
+    var wfBoundListeners = new Set();
+    function notifyBoundState() {
+      wfBoundListeners.forEach(function (fn) { try { fn(wfBoundState); } catch (e) { /* 单个监听异常不炸 */ } });
+    }
+
+    // #106 绑定胶囊数据：bound + 工作流名 + 节点数；同步刷 wfBoundState 热快照
+    var wfBoundInfo = null;
+    function fetchBoundInfo(sessionId) {
+      if (!sessionId) return Promise.resolve(null);
       return fetch(wfScopedApi("/assistant/bound", sessionId))
         .then(function (r) { return r.ok ? r.json() : { bound: false }; })
         .then(function (data) {
-          wfBoundState = Boolean(data.bound);
-          return wfBoundState;
+          wfBoundInfo = data || { bound: false };
+          // 同步热快照：胶囊与示例条（#101）共用同一份绑定态，2s 轮询驱动两者
+          wfBoundState = Boolean(wfBoundInfo.bound);
+          notifyBoundState();
+          return wfBoundInfo;
         })
-        .catch(function () { return false; });
+        .catch(function () { return null; });
     }
 
     function wfScopedApi(path, sessionId) {
@@ -2012,7 +2082,7 @@ window.__ModuleLoader__.load({
               try { listener(); } catch (e) { /* 单个监听器失败不影响其他 */ }
             });
           });
-          fetchBoundState(session.sessionId);
+          fetchBoundInfo(session.sessionId);
         },
         lexicon: function () {
           return wfLexiconNames;
@@ -2176,8 +2246,20 @@ window.__ModuleLoader__.load({
       });
 
       // 空会话示例指令条：dock slot 在空白会话（hero 态）渲染于输入框上方。
-      // 修改类补丁确认条（#105）同 dock 常驻（order 靠后，紧邻输入框）。
+      // 绑定状态胶囊（#106）/ 修改类补丁确认条（#105）/ 示例条（#101）同 dock。
       // 老宿主无该 slot 时 inject 静默失败，不影响其余功能。
+      try {
+        ctx.slots.inject("conversation.input.dock", function () {
+          return ctx.slots.register(
+            {
+              name: "conversation.input.dock",
+              id: "ccpg-workflow-bind-capsule",
+              order: 5,
+            },
+            WorkflowBindCapsule,
+          );
+        });
+      } catch (e) { /* 无 dock slot 的宿主跳过 */ }
       try {
         ctx.slots.inject("conversation.input.dock", function () {
           return ctx.slots.register(
@@ -2326,6 +2408,8 @@ window.__ModuleLoader__.load({
       setPatchConfirmState: setPatchConfirmState,
       cardSuggestRow: cardSuggestRow,
       fillComposer: fillComposer,
+      WorkflowBindCapsule: WorkflowBindCapsule,
+      setWfBoundInfoForTest: function (v) { wfBoundInfo = v; },
       WorkflowExampleBar: WorkflowExampleBar,
       examplePromptsFor: examplePromptsFor,
       setWfBoundState: function (v) { wfBoundState = v; },
