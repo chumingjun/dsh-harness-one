@@ -23,7 +23,7 @@ const context = {
             return {
               createElement() {},
               useRef() {},
-              useState() {},
+              useState(v) { return [v, function () {}]; },
               useEffect() {},
             };
           throw new Error(`unexpected require: ${name}`);
@@ -779,14 +779,20 @@ for (const [body, expected] of [
   assert.ok(bound.some((p) => p.name.includes("当前画布")), "已绑定时以运行/修改类为主");
   assert.notEqual(unbound, bound, "绑定与否返回不同示例集");
 
-  // ExampleBar：草稿空 + plain 阶段不早退（走 createElement 分支，stub 返回 undefined）；
-  // 草稿非空 / claim 阶段早退 null。主 vm 的 createElement 是无返回 stub，
-  // 元素形状的断言留给真浏览器验证。
-  assert.equal(client.__test.WorkflowExampleBar({ input: { draft: "", phase: "plain" } }), undefined);
-  assert.equal(client.__test.WorkflowExampleBar({ input: { draft: "", phase: "plain" }, session: {} }), undefined);
+  // ExampleBar：仅绑定画布后渲染（owner 决策：未绑定不显示示例条）。
+  // 主 vm 的 createElement 是无返回 stub，绑定态走 createElement 分支返回 undefined；
+  // 未绑定/草稿非空/claim 阶段早退 null。
+  client.__test.setWfBoundState(true);
+  assert.equal(client.__test.WorkflowExampleBar({ input: { draft: "", phase: "plain" } }), undefined, "绑定+空草稿应渲染");
+  client.__test.setWfBoundState(false);
+  assert.equal(client.__test.WorkflowExampleBar({ input: { draft: "", phase: "plain" } }), null, "未绑定不渲染");
+  client.__test.setWfBoundState(null);
+  assert.equal(client.__test.WorkflowExampleBar({ input: { draft: "", phase: "plain" } }), null, "绑定态未知不渲染");
+  client.__test.setWfBoundState(true);
   assert.equal(client.__test.WorkflowExampleBar({ input: { draft: "已有草稿", phase: "plain" } }), null);
   assert.equal(client.__test.WorkflowExampleBar({ input: { draft: "", phase: "claim" } }), null);
   assert.equal(client.__test.WorkflowExampleBar({}), null);
+  client.__test.setWfBoundState(null);
 }
 
 // ---- 运行卡停止按钮（#103）：有状态 react shim 驱动 运行中→停止中→已取消 流转 ----
@@ -1245,24 +1251,18 @@ for (const [body, expected] of [
     const p = pill();
     assert.ok(p, "已绑定应渲染胶囊");
     assert.equal(p.props["data-bound"], true);
-    assert.match(String(p.children[p.children.length - 1]), /已绑定：海印一期 · 41 节点/);
+    assert.match(String(p.children[p.children.length - 1].children[0]), /已绑定：海印一期 · 41 节点/);
     assert.equal(capCalls.findLast((c) => c.props?.className === "wf1-bind-dot").props["data-s"], "on");
     // 请求带 sessionId 作用域
     assert.ok(fetchLog.some((u) => u.includes("/wf1/api/assistant/bound") && u.includes("sessionId=sess_cap")), "bound 查询须带 sessionId");
   }
 
-  // 未绑定：指引文案 + off 点
+  // 未绑定：不渲染（owner 决策：未绑定不展示胶囊与引导）
   boundPayload = { ok: true, bound: false, canvasId: null, workflowName: null, nodeCount: 0 };
   effects.splice(0).forEach((fn) => fn()); // 重挂 effect 再拉一轮
   await tick();
   render();
-  {
-    const p = pill();
-    assert.ok(p);
-    assert.equal(p.props["data-bound"], undefined);
-    assert.match(String(p.children[p.children.length - 1]), /未绑定画布 · 打开「工作流」标签页/);
-    assert.equal(capCalls.findLast((c) => c.props?.className === "wf1-bind-dot").props["data-s"], "off");
-  }
+  assert.equal(pill(), undefined, "未绑定时胶囊不渲染");
 }
 
 console.log("canvasui client tests: passed");
