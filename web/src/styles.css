@@ -1710,3 +1710,31 @@ body {
   .vc-list-pane { flex: 0 0 42vh; border-right: 0; border-bottom: 1px solid var(--border); }
   .vc-editor-pane { flex: 0 0 auto; min-height: 54vh; }
 }
+
+/* ============ #109 画布内轻量指令条 ============ */
+.wf1-cmdbar {
+  position: fixed; right: 18px; bottom: 18px; z-index: 400;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end;
+  max-width: min(520px, calc(100vw - 36px));
+  padding: 8px 10px; border-radius: 14px;
+  background: var(--bg-panel); border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-2);
+}
+.wf1-cmdbar-btn {
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg-raised);
+  color: var(--fg-secondary, var(--fg)); font-size: 12px; padding: 5px 12px;
+  cursor: pointer; white-space: nowrap;
+}
+.wf1-cmdbar-btn:hover:not(:disabled) { border-color: var(--border-strong); }
+.wf1-cmdbar-btn:disabled { opacity: .5; cursor: default; }
+.wf1-cmdbar-send { color: var(--accent, var(--fg)); font-weight: 600; }
+.wf1-cmdbar-form { display: flex; gap: 6px; min-width: 220px; flex: 1; }
+.wf1-cmdbar-input {
+  flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg-raised); color: var(--fg); font: inherit; font-size: 12.5px; padding: 5px 10px;
+}
+.wf1-cmdbar-input:focus { outline: none; border-color: var(--accent, var(--border-strong)); }
+@media (max-width: 640px) {
+  .wf1-cmdbar { left: 12px; right: 12px; bottom: 12px; justify-content: stretch; }
+  .wf1-cmdbar-form { min-width: 0; }
+}

@@ -1371,4 +1371,103 @@ for (const [body, expected] of [
   assert.match(guideClaim.hint, /工作流标签页/);
 }
 
+// ---- 指令注入降级链（#109）：无 conversation 服务→填输入框+回执；有则直达聊天 ----
+{
+  const cmdCalls = [];
+  const cmdLog = [];
+  let cursor = 0;
+  const slots = [];
+  const reactShim = {
+    createElement(tag, props, ...children) { cmdCalls.push({ tag, props, children }); return { tag, props, children }; },
+    useState(initial) {
+      const i = cursor++;
+      if (!slots[i]) slots[i] = { value: typeof initial === "function" ? initial() : initial };
+      const slot = slots[i];
+      return [slot.value, (v) => { slot.value = typeof v === "function" ? v(slot.value) : v; }];
+    },
+    useEffect(fn) {},
+  };
+  const fakeComposer = { focus() {} };
+  const sentTexts = [];
+  let cmdClient;
+  const cmdContext = {
+    console,
+    fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
+    setInterval: () => 0,
+    clearInterval: () => {},
+    document: {
+      head: { appendChild() {} },
+      createElement: () => ({}),
+      getElementById: () => null,
+      body: {},
+      querySelector() { return fakeComposer; },
+      execCommand(cmd, show, text) { cmdLog.push({ cmd, text }); },
+    },
+    window: {
+      location: { origin: "https://dsh.local" },
+      localStorage: { getItem: () => null },
+      __ModuleLoader__: {
+        load({ factory }) { cmdClient = factory((name) => (name === "react" ? reactShim : (() => { throw new Error("unexpected require: " + name); })())); },
+      },
+    },
+  };
+  // 模拟常驻 iframe：postToCanvas 的回执落 cmdLog 之外单独记录
+  const acks = [];
+  const fakeFrame = {
+    contentWindow: {
+      postMessage(msg) { acks.push(msg); },
+    },
+  };
+  const fakeHost = { querySelector: () => fakeFrame };
+  vm.runInNewContext(bundle, cmdContext, { filename: "dsh-ccpg-canvasui/src/client.js" });
+  cmdClient.__test.setPersistentHostForTest?.(fakeHost);
+
+  // 场景 1：无 conversation 服务（默认）→ fillComposer 降级 + ack(false,filled)
+  cmdClient.__test.deliverCommandToChat("给工单整理加超时");
+  await new Promise((r) => setTimeout(r, 0));
+  {
+    assert.deepEqual(cmdLog.map((x) => x.cmd), ["selectAll", "insertText"], "降级应填入宿主输入框");
+    assert.equal(cmdLog[1].text, "给工单整理加超时");
+    assert.equal(acks.length, 1);
+    assert.equal(acks[0].type, "wf1-command-result");
+    assert.equal(acks[0].ok, false);
+    assert.equal(acks[0].via, "filled");
+  }
+
+  // 场景 2：conversation.send 可用 → 直达聊天 ack(true,chat)
+  cmdLog.length = 0;
+  acks.length = 0;
+  cmdClient.__test.setHostCtxForTest({
+    conversation: {
+      send(text) { sentTexts.push(text); return Promise.resolve(); },
+    },
+  });
+  cmdClient.__test.deliverCommandToChat("跑一次当前工作流");
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+  {
+    assert.deepEqual(sentTexts, ["跑一次当前工作流"]);
+    assert.equal(acks.length, 1);
+    assert.equal(acks[0].ok, true);
+    assert.equal(acks[0].via, "chat");
+    assert.equal(cmdLog.length, 0, "直达聊天不填输入框");
+  }
+
+  // 场景 3：send 拒绝（scope 不命中）→ 回退填入
+  cmdLog.length = 0;
+  acks.length = 0;
+  cmdClient.__test.setHostCtxForTest({
+    conversation: {
+      send() { return Promise.reject(new Error("scope")); },
+    },
+  });
+  cmdClient.__test.deliverCommandToChat("再试一次");
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+  {
+    assert.equal(cmdLog[1] && cmdLog[1].text, "再试一次", "send 失败回退填入");
+    assert.equal(acks[0].ok, false);
+  }
+}
+
 console.log("canvasui client tests: passed");
