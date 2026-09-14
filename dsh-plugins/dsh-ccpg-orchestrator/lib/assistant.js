@@ -225,7 +225,7 @@ export function canvasAssistantPersona() {
   - script 脚本：固定 JavaScript；data.inputs 为命名参数数组，每项用 expression 完整变量或 value JSON 常量；data.code 必须声明同步 function main(input, workspace) 并返回 JSON；workspace 仅可 list/read/write/remove 当前节点工作区；可选 data.outputSchema 和 data.scriptTimeoutMs（100-10000）
   - condition 条件：data.include/data.exclude 逗号分隔关键词，命中走 true 边否则 false 边；条件节点的两条出边必须 branch="true"/"false"
   - http 请求：data.url/method/headers/body
-  - output 输出：汇聚展示，可选 data.writeback 飞书写回
+  - output 输出：汇聚展示
   - notify 消息通知：运行级观察器，可独立放置或在线路中透传；data.channel="feishu"、data.mode="terminal"|"each_node"；群聊使用 data.channelConfig.targetType="chat_id" + oc_ 开头的群 ID，私聊使用 targetType="open_id" + ou_ 开头的用户 open_id；data.channelConfig.credentialId 可选
   - note 注释：不执行，data.text 说明文字
   - subworkflow 子工作流：按已保存工作流 data.workflowId 同步调用；data.inputMap.triggerInput/runInputs 显式映射输入；首期不支持异步等待、resume 或 retry，不嵌入子图

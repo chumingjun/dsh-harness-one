@@ -63,10 +63,6 @@ export const NODE_REGISTRY = [
     icon: ICONS.output, label: '输出', color: 'var(--type-output)',
     preset: () => ({ label: '新输出' }),
     summary: () => '汇总上游输出',
-    badges: (d) => [
-      d.writeback?.type === 'feishu-new' && { text: '新建飞书文档' },
-      d.writeback?.type === 'feishu-append' && { text: '追加飞书文档' },
-    ].filter(Boolean),
   },
   {
     type: 'notify',

@@ -709,47 +709,6 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
               placeholder={'最终工单：{{node["agent"].data}}'}
             />
           </Section>
-          <Section title="运行后动作" hint="结束自动执行">
-            <Field label="动作">
-              <select
-                value={d.writeback?.type || 'none'}
-                onChange={(e) => {
-                  const type = e.target.value;
-                  if (type === 'none') return set({ writeback: undefined });
-                  if (type === 'feishu-new') return set({ writeback: { type, docTitle: d.writeback?.docTitle || '' } });
-                  if (type === 'feishu-append') return set({ writeback: { type, targetToken: d.writeback?.targetToken || '' } });
-                }}>
-                <option value="none">仅文本输出</option>
-                <option value="feishu-new">写入新建飞书文档</option>
-                <option value="feishu-append">追加到指定飞书文档</option>
-              </select>
-            </Field>
-            {d.writeback?.type === 'feishu-new' && (
-              <Field label="文档标题" hint="留空自动生成" wide>
-                <input placeholder="新文档标题" value={d.writeback.docTitle || ''}
-                  onChange={(e) => set({ writeback: { ...d.writeback, docTitle: e.target.value } })} />
-              </Field>
-            )}
-            {d.writeback?.type === 'feishu-append' && (
-              <Field label="目标文档 token" hint="docx 链接末段" wide>
-                <input placeholder="docx 文档 token" value={d.writeback.targetToken || ''}
-                  onChange={(e) => set({ writeback: { ...d.writeback, targetToken: e.target.value.trim() } })} />
-              </Field>
-            )}
-            {d.writeback?.type !== 'none' && feishuCreds.length > 0 && (
-              <Field label="使用凭据">
-                <select value={d.feishuCredId || ''} onChange={(e) => set({ feishuCredId: e.target.value || undefined })}>
-                  <option value="">默认凭据</option>
-                  {feishuCreds.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}{c.isDefault ? '（默认）' : ''}</option>
-                  ))}
-                </select>
-              </Field>
-            )}
-            {!feishuEnabled && d.writeback?.type !== 'none' && (
-              <p className="panel-note note-warn">飞书未配置（右上「设置」添加应用凭据），运行时写回将跳过</p>
-            )}
-          </Section>
         </>
       )}
 

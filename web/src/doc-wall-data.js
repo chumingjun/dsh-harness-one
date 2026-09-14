@@ -90,7 +90,7 @@ export function buildDocWallModel({ runResults, progressByNode = {}, nodeStates 
     if (row) finalsDocs.push(row);
   }
   for (const link of run.links || []) {
-    if (link?.type === 'writeback' || link?.url) finalsLinks.push({ label: link.nodeLabel ? `${link.nodeLabel} 链接` : (link.url || ''), url: link.url });
+    if (link?.url) finalsLinks.push({ label: link.nodeLabel ? `${link.nodeLabel} 链接` : (link.url || ''), url: link.url });
   }
   const finalsStrip = stripFor(finalsDocs);
 

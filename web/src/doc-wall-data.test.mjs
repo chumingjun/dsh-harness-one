@@ -9,7 +9,6 @@ const runResults = {
     { id: 'a1', nodeId: 'out1', nodeLabel: '验收输出', name: '验收报告.md', previewUrl: '/p1', downloadUrl: '/d1' },
     { id: 'a2', nodeId: 'out1', nodeLabel: '验收输出', name: '平面图.png', previewUrl: '/p2', downloadUrl: '/d2' },
   ],
-  links: [{ type: 'writeback', nodeId: 'out1', nodeLabel: '验收输出', url: 'https://feishu.example/doc' }],
   processFiles: [
     { nodeId: 'n1', nodeLabel: 'A1 底稿', name: '事实底稿.md', previewUrl: '/p3' },
     { nodeId: 'n2', nodeLabel: 'A3 核查', name: 'so1.html', previewUrl: '/p4' },
@@ -36,7 +35,7 @@ assert.deepEqual(model.nodes.map((n) => n.nodeLabel), ['A1 底稿', 'A3 核查']
 assert.equal(model.finals.docs.length, 2);
 assert.equal(model.finals.docs[0].kind, 'doc');
 assert.equal(model.finals.docs[1].kind, 'image');
-assert.equal(model.finals.links[0].url, 'https://feishu.example/doc');
+assert.deepEqual(model.finals.links, []);
 
 // —— kind 分发 ——
 assert.equal(fileKind({ name: 'a.MD' }), 'doc');

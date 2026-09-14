@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  OutputContractError, createOutputEnvelope, mergeExecutionResults, normalizeExecutionResult, toJsonSafe,
+  OutputContractError, createOutputEnvelope, normalizeExecutionResult, toJsonSafe,
 } from '../lib/output-contract.js';
 import { renderTemplate, validateTemplate } from '../lib/template.js';
 import { buildVariableSchema } from '../lib/variable-schema.js';
@@ -118,13 +118,12 @@ await test('JSON envelope 拒绝不可持久化值并深克隆', () => {
   assert.throws(() => toJsonSafe(circular), /循环引用/);
 });
 
-await test('normalize 与 sink merge 保留机器值且过滤保留字段', () => {
-  const base = normalizeExecutionResult({ output: 'text', data: { id: 1 }, status: 'evil', trace: ['ok'] });
-  const merged = mergeExecutionResults(base, { output: 'text+sink', chars: 999, writeback: { ok: true } });
-  assert.deepEqual(merged.structuredOutput.value, { id: 1 });
-  assert.equal(merged.extra.status, undefined);
-  assert.equal(merged.extra.chars, undefined);
-  assert.deepEqual(merged.extra.writeback, { ok: true });
+await test('normalize 保留机器值且过滤保留字段', () => {
+  const normalized = normalizeExecutionResult({ output: 'text', data: { id: 1 }, status: 'evil', trace: ['ok'] });
+  assert.deepEqual(normalized.structuredOutput.value, { id: 1 });
+  assert.equal(normalized.extra.status, undefined);
+  assert.equal(normalized.extra.chars, undefined);
+  assert.deepEqual(normalized.extra.trace, ['ok']);
 });
 
 await test('变量树包含静态字段、特殊键和数组 canonical token', () => {

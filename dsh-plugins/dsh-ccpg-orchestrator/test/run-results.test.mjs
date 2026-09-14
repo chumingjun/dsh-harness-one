@@ -40,7 +40,7 @@ const baseRun = () => ({
   nodeStates: {
     input: { status: 'success' },
     agent: { status: 'success', artifacts: ['report.md'] },
-    output: { status: 'success', writeback: { ok: true, url: 'https://example.test/doc' } },
+    output: { status: 'success' },
   },
   outputs: { input: 'ticket-1', agent: 'agent result', output: 'final result' },
   structuredOutputs: {
@@ -100,7 +100,7 @@ await test('run results use output nodes as final results and include every runt
   assert.deepEqual(result.processArtifacts.map((item) => item.id), ['a1']);
   assert.equal(Object.hasOwn(result.artifacts[0], 'snapshot'), false);
   assert.equal(Object.hasOwn(result.artifacts[0], 'relativePath'), false);
-  assert.equal(result.links[0].url, 'https://example.test/doc');
+  assert.deepEqual(result.links, []);
 });
 
 await test('usage passes through per node and totals across nodes; absent stays undefined (≠ 0)', () => {
@@ -113,7 +113,7 @@ await test('usage passes through per node and totals across nodes; absent stays 
         model: 'provider-a:model-x',
         usage: { inputTokens: 100, outputTokens: 40, cacheReadTokens: 900, cacheWriteTokens: 60 },
       },
-      output: { status: 'success', writeback: { ok: true }, usage: { inputTokens: 5, outputTokens: 2 } },
+      output: { status: 'success', usage: { inputTokens: 5, outputTokens: 2 } },
     },
   });
   const result = createRunResults(run);

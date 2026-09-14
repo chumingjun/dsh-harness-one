@@ -1,5 +1,5 @@
 // 图执行引擎 v2：从 index.js 拆出的可独立测试核心。
-import { RUN_SCHEMA_VERSION, mergeExecutionResults, normalizeExecutionResult } from './output-contract.js';
+import { RUN_SCHEMA_VERSION, normalizeExecutionResult } from './output-contract.js';
 import { parseTemplate } from './template-parser.js';
 import { validateTemplate } from './template.js';
 import { getAgentOutputConfig } from './agent-schema.js';
@@ -51,7 +51,6 @@ function waitWithAbort(ms, signal) {
 //                        ctx = {node, s, engine, signal, emit, render(tpl, node)}
 //   kind.edgeTaken       可选。(s, node, edge) => boolean，控制分支边是否放行
 //   kind.lint            可选。(node, lintCtx) => issues[]（{level:'error'|'warn', message}）
-//   kind.wantsSink       可选。true = 成功后调用 engine.outputSink（输出写回等后处理）
 //   kind.templateLintFields 可选。(node) => string[]，额外纳入模板静态检查的字段（默认只查 text/inputTemplate/url/headers/body）
 // 新增节点类型：export const myKind = {...}; registerKind(myKind) —— 引擎/
 // 超时/取消/失败传播/历史持久化全部自动获得。
@@ -90,7 +89,6 @@ export class Orchestrator {
     this.renderTemplate = renderTemplate;
     this.nodeRunner = null; // index.js 注入：async (node, run, s, {signal, emit}) => ({output, ...extra})
     this.scriptRunner = null; // index.js 注入：async ({node,input,signal}) => ({value,artifacts,...})
-    this.outputSink = null; // index.js 注入：async (node, output, {signal}) => ({output, ...extra}) 输出节点后处理（飞书写回等）
     this.runChildWorkflow = null; // index.js 注入：同步启动并等待子工作流
     this.onCancel = null; // index.js 注入：父运行取消时传播到子运行
     this.resolveNodeTimeout = null; // index.js 注入：(node) => 该节点未配 timeoutSec 时的默认超时秒；空 = 内置 NODE_TIMEOUT_MS
@@ -349,12 +347,6 @@ export class Orchestrator {
         throw timeoutError;
       }
       if (run.canceled) throw new Error('运行已取消');
-      // 输出后处理（飞书写回等）：sink 结果增量合并，保留原节点 data/meta/extra。
-      if (kind?.wantsSink && this.outputSink) {
-        result = mergeExecutionResults(result, await this.outputSink(node, result.output, {
-          signal: ac.signal, structuredOutput: result.structuredOutput,
-        }));
-      }
       output = result.output;
       extra = result.extra;
       run.outputs[node.id] = output;
@@ -607,7 +599,6 @@ registerKind({
 
 export const outputKind = registerKind({
   type: 'output',
-  wantsSink: true,
   async execute({ node, engine, render, s }) {
     const rendered = render(node.data?.inputTemplate || '');
     return rendered.text || `【输出汇总】\n${engine.renderTemplate('{{$upstream}}', engine.templateCtx(node, s)).text || '(无上游输入)'}`;

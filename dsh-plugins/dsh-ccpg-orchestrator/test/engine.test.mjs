@@ -355,23 +355,6 @@ await test('lint：模板引用缺失/空提示词/孤立输出可检出', () =>
   assert.match(msgs, /没有上游连线/);
 });
 
-await test('outputSink：输出节点后处理被调用并可改写输出', async () => {
-  const { orch } = makeOrch(async () => ({ output: 'x' }));
-  let sinkCalled = false;
-  orch.outputSink = async (node, output) => {
-    sinkCalled = true;
-    assert.equal(node.type, 'output');
-    return { output: `${output}+SINK`, writeback: { ok: true } };
-  };
-  const run = await orch.run({
-    nodes: [{ id: 'out', type: 'output', data: { label: '输出' } }],
-    edges: [],
-  });
-  assert.ok(sinkCalled);
-  assert.ok(run.outputs.out.includes('+SINK'));
-  assert.deepEqual(run.nodeStates.out.writeback, { ok: true });
-});
-
 await test('HTTP 节点：真实请求本地服务（allowPrivate 放行）', async () => {
   // 起一个一次性 HTTP 服务
   const srv = (await import('node:http')).createServer((req, res) => {
@@ -598,17 +581,6 @@ await test('运行结果保留字符串输出并写入 v2 structured envelope', 
   assert.equal(run.schemaVersion, 2);
   assert.equal(run.outputs.a, 'agent text');
   assert.deepEqual(run.structuredOutputs.a, { version: 1, type: 'json', value: { ticket: 42 } });
-});
-
-await test('sink merge 保留结构值与 extra，且不能覆盖引擎保留字段', async () => {
-  const { orch } = makeOrch(null);
-  orch.outputSink = async (_node, output) => ({ output: `${output}!`, status: 'evil', chars: 999, writeback: { ok: true } });
-  const run = await orch.run({ nodes: [{ id: 'out', type: 'output', data: { label: 'O' } }], edges: [] });
-  assert.equal(run.nodeStates.out.status, 'success');
-  assert.equal(run.nodeStates.out.chars, run.outputs.out.length);
-  assert.deepEqual(run.nodeStates.out.writeback, { ok: true });
-  assert.equal(run.structuredOutputs.out.type, 'text');
-  assert.equal(run.structuredOutputs.out.value, run.outputs.out);
 });
 
 await test('input 不重复注入 trigger 和隐式 upstream', async () => {

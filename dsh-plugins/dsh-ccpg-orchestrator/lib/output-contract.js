@@ -115,25 +115,7 @@ export function normalizeExecutionResult(result, defaults = {}) {
   return { output, structuredOutput: found.envelope, extra, explicitEnvelope: found.explicit };
 }
 
-export function mergeExecutionResults(baseResult, patchResult) {
-  const base = baseResult?.structuredOutput ? baseResult : normalizeExecutionResult(baseResult);
-  if (patchResult == null) return base;
-  const patch = normalizeExecutionResult(patchResult, { output: base.output });
-  let structuredOutput = patch.explicitEnvelope ? patch.structuredOutput : base.structuredOutput;
-  if (!patch.explicitEnvelope && structuredOutput.type === 'text') {
-    structuredOutput = createOutputEnvelope(patch.output, {
-      type: 'text', mediaType: structuredOutput.mediaType, schema: structuredOutput.schema,
-    });
-  }
-  return {
-    output: patch.output,
-    structuredOutput,
-    extra: { ...base.extra, ...patch.extra },
-    explicitEnvelope: base.explicitEnvelope || patch.explicitEnvelope,
-  };
-}
-
-const NODE_META_ALLOWLIST = ['status', 'chars', 'durationMs', 'model', 'runtime', 'turns', 'usage', 'writeback', 'notification', 'toleratedError', 'errorCode', 'childRunId', 'childWorkflowId', 'childStatus', 'childSummary', 'childArtifacts'];
+const NODE_META_ALLOWLIST = ['status', 'chars', 'durationMs', 'model', 'runtime', 'turns', 'usage', 'notification', 'toleratedError', 'errorCode', 'childRunId', 'childWorkflowId', 'childStatus', 'childSummary', 'childArtifacts'];
 
 export function safeNodeStateMeta(state = {}) {
   return Object.fromEntries(NODE_META_ALLOWLIST.filter((key) => state[key] !== undefined).map((key) => [key, state[key]]));

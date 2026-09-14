@@ -373,8 +373,6 @@ export function createRunResults(value, { apiBase = '/wf1/api', sessionId = '' }
   const links = [];
   for (const row of outputResults) {
     for (const link of extractHttpLinks(row.output)) links.push({ ...link, nodeId: row.nodeId, nodeLabel: row.nodeLabel });
-    const url = run.nodeStates[row.nodeId]?.writeback?.url;
-    if (url) links.push({ type: 'writeback', nodeId: row.nodeId, nodeLabel: row.nodeLabel, url: String(url) });
   }
   const issues = [
     ...(Array.isArray(run.issues) ? run.issues : []),

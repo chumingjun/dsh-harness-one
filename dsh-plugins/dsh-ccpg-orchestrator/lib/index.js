@@ -50,7 +50,6 @@ import {
   structuredOutputInstruction,
   validateStructuredOutputWithRepair,
 } from './agent-schema.js';
-import { FeishuClient } from './feishu.js';
 import { createFeishuNotificationChannel } from './notification-feishu.js';
 import { collectInstallReport, compareSemver, executePlan, planUpgrade, PACKAGE as UPGRADE_PACKAGE } from './system-upgrade.js';
 import { NotificationChannelRegistry, WorkflowNotificationManager, summarizeNotificationText } from './notifications.js';
@@ -2118,33 +2117,6 @@ export function apply(ctx, config) {
     json(res, 200, { started: true, runId });
   } });
 
-  // ---- 输出节点飞书写回（outputSink）：按节点所选凭据（画布配置 > env 兜底）----
-  orch.outputSink = async (node, output) => {
-    const wb = node.data?.writeback;
-    if (!wb || wb.type === 'none') return { output };
-    const cred = getFeishuCredOrEnv(node.data?.feishuCredId);
-    if (!cred) {
-      return { output: `${output}\n\n（飞书写回跳过：未配置飞书应用凭据，可在画布右上「设置」添加）`, writeback: 'skipped' };
-    }
-    const feishu = new FeishuClient({ appId: cred.appId, appSecret: cred.appSecret });
-    try {
-      let token = wb.targetToken || '';
-      let docUrl = token ? `https://feishu.cn/docx/${token}` : '';
-      if (!token) {
-        const created = await feishu.createDoc(wb.docTitle || `${node.data?.label || '输出'} ${new Date().toISOString().slice(0, 16)}`);
-        token = created.token;
-        docUrl = created.url;
-      }
-      const paras = await feishu.appendDoc(token, output);
-      return {
-        output: `${output}\n\n（已写入飞书文档：${docUrl}）`,
-        writeback: { ok: true, url: docUrl, paragraphs: paras },
-      };
-    } catch (e) {
-      return { output: `${output}\n\n（飞书写回失败：${String(e.message || e)}）`, writeback: { ok: false, error: String(e.message || e) } };
-    }
-  };
-
   // ---- 飞书凭据管理（画布配置，多套，掩码返回）----
   register({ kind: 'exact', path: '/wf1/api/feishu-credentials', async handler(req, res) {
     if (req.method === 'GET') {
@@ -2239,7 +2211,7 @@ export function apply(ctx, config) {
     try {
       const kind = getKind(node.type);
       if (kind) {
-        // 真实执行（agent 会流式推 agent-progress；输出节点 wantsSink 在试运行中跳过写回）
+        // 真实执行（agent 会流式推 agent-progress）
         const r = await kind.execute({
           node, s: orchLike, engine: orchLike,
           signal: testAbort.signal, emit: broadcast, runId,
