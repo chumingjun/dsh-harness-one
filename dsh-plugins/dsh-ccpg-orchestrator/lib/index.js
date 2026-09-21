@@ -1758,10 +1758,11 @@ export function apply(ctx, config) {
 
   register({ kind: 'exact', path: '/wf1/api/graph', async handler(req, res) {
     if (req.method === 'GET') {
+      // 全新工作区（无草稿图）或文件损坏 → 空画布；首载引导交给前端模板库
       const graphFile = currentStore().graphFile;
-      if (!existsSync(graphFile)) return json(res, 200, defaultGraph());
+      if (!existsSync(graphFile)) return json(res, 200, { nodes: [], edges: [] });
       try { return json(res, 200, JSON.parse(readFileSync(graphFile, 'utf8'))); }
-      catch { return json(res, 200, defaultGraph()); }
+      catch { return json(res, 200, { nodes: [], edges: [] }); }
     }
     if (req.method === 'PUT') {
       const body = await readBody(req);
@@ -1771,12 +1772,6 @@ export function apply(ctx, config) {
       atomicJson(currentStore().graphFile, body);
       return json(res, 200, { ok: true });    }
     json(res, 405, { error: 'method' });
-  } });
-
-  register({ kind: 'exact', path: '/wf1/api/graph/reset', async handler(req, res) {
-    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
-    atomicJson(currentStore().graphFile, defaultGraph());
-    json(res, 200, { ok: true });
   } });
 
   register({ kind: 'exact', path: '/wf1/api/global-variables', async handler(req, res) {
@@ -3979,37 +3974,6 @@ async function skillIndexPromptSafe(ids) {
     if (!lines.length) return null;
     return `本节点指定优先使用以下技能（用 skill 工具加载规范后按规范执行）：\n${lines.join('\n')}`;
   } catch { return null; }
-}
-
-function defaultGraph() {
-  return {
-    nodes: [
-      {
-        id: 'n_input', type: 'input', position: { x: 60, y: 220 },
-        data: {
-          label: '报修单输入',
-          text: '3栋2单元501室 张先生 13800001111：厨房水槽下水缓慢已有三天，偶尔返味，希望尽快上门查看。',
-          attachments: [],
-        },
-      },
-      {
-        id: 'n_agent1', type: 'agent', position: { x: 380, y: 100 },
-        data: {
-          label: '工单整理',
-          prompt: '你是物业客服助手。把上游的报修信息整理为规范工单，写成 gongdan.md 落盘：提取报修人、联系方式、位置、故障描述、紧急程度（低/中/高）。',
-          tools: [],
-        },
-      },
-      {
-        id: 'n_output', type: 'output', position: { x: 720, y: 230 },
-        data: { label: '工单输出' },
-      },
-    ],
-    edges: [
-      { id: 'e1', source: 'n_input', target: 'n_agent1' },
-      { id: 'e3', source: 'n_agent1', target: 'n_output' },
-    ],
-  };
 }
 
 // ---------------- 版本中心辅助 ----------------
