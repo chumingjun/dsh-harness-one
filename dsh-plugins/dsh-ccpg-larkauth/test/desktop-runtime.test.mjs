@@ -12,6 +12,7 @@ import {
 } from '../lib/lark-auth.js';
 
 const PLACEHOLDER_YAML = `packages:\n  - .\n\nallowBuilds:\n  '@larksuite/cli': set this to true or false\n`;
+const FALSE_YAML = `packages:\n  - .\n\nallowBuilds:\n  '@larksuite/cli': false\n`;
 
 function completedHandle({ stdout = '', stderr = '', exitCode = 0, signal = null, beforeDone } = {}) {
   const out = new PassThrough();
@@ -105,32 +106,65 @@ try {
   await pending.dispose();
   assert.equal((await running).ok, false);
 
-  // pnpm ignores the CLI postinstall: repair the profile config and let install download the binary.
-  const healDir = mkdtempSync(join(tmpdir(), 'wf1-desktop-heal-'));
+  // pnpm 拦截 CLI postinstall（yaml 写成占位符或 false）：修复 profile 配置并让 install 下载二进制。
+  for (const blockedYaml of [PLACEHOLDER_YAML, FALSE_YAML]) {
+    const healDir = mkdtempSync(join(tmpdir(), 'wf1-desktop-heal-'));
+    try {
+      writeFileSync(join(healDir, 'package.json'), JSON.stringify({ name: 'heal', dependencies: { '@larksuite/cli': LARK_CLI_VERSION } }));
+      writeFileSync(join(healDir, 'pnpm-workspace.yaml'), blockedYaml);
+      let installRuns = 0;
+      const healed = createDesktopLarkCliRuntime({
+        profileDir: healDir,
+        desktopPnpm: { run(args) {
+          if (args[0] === 'install') {
+            installRuns += 1;
+            writeProfileCli(healDir);
+          }
+          return completedHandle();
+        } },
+      });
+      assert.equal(healed.available(), false);
+      assert.equal((await healed.install()).ok, true);
+      assert.equal(installRuns, 1);
+      assert.equal(healed.available(), true);
+      assert.match(readFileSync(join(healDir, 'pnpm-workspace.yaml'), 'utf8'), /'@larksuite\/cli': true/);
+      const status = await larkAuthStatus(healed);
+      assert.equal(status.appId, 'cli_app');
+      await healed.dispose();
+    } finally {
+      rmSync(healDir, { recursive: true, force: true });
+    }
+  }
+
+  // add/install 都“成功”但二进制始终未落盘：返回明确中文错误，而不是让 available()
+  // 永远 false、所有授权动作笼统报「本机未安装 lark-cli」。
+  const stuckDir = mkdtempSync(join(tmpdir(), 'wf1-desktop-stuck-'));
   try {
-    writeFileSync(join(healDir, 'package.json'), JSON.stringify({ name: 'heal', dependencies: { '@larksuite/cli': LARK_CLI_VERSION } }));
-    writeFileSync(join(healDir, 'pnpm-workspace.yaml'), PLACEHOLDER_YAML);
-    let installRuns = 0;
-    const healed = createDesktopLarkCliRuntime({
-      profileDir: healDir,
+    const stuckPkg = join(stuckDir, 'package.json');
+    writeFileSync(stuckPkg, JSON.stringify({ name: 'stuck', dependencies: {} }));
+    writeFileSync(join(stuckDir, 'pnpm-workspace.yaml'), FALSE_YAML);
+    let stuckRuns = 0;
+    const stuck = createDesktopLarkCliRuntime({
+      profileDir: stuckDir,
       desktopPnpm: { run(args) {
-        if (args[0] === 'install') {
-          installRuns += 1;
-          writeProfileCli(healDir);
+        stuckRuns += 1;
+        if (args[0] === 'add') {
+          const pkg = JSON.parse(readFileSync(stuckPkg, 'utf8'));
+          pkg.dependencies['@larksuite/cli'] = LARK_CLI_VERSION;
+          writeFileSync(stuckPkg, JSON.stringify(pkg));
         }
-        return completedHandle();
+        return completedHandle(); // pnpm 一切正常，但二进制从未出现
       } },
     });
-    assert.equal(healed.available(), false);
-    assert.equal((await healed.install()).ok, true);
-    assert.equal(installRuns, 1);
-    assert.equal(healed.available(), true);
-    assert.match(readFileSync(join(healDir, 'pnpm-workspace.yaml'), 'utf8'), /'@larksuite\/cli': true/);
-    const status = await larkAuthStatus(healed);
-    assert.equal(status.appId, 'cli_app');
-    await healed.dispose();
+    const stuckResult = await stuck.install();
+    assert.equal(stuckResult.ok, false);
+    assert.match(stuckResult.error, /二进制下载失败（构建许可或网络）/);
+    assert.equal(stuckRuns, 2, 'add 成功但二进制缺失时应补跑一次 install');
+    assert.equal(stuck.available(), false);
+    assert.match(readFileSync(join(stuckDir, 'pnpm-workspace.yaml'), 'utf8'), /'@larksuite\/cli': true/);
+    await stuck.dispose();
   } finally {
-    rmSync(healDir, { recursive: true, force: true });
+    rmSync(stuckDir, { recursive: true, force: true });
   }
 
   console.log('desktop lark runtime: ok');
