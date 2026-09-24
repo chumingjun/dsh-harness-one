@@ -13,7 +13,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const NPM_GLOBAL = join(homedir(), '.local', 'npm-global');
-export const LARK_CLI_VERSION = '1.0.89';
+export const LARK_CLI_VERSION = '1.0.96';
 const MAX_OUTPUT = 64 * 1024;
 
 const CANDIDATES = [
@@ -293,17 +293,18 @@ export function ensureSkillFiles({ log, installOfficial = true } = {}) {
   return written;
 }
 
-// pnpm 11 忽略 @larksuite/cli 的 postinstall 时，会把占位值写进 profile 的
-// pnpm-workspace.yaml（allowBuilds.'@larksuite/cli': set this to true or false）。
-// 占位符不是合法 boolean，后续每次 pnpm exec 都因 ignored-builds 失败（Desktop 的
-// pnpm 服务强制 CI=true，报错被吞只剩 exit=1）。检测到就替换为 true：lark-cli 的
-// postinstall 只下载官方二进制，可信。
-function repairAllowBuildsPlaceholder(profileDir) {
+// pnpm v10/11 默认拦截 @larksuite/cli 的 postinstall，会把占位值或 false 写进
+// profile 的 pnpm-workspace.yaml（allowBuilds.'@larksuite/cli'），二进制永远不下载，
+// 且后续每次 pnpm exec 都因 ignored-builds 失败（Desktop 的 pnpm 服务强制 CI=true，
+// 报错被吞只剩 exit=1）。检测到就统一改为 true：lark-cli 的 postinstall 只下载
+// 官方二进制且带校验和，可信。
+function ensureAllowBuilds(profileDir) {
   const file = join(profileDir, 'pnpm-workspace.yaml');
-  const PLACEHOLDER = "'@larksuite/cli': set this to true or false";
   try {
     const before = readFileSync(file, 'utf8');
-    const after = before.replace(PLACEHOLDER, "'@larksuite/cli': true");
+    const after = before
+      .replace("'@larksuite/cli': set this to true or false", "'@larksuite/cli': true")
+      .replace("'@larksuite/cli': false", "'@larksuite/cli': true");
     if (after === before) return false;
     writeFileSync(file, after);
     return true;
@@ -438,13 +439,18 @@ export function createDesktopLarkCliRuntime({ desktopPnpm, profileDir, version =
       if (available()) return Promise.resolve({ ok: true, already: true, target });
       if (installing) return installing;
       installing = (async () => {
-        const repaired = repairAllowBuildsPlaceholder(profileDir);
-        const result = await runPnpm(['add', '--save-exact', target], { timeoutMs: 300000 });
-        // add 完成但二进制不在（postinstall 被 pnpm 忽略/占位符拦截）时补 install。
+        ensureAllowBuilds(profileDir);
+        // 49MB 官方二进制走 GitHub/npmmirror，国内链路常见慢下载，超时放宽到 15 分钟
+        const result = await runPnpm(['add', '--save-exact', target], { timeoutMs: 900000 });
+        // add 完成但二进制不在（postinstall 被 pnpm 拦截，或 add 把 pnpm-workspace.yaml
+        // 重置回占位符/false）时补一次许可修复 + install。
         if (result.ok && !binReady()) {
-          await runPnpm(['install'], { timeoutMs: 300000 });
+          ensureAllowBuilds(profileDir);
+          await runPnpm(['install'], { timeoutMs: 900000 });
         }
-        return { ...result, target, ...(repaired ? { repairedAllowBuilds: true } : {}) };
+        if (binReady()) return { ...result, ok: true, target };
+        const detail = result.ok === false && result.error ? `：${result.error}` : '';
+        return { ok: false, target, error: `lark-cli 二进制下载失败（构建许可或网络），请稍后重试自动安装${detail}` };
       })().finally(() => { installing = null; });
       return installing;
     },
