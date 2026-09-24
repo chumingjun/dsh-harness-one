@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import {
   AGGREGATE,
+  clip,
   collectInstallReport,
   compareSemver,
   executePlan,
@@ -11,6 +13,7 @@ import {
   LEGACY_PACKAGES,
   PACKAGE,
   planUpgrade,
+  PNPM_LAX_PEERS,
   SIDEBAR,
 } from '../lib/system-upgrade.js';
 
@@ -286,11 +289,127 @@ console.log('system-upgrade tests:');
       const up = calls.find((c) => c[4] === 'up');
       assert.ok(up, '在装用户用 up 原地更新');
       assert.equal(up[5], `${PACKAGE}@0.8.0`);
+      assert.ok(up.includes(PNPM_LAX_PEERS), 'CLI 路径显式放宽 strict-peer-dependencies（Desktop 强制 CI=true）');
       assert.ok(!calls.some((c) => c[4] === 'remove'), 'up 路径不 remove 任何包');
       assert.ok(calls.some((c) => c[4] === 'add' && String(c[5] || '').startsWith(SIDEBAR)), '纯净安装兜底：依赖表无 sidebar 时补 add 注册 bundle');
     } finally {
       rmSync(root2, { recursive: true, force: true });
     }
+  });
+
+  await test('executePlan：Desktop 受管 profile 的 up 走 desktopPnpm 服务，不 spawn dsh CLI', async () => {
+    const rootD = mkdtempSync(join(tmpdir(), 'ccpg-sysupd-desk-'));
+    try {
+      const pdir = join(rootD, 'desktop');
+      mkdirSync(pdir, { recursive: true });
+      const manifestFile = join(pdir, 'package.json');
+      writeFileSync(manifestFile, JSON.stringify({
+        name: 'dsh-profile-desktop', dependencies: { [PACKAGE]: '0.11.0' },
+        dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', PACKAGE] } },
+      }));
+      const plan = planUpgrade(collectInstallReport({ profilesRoot: rootD }));
+      assert.equal(plan.actions[0].type, 'npm-reinstall');
+      const serviceCalls = [];
+      const cliCalls = [];
+      const depsState = new Map([[PACKAGE, '0.11.0']]);
+      const desktopPnpm = {
+        run(args) {
+          serviceCalls.push([...args]);
+          if (args[0] === 'add' && args[1].startsWith(PACKAGE)) depsState.set(PACKAGE, args[1].split('@').pop());
+          if (args[0] === 'add' && args[1] === SIDEBAR) depsState.set(SIDEBAR, '0.0.0');
+          updateDeps(manifestFile, depsState); // 真实 pnpm 只动 dependencies，保留其余字段
+          return serviceHandle();
+        },
+      };
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '0.11.2' } }) });
+      try {
+        const log = await executePlan(plan, {
+          dshBin: '/fake/dsh',
+          desktopPnpm,
+          desktopProfile: { name: 'desktop', dir: pdir },
+          runCmd: async (cmd, args) => { cliCalls.push([cmd, ...args]); return { ok: true, out: '', err: null }; },
+        });
+        assert.ok(!cliCalls.some((c) => c[0] === '/fake/dsh'), 'desktop profile 绝不 spawn dsh CLI（会被硬拒）');
+        assert.deepEqual(serviceCalls[0], ['add', `${PACKAGE}@0.11.2`, '--save-exact', PNPM_LAX_PEERS]);
+        assert.ok(serviceCalls.some((c) => c[0] === 'add' && c[1] === SIDEBAR), 'sidebar 兜底也走服务');
+        const after = JSON.parse(readFileSync(manifestFile, 'utf8'));
+        assert.ok(after.dsh.profile.bundles.includes(SIDEBAR), 'bundles 自行维护：sidebar 补登记');
+        assert.ok(log.some((l) => l.includes('Desktop 受管 pnpm')), '日志标注受管通道');
+        assert.match(log.at(-1), /DSH Desktop/);
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    } finally {
+      rmSync(rootD, { recursive: true, force: true });
+    }
+  });
+
+  await test('executePlan：Desktop 受管 profile 的迁移走服务并自行维护 bundles 清单', async () => {
+    const rootM = mkdtempSync(join(tmpdir(), 'ccpg-sysupd-deskm-'));
+    try {
+      const pdir = join(rootM, 'desktop');
+      const legacyAgg = LEGACY_PACKAGES.at(-1); // dsh-ccpg-one
+      mkdirSync(join(pdir, 'node_modules', legacyAgg, 'bin'), { recursive: true });
+      writeFileSync(join(pdir, 'node_modules', legacyAgg, 'bin', 'install.js'), '// fixture\n');
+      const manifestFile = join(pdir, 'package.json');
+      const depsState = new Map([[legacyAgg, '0.3.0']]);
+      const flush = () => {
+        const m = JSON.parse(readFileSync(manifestFile, 'utf8'));
+        m.dependencies = Object.fromEntries(depsState);
+        writeFileSync(manifestFile, JSON.stringify(m));
+      };
+      writeFileSync(manifestFile, JSON.stringify({
+        name: 'dsh-profile-desktop', dependencies: Object.fromEntries(depsState),
+        dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', legacyAgg] } },
+      }));
+      const plan = planUpgrade(collectInstallReport({ profilesRoot: rootM }));
+      assert.equal(plan.actions[0].type, 'npm-migrate');
+      const serviceCalls = [];
+      const cliCalls = [];
+      const desktopPnpm = {
+        run(args) {
+          serviceCalls.push([...args]);
+          if (args[0] === 'add') depsState.set(PACKAGE, '0.11.2');
+          if (args[0] === 'remove') depsState.delete(args[1]);
+          flush();
+          return serviceHandle();
+        },
+      };
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '0.11.2' } }) });
+      try {
+        const log = await executePlan(plan, {
+          dshBin: '/fake/dsh',
+          desktopPnpm,
+          desktopProfile: { name: 'desktop', dir: pdir },
+          runCmd: async (cmd, args) => { cliCalls.push([cmd, ...args]); return { ok: true, out: '', err: null }; },
+        });
+        assert.ok(!cliCalls.some((c) => c[0] === '/fake/dsh'), 'desktop profile 绝不 spawn dsh CLI');
+        const addIdx = serviceCalls.findIndex((c) => c[0] === 'add' && c[1]?.startsWith(PACKAGE));
+        const rmIdx = serviceCalls.findIndex((c) => c[0] === 'remove');
+        assert.ok(addIdx >= 0 && rmIdx > addIdx, '先装新包再拆旧包');
+        assert.ok(serviceCalls.some((c) => c[0] === 'remove' && c[1] === legacyAgg), '老聚合包经服务移除');
+        const after = JSON.parse(readFileSync(manifestFile, 'utf8'));
+        assert.ok(after.dsh.profile.bundles.includes(PACKAGE), 'bundles 补登记新包');
+        assert.ok(!after.dsh.profile.bundles.includes(legacyAgg), 'bundles 摘除老包');
+        assert.ok(log.some((l) => l.includes('迁移完成')));
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    } finally {
+      rmSync(rootM, { recursive: true, force: true });
+    }
+  });
+
+  await test('clip：长输出保头保尾（错误集中在输出末尾）', () => {
+    assert.equal(clip(''), '（无输出）');
+    assert.equal(clip('short'), 'short');
+    const long = `${'x'.repeat(500)}\nERR_PNPM_PEER_CONFLICT`;
+    const clipped = clip(long);
+    assert.ok(clipped.startsWith('x'), '保留头部定位命令');
+    assert.ok(clipped.endsWith('ERR_PNPM_PEER_CONFLICT'), '保留尾部定位原因');
+    assert.ok(clipped.length < 400, '总长受控');
   });
 
   await test('executePlan：迁移中途 add 失败则保留老包（可重试）', async () => {
@@ -337,4 +456,24 @@ function writePkg(dir, version) {
   mkdirSync(dir, { recursive: true });
   const name = dir.split(/[\\/]/).pop();
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version }));
+}
+
+// desktopPnpm 服务句柄（形状与 larkauth 的 desktopPnpm.run 返回一致）
+function serviceHandle({ stdout = '' } = {}) {
+  const out = new PassThrough();
+  const err = new PassThrough();
+  const done = Promise.resolve().then(() => {
+    if (stdout) out.write(stdout);
+    out.end();
+    err.end();
+    return { exitCode: 0, signal: null };
+  });
+  return { stdout: out, stderr: err, done, cancel() {} };
+}
+
+// 模拟真实 pnpm 的落表行为：只改 dependencies，保留 manifest 其余字段（含 bundles）
+function updateDeps(manifestFile, depsState) {
+  const m = JSON.parse(readFileSync(manifestFile, 'utf8'));
+  m.dependencies = Object.fromEntries(depsState);
+  writeFileSync(manifestFile, JSON.stringify(m));
 }

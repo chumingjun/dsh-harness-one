@@ -10,7 +10,7 @@
 // 不做业务判断——动作合法性全部在 planner 定型。
 
 import { execFile } from 'node:child_process';
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
@@ -18,6 +18,10 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 export const PACKAGE = 'dsh-harness-one';
 export const AGGREGATE = PACKAGE;
 export const SIDEBAR = 'dsh-better-sidebar';
+// Desktop 环境强制 CI=true，pnpm 在 CI 下把 peer 冲突升级为硬失败；升级通道显式
+// 放宽（--config.* 是 pnpm 的 universal rc-option 语法）：peer 冲突不该挡住更新。
+export const PNPM_LAX_PEERS = '--config.strict-peer-dependencies=false';
+const MAX_OUTPUT = 64 * 1024;
 // v0.5.0 之前的 8 包形态（升级器据此识别并迁移到 PACKAGE）
 export const LEGACY_PACKAGES = [
   'dsh-ccpg-tools',
@@ -245,6 +249,62 @@ export function compareSemver(a, b) {
 
 // ---------------- 执行器 ----------------
 
+// Electron（DSH Desktop）独占 profile：dsh CLI 在参数解析期无条件拒绝
+// --profile desktop（官方 bin.js 硬编码，无放行参数）。改包唯一正规通道是运行中
+// 注入的 desktopPnpm 服务（与官方 UI 自管 profile、larkauth 装 lark-cli 同源）。
+// 服务句柄形状：run(args, signal) → {stdout, stderr, done→{exitCode,signal}, cancel}。
+async function runDesktopPnpm(service, args, { timeoutMs = 15 * 60_000 } = {}) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+  let out = '';
+  let err = '';
+  let active = null;
+  try {
+    active = service.run(args, controller.signal);
+    const append = (cur, chunk) => (cur + String(chunk)).slice(-MAX_OUTPUT);
+    active.stdout?.on?.('data', (chunk) => { out = append(out, chunk); });
+    active.stderr?.on?.('data', (chunk) => { err = append(err, chunk); });
+    const outcome = await active.done;
+    return { ok: outcome.exitCode === 0 && outcome.signal == null, out: `${out}${err}`.trim() };
+  } catch (error) {
+    return { ok: false, out: `${out}${err}`.trim() || `Desktop pnpm 服务异常：${error?.message || error}` };
+  } finally {
+    clearTimeout(timer);
+    if (timedOut) active?.cancel?.();
+  }
+}
+
+// dsh plugin 的 bundles reconcile 只随 CLI 命令运行，boot 只读清单不重算；Desktop
+// 直连 pnpm 后需自行维护 dsh.profile.bundles：新包与 sidebar 在列、已移除的老包出列。
+function ensureProfileBundles(profilePath, { add = [], remove = [] } = {}) {
+  try {
+    const file = join(profilePath, 'package.json');
+    const manifest = JSON.parse(readFileSync(file, 'utf8'));
+    const bundles = new Set(manifest.dsh?.profile?.bundles || []);
+    let changed = false;
+    for (const name of add) {
+      if (!bundles.has(name)) { bundles.add(name); changed = true; }
+    }
+    for (const name of remove) {
+      if (bundles.has(name)) { bundles.delete(name); changed = true; }
+    }
+    if (!changed) return false;
+    manifest.dsh = { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles: [...bundles] } };
+    writeFileSync(file, JSON.stringify(manifest, null, 2) + '\n');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isDesktopAction(action, desktopProfile) {
+  return Boolean(
+    desktopProfile?.name
+    && String(action.profile).toLowerCase() === String(desktopProfile.name).toLowerCase(),
+  );
+}
+
 function run(cmd, args, cwd) {
   return new Promise((res) => {
     // maxBuffer 必须远超默认 1MB：build-web.sh 的 vite/npm 输出轻松超限，
@@ -259,17 +319,21 @@ async function sh(script, cwd) {
   return run('/bin/sh', ['-c', script], cwd);
 }
 
-// ✗ 日志只留关键信息（首段），整段构建输出不进 UI 横幅。
-function clip(text) {
+// ✗ 日志只留关键信息：pnpm/dsh 的错误集中在输出末尾，保头定位命令、保尾定位原因。
+export function clip(text) {
   const s = String(text || '').trim();
   if (!s) return '（无输出）';
-  return s.length > 300 ? s.slice(0, 300) + '…' : s;
+  if (s.length <= 320) return s;
+  return `${s.slice(0, 100)}…${s.slice(-220)}`;
 }
 
 // 顺序执行计划；每步产出一行日志。失败不中断整体（后续步骤按各自前置再判），
 // 但 source-pull 的任何子步失败会终止该仓库后续重建步骤。
-export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh } = {}) {
+// desktopPnpm/desktopProfile（可选）：Electron 独占 profile 的受管改包通道，
+// 命中该 profile 的 npm 动作改走服务而不 spawn dsh CLI（CLI 对 desktop 硬拒）。
+export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh, desktopPnpm = null, desktopProfile = null } = {}) {
   const log = [];
+  let sawDesktop = false;
   const push = (line) => {
     log.push(line);
     return line;
@@ -301,8 +365,10 @@ export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh } = {
       if (!orchDeps.ok) push(`  ✗ orchestrator 依赖：${clip(orchDeps.err || orchDeps.out)}`);
       else push('  ✓ orchestrator 依赖就绪');
     } else if (action.type === 'npm-migrate' || action.type === 'npm-reinstall') {
-      const dsh = dshBin || await resolveDshBin(runCmd);
-      if (!dsh) {
+      const desktop = isDesktopAction(action, desktopProfile) && desktopPnpm;
+      if (desktop) sawDesktop = true;
+      const dsh = desktop ? null : (dshBin || await resolveDshBin(runCmd));
+      if (!desktop && !dsh) {
         push('  ✗ 未找到 dsh 可执行文件');
         continue;
       }
@@ -318,12 +384,14 @@ export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh } = {
       }
       if (action.type === 'npm-migrate') {
         // 装新在前：失败则老包仍在位，可整段重试。
-        const add = await runCmd(dsh, ['plugin', '--profile', action.profile, 'add', `${PACKAGE}@${latest}`]);
+        const add = desktop
+          ? await runDesktopPnpm(desktopPnpm, ['add', `${PACKAGE}@${latest}`, '--save-exact', PNPM_LAX_PEERS])
+          : await runCmd(dsh, ['plugin', '--profile', action.profile, 'add', `${PACKAGE}@${latest}`, PNPM_LAX_PEERS]);
         if (!add.ok) {
           push(`  ✗ 安装 ${PACKAGE} 失败：${clip(add.out)}（旧安装未动，可重试）`);
           continue;
         }
-        push(`  ✓ ${PACKAGE}@${latest} 已安装`);
+        push(`  ✓ ${PACKAGE}@${latest} 已安装${desktop ? '（Desktop 受管 pnpm）' : ''}`);
         // 校验依赖表确实落了新包（reconcile 后），再拆旧——防 add 报成功但未落表。
         if (!readDep(action.profilePath, PACKAGE)) {
           push('  ⚠ 依赖表未见新包（安装异常？），保留旧包不动，请检查后重试');
@@ -332,33 +400,47 @@ export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh } = {
         // 拆旧在后：老聚合包 remove 会级联回收 7 个子包；逐个判在场再拆。
         for (const legacy of LEGACY_PACKAGES) {
           if (!readDep(action.profilePath, legacy)) continue;
-          const rm = await runCmd(dsh, ['plugin', '--profile', action.profile, 'remove', legacy]);
+          const rm = desktop
+            ? await runDesktopPnpm(desktopPnpm, ['remove', legacy])
+            : await runCmd(dsh, ['plugin', '--profile', action.profile, 'remove', legacy]);
           push(rm.ok ? `  ✓ 已移除旧包 ${legacy}` : `  ✗ 移除 ${legacy} 失败：${clip(rm.out)}（可手动 remove）`);
         }
+        if (desktop) ensureProfileBundles(action.profilePath, { add: [PACKAGE], remove: LEGACY_PACKAGES });
         push(`  ✓ 迁移完成：${PACKAGE}@${latest}`);
       } else {
         // 原地更新到 latest 精确版本，失败时旧版仍在位（pnpm 原子性），无卸载空窗。
         // pnpm up 对依赖表里没有的包是 no-op 且报成功——残局（依赖表被清）必须
         // 用 add 重新落表；在装用户用 up 原地覆盖。up 前先核依赖表，不凭 planner
-        // 快照（探测与执行之间状态可能变了）。
+        // 快照（探测与执行之间状态可能变了）。Desktop 受管通道统一用 add --save-exact
+        // 覆盖 spec（pnpm add 对在场依赖等同原地 up）。
         const currentSpec = readDep(action.profilePath, PACKAGE);
         const verb = currentSpec ? 'up' : 'add';
-        const up = await runCmd(dsh, ['plugin', '--profile', action.profile, verb, `${PACKAGE}@${latest}`]);
-        push(up.ok ? `  ✓ ${PACKAGE} → ${latest}（${verb === 'up' ? '原地更新' : '重装落表'}）` : `  ✗ ${verb} 失败：${clip(up.out)}`);
+        const up = desktop
+          ? await runDesktopPnpm(desktopPnpm, ['add', `${PACKAGE}@${latest}`, '--save-exact', PNPM_LAX_PEERS])
+          : await runCmd(dsh, ['plugin', '--profile', action.profile, verb, `${PACKAGE}@${latest}`, PNPM_LAX_PEERS]);
+        push(up.ok
+          ? `  ✓ ${PACKAGE} → ${latest}（${desktop ? 'Desktop 受管 pnpm' : verb === 'up' ? '原地更新' : '重装落表'}）`
+          : `  ✗ ${verb} 失败：${clip(up.out)}`);
+        if (desktop && up.ok) ensureProfileBundles(action.profilePath, { add: [PACKAGE] });
       }
       // sidebar bundle 注册兜底：dsh reconcile 只认 profile 直接依赖，sidebar 作为
       // 本包传递依赖即使解析到实体也不进 bundles 层——纯净安装（依赖表只有本包）
       // 官方 UI 侧栏「工作流」tab 会缺。依赖表已有 sidebar（老安装/显式装过）跳过；
       // 主动关闭走 CCPG_NO_SIDEBAR 环境变量（安装器语义），升级不再自动移除。
       if (action.bootstrapSidebar && !readDep(action.profilePath, SIDEBAR)) {
-        const sb = await runCmd(dsh, ['plugin', '--profile', action.profile, 'add', SIDEBAR]);
+        const sb = desktop
+          ? await runDesktopPnpm(desktopPnpm, ['add', SIDEBAR, '--save-exact', PNPM_LAX_PEERS])
+          : await runCmd(dsh, ['plugin', '--profile', action.profile, 'add', SIDEBAR]);
         push(sb.ok ? `  ✓ ${SIDEBAR} 已注册进 bundles（官方 UI 工作流侧栏）` : `  ⚠ better-sidebar 注册失败：${sb.out}（可手动 dsh plugin --profile ${action.profile} add ${SIDEBAR}）`);
+        if (desktop && sb.ok) ensureProfileBundles(action.profilePath, { add: [SIDEBAR] });
       }
     } else if (action.type === 'manual-overlay') {
       push(`  ${action.instruction}`);
     }
   }
-  if (plan.restartRequired) push('⚠ 改动生效需要彻底重启 dsh（HMR 缓存模块）：结束进程后重新 start.sh');
+  if (plan.restartRequired) {
+    push(`⚠ 改动生效需要彻底重启（HMR 缓存模块）：${sawDesktop ? '完全退出并重新打开 DSH Desktop 应用' : '结束进程后重新 start.sh'}`);
+  }
   return log;
 }
 
