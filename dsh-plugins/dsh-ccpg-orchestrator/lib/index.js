@@ -2777,6 +2777,13 @@ export function apply(ctx, config) {
 
   // ---- 版本中心 / 一键升级（settings「Workflow One」section 后端；无会话作用域）----
   // 探测/planner/执行都在 lib/system-upgrade.js；这里只做 HTTP 形状与并发闸。
+  // Desktop（Electron）独占 profile：dsh CLI 硬拒 --profile desktop，改包只有注入的
+  // desktopPnpm 服务可用（与 larkauth 同源）；普通 dsh 无该服务，继续走 CLI。
+  const desktopProfiles = ctx.get?.('desktopProfiles');
+  let desktopPnpm = null;
+  if (desktopProfiles) {
+    ctx.inject(['desktopPnpm'], (desktopCtx) => { desktopPnpm = desktopCtx.desktopPnpm; });
+  }
   let upgradeRunning = false;
   register({ kind: 'exact', path: '/wf1/api/system/info', handler(_req, res) {
     json(res, 200, { ok: true, selfVersion: selfPluginVersion(), profiles: collectInstallReport() });
@@ -2817,7 +2824,7 @@ export function apply(ctx, config) {
     const startedAt = Date.now();
     try {
       const plan = planUpgrade(collectInstallReport());
-      const log = await executePlan(plan);
+      const log = await executePlan(plan, { desktopPnpm, desktopProfile: desktopProfiles?.current || null });
       return json(res, 200, {
         ok: true, actions: plan.actions.map((a) => a.title),
         warnings: plan.warnings, restartRequired: plan.restartRequired,
