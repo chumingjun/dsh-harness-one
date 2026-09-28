@@ -6,12 +6,25 @@
 //   3. 输出分块方式随版本/平台可能变 —— 必须跨 chunk 累积匹配
 import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
+import { URL as GlobalURL } from 'node:url';
 import { createDesktopLarkCliRuntime, formatCliError, larkAuthStatus, larkConfigInit, larkLoginStart } from '../lib/lark-auth.js';
 
 const URL = 'https://open.feishu.cn/page/cli?user_code=AX79-5ARL&lpv=1.0.96&ocv=1.0.96&from=cli';
 const QR = '█'.repeat(8);
+
+// 探测口径与生产 loadNodePty 一致：包名解析 + 按 node 可执行文件推导的 dsh 主安装兜底。
+// CI 的裸 node 环境两者皆无 → switch 用例降级；本机/装了 dsh 的环境全量跑
+function nodePtyAvailable() {
+  const req = createRequire(new GlobalURL('./probe.cjs', import.meta.url).href);
+  const dshPty = join(dirname(process.execPath), '..', 'lib', 'node_modules', '@deepseek-ai', 'dsh', 'node_modules', 'node-pty');
+  for (const c of ['node-pty', dshPty]) {
+    try { req(c); return true; } catch { /* 下一处候选 */ }
+  }
+  return false;
+}
 
 const OK_STATUS = '{"ok":true,"appId":"cli_app","defaultAs":"user","identities":{"user":{"available":false,"status":"none"},"bot":{"status":"unknown"}}}';
 const NOT_CONFIGURED_STATUS = '{"ok":false,"error":{"type":"config","subtype":"not_configured","message":"not configured","hint":"run lark-cli config init --new"}}';
@@ -175,12 +188,16 @@ try {
   });
 
   // 9) 更换应用：switch 模式不带 --new（CLI 走选择/绑定已有应用路径），URL 同样从 stderr 抓取
+  // switch 生产路径走伪终端向导，node-pty 由宿主注入（CI 的裸 node 环境没有）：
+  // 没有 PTY 时只保留「不带 --new」的参数断言，抓 URL 的行为由 stderr-once 主线（用例 1）覆盖
   await withProfile({
     opts: { initMode: 'stderr-once' },
     async run(runtime, dir) {
+      // 探测口径与 loadNodePty 一致：包名解析 + dsh 主安装兜底（起点为插件 lib 目录）
+      const ptyAvailable = nodePtyAvailable();
       const r = await larkConfigInit({ runtime, switchApp: true });
-      assert.equal(r.ok, true, 'switch 模式也必须抓到 URL');
-      assert.equal(r.verificationUrl, URL);
+      assert.equal(r.ok, ptyAvailable, ptyAvailable ? 'switch 模式也必须抓到 URL' : '无 PTY 环境应可读报错而非崩溃');
+      if (ptyAvailable) assert.equal(r.verificationUrl, URL);
       await runtime.dispose();
       const logged = readFileSync(join(dir, 'init-args.log'), 'utf8');
       assert.ok(!/--new/.test(logged), 'switch 模式不得带 --new（否则只会创建新应用）');
@@ -188,10 +205,11 @@ try {
   });
 
   // 10) 更换完成信号：URL 抓到后向导进程自然退出（用户在浏览器确认），onDone 必须触发；
-  //     用户可能重选同一个应用（appId 不变），完成只能靠进程退出判定
+  //     用户可能重选同一个应用（appId 不变），完成只能靠进程退出判定。无 PTY 环境跳过
   await withProfile({
     opts: { initMode: 'switch-done' },
     async run(runtime) {
+      if (!nodePtyAvailable()) { console.log('lark config init: ok（无 node-pty，用例 10 跳过）'); return; }
       let done = false;
       const r = await larkConfigInit({ runtime, switchApp: true, onDone: () => { done = true; } });
       assert.equal(r.ok, true, 'switch-done 模式必须先抓到 URL');
