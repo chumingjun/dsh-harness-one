@@ -197,10 +197,13 @@ try {
       const ptyAvailable = nodePtyAvailable();
       const r = await larkConfigInit({ runtime, switchApp: true });
       assert.equal(r.ok, ptyAvailable, ptyAvailable ? 'switch 模式也必须抓到 URL' : '无 PTY 环境应可读报错而非崩溃');
-      if (ptyAvailable) assert.equal(r.verificationUrl, URL);
-      await runtime.dispose();
-      const logged = readFileSync(join(dir, 'init-args.log'), 'utf8');
-      assert.ok(!/--new/.test(logged), 'switch 模式不得带 --new（否则只会创建新应用）');
+      if (ptyAvailable) {
+        assert.equal(r.verificationUrl, URL);
+        await runtime.dispose();
+        // 向导真跑过才有参数日志可查；无 PTY 时假 CLI 未被调起，日志不存在
+        const logged = readFileSync(join(dir, 'init-args.log'), 'utf8');
+        assert.ok(!/--new/.test(logged), 'switch 模式不得带 --new（否则只会创建新应用）');
+      }
     },
   });
 
