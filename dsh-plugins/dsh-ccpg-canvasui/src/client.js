@@ -281,10 +281,12 @@ window.__ModuleLoader__.load({
 
     function openWorkflowSidebar() {
       if (!betterSidebarRef.svc) return false;
+      // 不传 path：openTab 的 path 语义是「文件路径」，宿主会把它编码成
+      // dsh-resource://file 会话文件地址并 realpath 校验，传假路径直接 ENOENT；
+      // 自定义 tab 类型走 kind 打开即可（single:true 注册保证单实例聚焦）。
       betterSidebarRef.svc.openTab({
         type: WORKFLOW_TAB_TYPE,
         title: "工作流",
-        path: "ccpg-workflow",
       });
       return true;
     }

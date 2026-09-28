@@ -140,7 +140,7 @@ client.__test.setBetterSidebarService({
 assert.equal(client.__test.openWorkflowSidebar(), true);
 assert.deepEqual(
   opened.map((tab) => ({ ...tab })),
-  [{ type: "ccpg:workflow", title: "工作流", path: "ccpg-workflow" }],
+  [{ type: "ccpg:workflow", title: "工作流" }],
 );
 client.__test.setBetterSidebarService(null);
 assert.equal(client.__test.openWorkflowSidebar(), false);

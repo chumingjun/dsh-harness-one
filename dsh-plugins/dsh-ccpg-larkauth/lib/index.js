@@ -3,6 +3,9 @@
 // 授权后 agent 经 lark-cli 默认以用户身份（--as user）操作飞书。
 // 端点挂 /wf1/api/lark-auth（GET 状态 / POST {action}）：
 //   action=start    发起设备流 → {verificationUrl,userCode,deviceCode,expiresIn}
+//   action=init     创建/绑定飞书应用（config init）→ {verificationUrl}（应用创建是前置条件）
+//                    body.switch=true 为「更换应用」模式：不带 --new，浏览器里可选已有应用
+//   action=init-cancel  中止进行中的应用创建
 //   action=qrcode   {verificationUrl} → PNG dataURL
 //   action=poll     {deviceCode} → 阻塞至用户扫码完成（≤60s），返回新状态
 //   action=logout   清除本机 token
@@ -15,7 +18,7 @@ import z from '@deepseek-ai/schemastery';
 import {
   larkCliAvailable, larkCliInstalling, larkAuthStatus, larkLoginStart, larkLoginQrcode,
   larkLoginPoll, larkLogout, ensureLarkCli, setDefaultIdentityUser, renewUserToken,
-  ensureSkillFiles, createDesktopLarkCliRuntime, RENEW_INTERVAL_MS,
+  ensureSkillFiles, createDesktopLarkCliRuntime, larkConfigInit, RENEW_INTERVAL_MS,
 } from './lark-auth.js';
 
 export const name = 'dsh-ccpg-larkauth';
@@ -37,6 +40,19 @@ function mount(ctx, runtime, { desktop = false } = {}) {
   let first = null;
   let timer = null;
   let disposed = false;
+  // 进行中的 config init 子进程句柄（用户在浏览器完成前可随时取消；面板关闭/插件卸载时兜底清理）
+  let initCancel = null;
+  let initUrl = null;
+  // 更换应用完成时刻（向导进程自然退出）：GET status 据此告知前端「已完成，来取新状态」。
+  // 不用对比 appId——用户可能重选同一个应用，appId 不变但配置已整体重写
+  let initDoneAt = 0;
+
+  const cancelInit = () => {
+    if (!initCancel) return false;
+    try { initCancel(); } catch { /* 进程可能已退出 */ }
+    initCancel = null;
+    return true;
+  };
 
   const startRenewal = async () => {
     if (disposed || timer || !larkCliAvailable(runtime)) return;
@@ -53,7 +69,15 @@ function mount(ctx, runtime, { desktop = false } = {}) {
 
   ctx.webServer.register({ kind: 'exact', path: '/wf1/api/lark-auth', async handler(req, res) {
     if (req.method === 'GET') {
-      return json(res, 200, { ok: true, status: await larkAuthStatus(runtime) });
+      const status = await larkAuthStatus(runtime);
+      // 应用创建进行中：把已有链接回给前端，关掉面板再打开能接着扫码，不必重新创建
+      if (initCancel) return json(res, 200, { ok: true, status: { ...status, initInProgress: true, initUrl } });
+      // 向导刚自然退出（用户在浏览器完成更换）：告知前端流程已结束（含换同一应用的情况）。
+      // 信号 2 分钟内有效，首个看到它的轮询即收尾；过期视作陈旧历史，不再干扰
+      if (initDoneAt && Date.now() - initDoneAt < 120000) {
+        return json(res, 200, { ok: true, status: { ...status, initDone: true } });
+      }
+      return json(res, 200, { ok: true, status });
     }
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const body = await readBody(req);
@@ -70,6 +94,31 @@ function mount(ctx, runtime, { desktop = false } = {}) {
       return json(res, 200, { ok: false, installing: larkCliInstalling(runtime), error: `本机未安装 lark-cli（${hint}）` });
     }
     switch (body.action) {
+      case 'init': {
+        // 已有进行中的流程时默认复用旧链接（防连点建出多个应用）；
+        // 但用户显式点「重新获取链接」时必须丢弃旧进程重开，否则链接和二维码不会刷新。
+        if (initCancel && !body.refresh) {
+          return json(res, 200, { ok: true, verificationUrl: initUrl, inProgress: true });
+        }
+        cancelInit(); // 丢弃上一次未完成的应用创建（可能残留孤儿进程）
+        // switch=true 走「更换应用」：不带 --new，浏览器里可选已有应用而非强制新建
+        const r = await larkConfigInit({
+          runtime, switchApp: Boolean(body.switch),
+          // 用户在浏览器确认后向导进程自然退出：记录完成时刻并清掉「进行中」标记
+          // （cancel 句柄留着会让 GET 一直报 initInProgress，完成信号被吞）
+          onDone: body.switch
+            ? () => { initDoneAt = Date.now(); initUrl = null; initCancel = null; }
+            : undefined,
+        });
+        if (r.ok) { initUrl = r.verificationUrl; initCancel = r.cancel || null; }
+        return json(res, 200, r.ok ? { ok: true, verificationUrl: r.verificationUrl } : { ok: false, error: r.error });
+      }
+      case 'init-cancel': {
+        const cancelled = cancelInit();
+        initUrl = null;
+        initDoneAt = 0; // 用户主动取消：完成信号作废
+        return json(res, 200, { ok: true, cancelled });
+      }
       case 'start': {
         const r = await larkLoginStart({ recommend: body.recommend !== false, domain: body.domain, runtime });
         return json(res, 200, r);
@@ -87,7 +136,7 @@ function mount(ctx, runtime, { desktop = false } = {}) {
       case 'logout':
         return json(res, 200, await larkLogout(runtime));
       default:
-        return json(res, 400, { error: 'action 必须 start|qrcode|poll|logout|install|renew' });
+        return json(res, 400, { error: 'action 必须 init|init-cancel|start|qrcode|poll|logout|install|renew' });
     }
   } });
 
@@ -114,6 +163,7 @@ function mount(ctx, runtime, { desktop = false } = {}) {
       disposed = true;
       clearTimeout(first);
       clearInterval(timer);
+      cancelInit();
       await runtime?.dispose?.();
     };
   }, 'larkauth runtime');

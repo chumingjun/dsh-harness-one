@@ -11,6 +11,7 @@ import { statSync, mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync,
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const NPM_GLOBAL = join(homedir(), '.local', 'npm-global');
 export const LARK_CLI_VERSION = '1.0.96';
@@ -21,6 +22,46 @@ const CANDIDATES = [
   '/usr/local/bin/lark-cli',
   '/opt/homebrew/bin/lark-cli',
 ];
+
+// config init 输出的应用创建链接。user_code 是 XXXX-XXXX 形态的连字符串，
+// 后面还跟 lpv/ocv/from 等 query 参数，一并捕获后由调用方 trim。
+const LARK_INIT_URL_RE = /https:\/\/open\.feishu\.cn\/page\/cli\?user_code=[A-Za-z0-9-]+[^\s]*/;
+
+// lark-cli 的 bin 是个 Node wrapper，内部再拉起真正的二进制——所以它有两层进程。
+// 只结束 wrapper 会把二进制留成孤儿：config init 会一直阻塞到用户完成或超时，
+// 反复点「重新获取链接」就逐个累积僵尸。故统一走「整棵进程树一起结束」。
+const LARK_POSIX = process.platform !== 'win32';
+
+/** 收集 root 及其所有后代 pid（自底向上，先子后父，避免先杀父进程丢失父子关系） */
+function larkProcessTree(rootPid) {
+  if (!LARK_POSIX) return [rootPid];
+  try {
+    const out = spawnSync('ps', ['-o', 'pid=,ppid=', '-ax'], { encoding: 'utf8', timeout: 3000 }).stdout || '';
+    const children = new Map();
+    for (const line of out.split('\n')) {
+      const hit = line.trim().match(/^(\d+)\s+(\d+)$/);
+      if (!hit) continue;
+      const ppid = Number(hit[2]);
+      if (!children.has(ppid)) children.set(ppid, []);
+      children.get(ppid).push(Number(hit[1]));
+    }
+    const collected = [];
+    const walk = (pid) => {
+      for (const kid of children.get(pid) || []) { walk(kid); collected.push(kid); }
+    };
+    walk(rootPid);
+    return [...collected, rootPid];
+  } catch {
+    return [rootPid]; // ps 不可用则只结束自身
+  }
+}
+
+function terminateLark(child) {
+  if (!child?.pid) return;
+  for (const pid of larkProcessTree(child.pid)) {
+    try { process.kill(pid, 'SIGTERM'); } catch { /* 已退出 */ }
+  }
+}
 
 export function larkCliBin() {
   const found = CANDIDATES.find((p) => { try { return statSync(p).isFile(); } catch { return false; } });
@@ -70,6 +111,24 @@ function runtimeRun(runtime, args, options) {
   return runtime ? runtime.run(args, options) : runLocal(args, options);
 }
 
+/**
+ * lark-cli 的 error 是 {type,subtype,message,hint}，message 往往只有 "not configured"
+ * 这种天书短句，而 hint 才带可执行指引。统一优先吐 hint。
+ */
+export function formatCliError(error, fallback = '操作失败') {
+  if (!error) return fallback;
+  if (typeof error === 'string') return error.trim() || fallback;
+  const hint = typeof error.hint === 'string' ? error.hint.trim() : '';
+  const message = typeof error.message === 'string' ? error.message.trim() : '';
+  return hint || message || fallback;
+}
+
+/** CLI 的 JSON 错误体里带 subtype === 'not_configured' 表示还没绑定飞书应用 */
+function isNotConfigured(res) {
+  const e = res?.error;
+  return Boolean(e && typeof e === 'object' && e.subtype === 'not_configured');
+}
+
 export function larkCliAvailable(runtime) {
   return runtimeAvailable(runtime);
 }
@@ -79,11 +138,19 @@ export async function larkAuthStatus(runtime) {
   const runtimeKind = runtime?.kind || 'local';
   if (!runtimeAvailable(runtime)) return { installed: false, installing: larkCliInstalling(runtime), runtime: runtimeKind };
   const res = await runtimeRun(runtime, ['auth', 'status', '--json'], { timeoutMs: 15000 });
-  if (!res.ok && !res.appId) return { installed: true, error: res.error || res.raw || 'auth status 失败' };
+  if (!res.ok && !res.appId) {
+    // 未绑定飞书应用：不是「已安装待登录」，而是「扫码登录必然失败」，
+    // 前端要据此改走 config init 引导，否则用户只会看到 not configured。
+    if (isNotConfigured(res)) {
+      return { installed: true, configured: false, runtime: runtimeKind, error: formatCliError(res.error, 'not configured') };
+    }
+    return { installed: true, error: formatCliError(res.error, res.raw || 'auth status 失败') };
+  }
   const user = res.identities?.user || {};
   const bot = res.identities?.bot || {};
   return {
     installed: true,
+    configured: true,
     runtime: runtimeKind,
     appId: res.appId,
     defaultIdentity: res.defaultAs || 'auto',
@@ -106,7 +173,13 @@ export async function larkLoginStart({ recommend = true, domain, runtime } = {})
   if (domain) args.push('--domain', String(domain));
   const res = await runtimeRun(runtime, args, { timeoutMs: 20000 });
   if (!res.verification_url) {
-    return { ok: false, error: res.error?.message || res.error || res.raw || '发起登录失败' };
+    // 未配置应用时 message 只有 "not configured"，hint 才说明要先 config init
+    const needsInit = isNotConfigured(res);
+    return {
+      ok: false,
+      needsInit,
+      error: needsInit ? '尚未配置飞书应用，请先完成应用创建' : formatCliError(res.error, res.raw || '发起登录失败'),
+    };
   }
   return {
     ok: true,
@@ -115,6 +188,178 @@ export async function larkLoginStart({ recommend = true, domain, runtime } = {})
     deviceCode: res.device_code,
     expiresIn: res.expires_in || 600,
   };
+}
+
+// 更换应用：config init 不带 --new 是交互式向导（无 TTY 直接报错），必须配伪终端。
+// node-pty 由宿主提供（dsh 主安装与 DSH Desktop 都自带），插件不引依赖；
+// 通过 createRequire 以「插件自身位置 → 宿主 dsh 主安装」的解析链加载，
+// 两处都解析不到时降级为可读报错（不打断其余功能）。
+function loadNodePty() {
+  // node-pty 不是本插件的依赖，靠宿主注入：先按普通包名解析（宿主 bundle 场景），
+  // 再按「node 可执行文件同级的 dsh 主安装」物理路径兜底（独立 node 直跑场景）。
+  const req = createRequire(import.meta.url);
+  const candidates = ['node-pty'];
+  try {
+    const globalRoot = join(dirname(process.execPath), '..', 'lib', 'node_modules');
+    candidates.push(join(globalRoot, '@deepseek-ai', 'dsh', 'node_modules', 'node-pty'));
+  } catch { /* 非 node 直跑 */ }
+  for (const candidate of candidates) {
+    try { return req(candidate); } catch { /* 下一处候选 */ }
+  }
+  return null;
+}
+
+/** 从 PTY 原始输出里剥 ANSI 转义序列，供 URL 正则匹配（含 OSC 块与 CSI 参数） */
+function stripAnsi(s) {
+  return s
+    .replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '')
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, '');
+}
+
+/**
+ * 伪终端里跑交互式「config init」（不带 --new）——更换应用的入口。
+ * bin 由调用方解析（本地装在 PATH，Desktop 装在 profileDir/node_modules）。
+ *
+ * 向导菜单依次是 语言 → 一键配置应用(推荐)/手动输入凭证 → 平台 → 浏览器授权页。
+ * 三个菜单的默认项即所需路径（中文 / 一键配置 / 飞书），统一策略 =
+ * 等屏幕静止后按回车确认默认项，不做方向键选择。
+ * 浏览器页里才真正决定「选已有应用还是建新的」。
+ *
+ * 其余行为与 --new 模式一致：URL 命中即 resolve，PTY 留着等浏览器结果，
+ * cancel()/dispose() 时按进程树结束（wrapper + 二进制两层）。
+ *
+ * 用户在浏览器里点「确认」后向导进程自行退出——这是「更换完成」的权威信号
+ * （比对比 appId 可靠：用户可能重选了同一个应用，appId 不变但配置已重写）。
+ * 结果经 done 回调交付；done 不会因 cancel()/超时触发，调用方自行处理这两种路径。
+ */
+function larkConfigInitSwitchPty({ bin, cwd, timeoutMs = 60000, onDone } = {}) {
+  const Pty = loadNodePty();
+  if (!Pty) {
+    return Promise.resolve({ ok: false, error: '更换应用需要伪终端支持（node-pty），当前环境不可用；可改用「创建飞书应用」或在终端执行 lark-cli config init' });
+  }
+  return new Promise((resolve) => {
+    let proc;
+    try {
+      proc = Pty.spawn(bin, ['config', 'init'], {
+        name: 'xterm-256color', cols: 100, rows: 40, cwd: cwd || homedir(),
+        env: { ...process.env, TERM: 'xterm-256color' },
+      });
+    } catch (e) {
+      resolve({ ok: false, error: String(e.message || e) });
+      return;
+    }
+    let out = '';
+    let urlSeen = false;
+    let settled = false;
+    let answered = 0;
+    let lastLen = -1;
+    let sameCount = 0;
+    const finish = (r) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearInterval(nudge);
+      resolve(r);
+    };
+    const onData = (d) => {
+      out += d;
+      const m = stripAnsi(out.slice(-16384)).match(LARK_INIT_URL_RE);
+      if (m) {
+        urlSeen = true;
+        finish({
+          ok: true,
+          verificationUrl: m[0].trim(),
+          cancel: () => terminateLark({ pid: proc.pid }),
+        });
+      }
+    };
+    // 屏幕静止 ≥1.6s 且仍在等菜单确认 → 按回车选默认项（最多 5 屏，防失控）
+    const nudge = setInterval(() => {
+      if (settled) return;
+      if (out.length === lastLen) sameCount += 1; else { sameCount = 0; lastLen = out.length; }
+      if (sameCount >= 2 && /enter submit/.test(stripAnsi(out.slice(-1500)))) {
+        answered += 1;
+        if (answered > 5) return;
+        try { proc.write('\r'); } catch { /* 已退出 */ }
+        sameCount = 0;
+        lastLen = out.length;
+      }
+    }, 800);
+    const timer = setTimeout(() => {
+      try { terminateLark({ pid: proc.pid }); } catch { /* 已退出 */ }
+      finish({ ok: false, error: '获取应用更换链接超时，请重试' });
+    }, timeoutMs);
+    proc.onData(onData);
+    // URL 抓到后进程自然退出 = 用户在浏览器完成更换（重选同一个应用也会走到这）
+    proc.onExit(() => {
+      if (urlSeen && onDone) onDone();
+      finish({ ok: false, error: '未获取到应用更换链接，请重试' });
+    });
+  });
+}
+
+/**
+ * 创建/绑定飞书应用（lark-cli config init --new）——所有授权动作的前置条件。
+ * switchApp=true 走上面的伪终端向导（浏览器里可选已有应用或建新的）。
+ *
+ * 该命令阻塞到用户在浏览器完成应用创建为止，用户不配置就一直挂着，因此：
+ *   - URL 只能「边跑边抓」，不能等 close（等不到）
+ *   - 实测二维码与 URL 全部走 **stderr**，stdout 全空；只听 stdout 会永远抓不到
+ *   - 输出被缓冲成整块吐出，但跨 chunk 累积更稳（分块方式随版本/平台可能变）
+ *   - Windows 下输出是 CRLF，正则后必须 trim 掉 \r，否则前端 <a href> 带尾字符
+ *
+ * 返回 {ok, verificationUrl, cancel}；URL 一旦命中即 resolve，进程继续在后台等用户。
+ */
+// 用户在浏览器完成更换后向导进程退出、配置整体重写（换同一应用 appId 也不变），
+// 完成信号只能由进程退出给出——把回调透传给 PTY 实现
+export function larkConfigInit({ runtime, timeoutMs = 60000, switchApp = false, onDone } = {}) {
+  // 更换应用（交互式向导）：本地与 Desktop 都走 PTY，只是 bin 与 cwd 来源不同
+  if (switchApp) {
+    if (!runtimeAvailable(runtime)) return Promise.resolve({ ok: false, error: 'lark-cli not installed' });
+    if (runtime) return runtime.configInit({ timeoutMs, switchApp: true, onDone });
+    const bin = larkCliBin();
+    if (!bin) return Promise.resolve({ ok: false, error: 'lark-cli not installed' });
+    return larkConfigInitSwitchPty({ bin, timeoutMs, onDone });
+  }
+  if (!runtimeAvailable(runtime)) return Promise.resolve({ ok: false, error: 'lark-cli not installed' });
+  if (runtime) return runtime.configInit({ timeoutMs });
+
+  const bin = larkCliBin();
+  if (!bin) return Promise.resolve({ ok: false, error: 'lark-cli not installed' });
+
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(bin, ['config', 'init', '--new'], { detached: LARK_POSIX });
+    } catch (e) {
+      resolve({ ok: false, error: String(e.message || e) });
+      return;
+    }
+    let buf = '';
+    let settled = false;
+    const finish = (r) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(r);
+    };
+    const onData = (d) => {
+      buf = (buf + String(d)).slice(-MAX_OUTPUT);
+      const m = buf.match(LARK_INIT_URL_RE);
+      if (m) finish({ ok: true, verificationUrl: m[0].trim(), cancel: () => terminateLark(child) });
+    };
+    const timer = setTimeout(() => {
+      terminateLark(child);
+      finish({ ok: false, error: '获取应用创建链接超时，请重试' });
+    }, timeoutMs);
+    child.stdout.on('data', onData);
+    child.stderr.on('data', onData);
+    child.on('error', (e) => finish({ ok: false, error: String(e.message || e) }));
+    child.on('close', (code) => finish({
+      ok: false,
+      error: code === 0 ? '未获取到应用创建链接，请重试' : `应用创建失败（退出码 ${code}）`,
+    }));
+  });
 }
 
 /**
@@ -150,17 +395,22 @@ export async function larkLoginQrcode(verificationUrl, runtime) {
 export async function larkLoginPoll(deviceCode, runtime) {
   const res = await runtimeRun(runtime, ['auth', 'login', '--device-code', String(deviceCode), '--json'], { timeoutMs: 60000 });
   if (res.ok) {
-    await setDefaultIdentityUser(runtime); // 授权成功即固定默认身份为 user
-    const status = await larkAuthStatus(runtime);
-    return { ok: true, status };
+    // 用户此刻正盯着面板等结果：固定默认身份与取授权状态两个 CLI 往返并行跑，
+    // 确认到界面刷新能省一半时间；两者各写各的文件，无先后依赖。
+    // 万一状态读取恰好撞上配置写入的瞬间（配置没读到），补读一次即可。
+    const [, status] = await Promise.all([
+      setDefaultIdentityUser(runtime),
+      larkAuthStatus(runtime),
+    ]);
+    return { ok: true, status: (!status.configured || status.error) ? await larkAuthStatus(runtime) : status };
   }
-  return { ok: false, error: res.error?.message || res.error || res.raw || '授权未完成' };
+  return { ok: false, error: formatCliError(res.error, '授权未完成') };
 }
 
 /** 退出登录（清 token） */
 export async function larkLogout(runtime) {
   const res = await runtimeRun(runtime, ['auth', 'logout', '--json'], { timeoutMs: 20000 });
-  return { ok: Boolean(res.ok), error: res.error?.message || res.error };
+  return { ok: Boolean(res.ok), error: formatCliError(res.error) };
 }
 
 // ---------- 自动安装 ----------
@@ -196,7 +446,7 @@ export async function setDefaultIdentityUser(runtime) {
   if (!runtimeAvailable(runtime)) return { ok: false, error: 'lark-cli not installed' };
   const res = await runtimeRun(runtime, ['config', 'default-as', 'user'], { timeoutMs: 15000 });
   const ok = res.ok !== false;
-  return { ok, error: ok ? undefined : (res.error?.message || res.error || res.raw) };
+  return { ok, error: ok ? undefined : formatCliError(res.error, res.raw) };
 }
 
 // ---------- token 自动续约 ----------
@@ -317,6 +567,7 @@ export function createDesktopLarkCliRuntime({ desktopPnpm, profileDir, version =
   if (!desktopPnpm?.run || !profileDir) throw new TypeError('desktopPnpm and profileDir are required');
   const target = `@larksuite/cli@${version}`;
   let active = null;
+  let initChild = null;
   let disposed = false;
   let installing = null;
   let tail = Promise.resolve();
@@ -430,11 +681,64 @@ export function createDesktopLarkCliRuntime({ desktopPnpm, profileDir, version =
     }
   }));
 
+  /**
+   * config init 与其它命令不同：它阻塞到用户在浏览器完成应用创建为止（可能数分钟）。
+   * 刻意绕开 enqueue 队列——否则它会把 status 轮询一起堵死，前端拿不到配置完成的信号。
+   * URL 命中即 resolve，进程留在后台等用户，直到 cancel()/dispose()。
+   * switchApp=true 走伪终端向导（不带 --new，浏览器里可选已有应用）。
+   */
+  const configInit = ({ timeoutMs = 60000, switchApp = false, onDone } = {}) => {
+    if (!binReady()) return Promise.resolve({ ok: false, error: 'lark-cli not installed' });
+    const bin = join(profileDir, 'node_modules', '@larksuite', 'cli', 'bin', `lark-cli${process.platform === 'win32' ? '.exe' : ''}`);
+    if (switchApp) return larkConfigInitSwitchPty({ bin, cwd: profileDir, timeoutMs, onDone });
+    const initArgs = ['config', 'init', '--new'];
+    return new Promise((resolve) => {
+      if (disposed) {
+        resolve({ ok: false, error: 'Desktop generation disposed' });
+        return;
+      }
+      let child;
+      try {
+        child = spawn(bin, initArgs, { cwd: profileDir, detached: LARK_POSIX });
+      } catch (error) {
+        resolve({ ok: false, error: String(error?.message || error) });
+        return;
+      }
+      initChild = child; // initArgs 固定为 ['config','init','--new']（switchApp 走 PTY 分流）
+      let buf = '';
+      let settled = false;
+      const finish = (r) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (initChild === child) initChild = null;
+        resolve(r);
+      };
+      const onData = (chunk) => {
+        buf = (buf + String(chunk)).slice(-MAX_OUTPUT);
+        const m = buf.match(LARK_INIT_URL_RE);
+        if (m) finish({ ok: true, verificationUrl: m[0].trim(), cancel: () => terminateLark(child) });
+      };
+      const timer = setTimeout(() => {
+        terminateLark(child);
+        finish({ ok: false, error: '获取应用创建链接超时，请重试' });
+      }, timeoutMs);
+      child.stdout.on('data', onData);
+      child.stderr.on('data', onData);
+      child.once('error', (error) => finish({ ok: false, error: String(error.message || error) }));
+      child.once('close', (code) => finish({
+        ok: false,
+        error: code === 0 ? '未获取到应用创建链接，请重试' : `应用创建失败（退出码 ${code}）`,
+      }));
+    });
+  };
+
   const runtime = {
     kind: 'desktop',
     available,
     installing: () => Boolean(installing),
     run: runCli,
+    configInit,
     install() {
       if (available()) return Promise.resolve({ ok: true, already: true, target });
       if (installing) return installing;
@@ -471,6 +775,8 @@ export function createDesktopLarkCliRuntime({ desktopPnpm, profileDir, version =
     async dispose() {
       disposed = true;
       active?.cancel();
+      terminateLark(initChild);
+      initChild = null;
       await active?.done.catch(() => {});
       await tail.catch(() => {});
     },
