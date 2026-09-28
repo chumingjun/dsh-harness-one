@@ -25,10 +25,24 @@ window.__ModuleLoader__.load({
 			}).then(function (r) { return r.json(); });
 		}
 
+		// ---- 授权状态变更广播 ----
+		// 侧边栏入口与设置面板是两个独立挂载点，面板里完成扫码/建应用后
+		// 侧边栏不会自动重渲染（它只在挂载时取一次状态）。授权状态一变就广播，
+		// 侧边栏立即刷新，不必等轮询或让用户重开面板。
+		var LARK_STATUS_EVENT = "lark-auth-status-changed";
+		function broadcastStatus(status) {
+			if (status) {
+				try {
+					document.dispatchEvent(new CustomEvent(LARK_STATUS_EVENT, { detail: status }));
+				} catch (e) { /* 非 DOM 宿主忽略 */ }
+			}
+		}
+
 		// ---- 状态点（绿=valid 黄=needs_refresh 灰=未登录/未装） ----
 		function dotClass(status) {
 			var u = status && status.user;
 			if (!status || !status.installed) return "larka-dot off";
+			if (status.configured === false) return "larka-dot off";
 			if (u && u.tokenStatus === "valid") return "larka-dot ok";
 			if (u && u.userName) return "larka-dot warn";
 			return "larka-dot off";
@@ -48,13 +62,52 @@ window.__ModuleLoader__.load({
 		var deadlineRef = react.useRef(0);
 		var se = react.useState(null);
 		var startError = se[0], setStartError = se[1];
+		// 应用创建（config init）态：与扫码登录态分开，用户可随时取消
+		var io = react.useState(null);
+		var init = io[0], setInit = io[1];
+		var initPollRef = react.useRef(null);
+				// 更换应用轮询的基准 appId：次要参考信号（应用真换了 id 时能兜住）
+		var switchFromRef = react.useRef(null);
+
+			// 状态一变就广播给侧边栏（扫码成功、建应用完成、退出登录都经由这里）
+			var applyStatus = react.useCallback(function (next) {
+				setStatus(next);
+				broadcastStatus(next);
+			}, []);
+
+			// 授权一旦生效（已登录，或应用已创建好进入待扫码），此前挂着的
+			// 扫码/建应用界面必须收起——否则会出现「已登录」与二维码并存的怪状态。
+			// 覆盖所有非本面板发起的授权路径：另一个实例、CLI、或广播同步回来的状态。
+			// 例外：更换应用流程（isSwitch）本来就在 configured=true 下进行，不收起。
+			react.useEffect(function () {
+				if (!status) return;
+				var u2 = status.user || {};
+				if (u2.tokenStatus === "valid") {
+					setLogin(null);
+					setStartError(null);
+					setFinishWait(false);
+					if (!(init && init.isSwitch)) setInit(null);
+				} else if (status.configured !== false && !(init && init.isSwitch)) {
+					setInit(null); // 应用已创建，二维码不再有意义
+				}
+			}, [status, init]);
 
 			var load = react.useCallback(function () {
-				apiGet().then(function (d) { if (d.ok) setStatus(d.status); }).catch(function () {});
+				apiGet().then(function (d) { if (d.ok) applyStatus(d.status); }).catch(function () {});
+			}, [applyStatus]);
+			// 面板本身没有轮询，但侧边栏入口有 8s 低频轮询：借它的广播同步回来，
+			// 这样「面板开着时 token 自然过期 / 后台续期」也能自动反映到界面上。
+			react.useEffect(function () {
+				var onChanged = function (e) { setStatus(e.detail); };
+				document.addEventListener(LARK_STATUS_EVENT, onChanged);
+				return function () { document.removeEventListener(LARK_STATUS_EVENT, onChanged); };
 			}, []);
 			react.useEffect(function () {
 				if (!status0) load();
-				return function () { if (pollRef.current) clearTimeout(pollRef.current); };
+				return function () {
+					if (pollRef.current) clearTimeout(pollRef.current);
+					if (initPollRef.current) clearTimeout(initPollRef.current);
+				};
 			}, [load]);
 			// 未安装（宿主正在后台自动安装）时轮询状态，装好即切换到登录界面
 			react.useEffect(function () {
@@ -63,20 +116,59 @@ window.__ModuleLoader__.load({
 					return function () { clearTimeout(t); };
 				}
 			}, [status, load]);
+			// 应用创建中（面板重开后恢复）继续轮询，直到 configured 翻真；
+			// 同时补取二维码——恢复出来的 initUrl 没有图，否则会一直停在「二维码生成中…」
+			react.useEffect(function () {
+				if (status && status.configured === false && status.initInProgress && !init) {
+					var url = status.initUrl;
+					if (url) {
+						apiPost({ action: "qrcode", verificationUrl: url }).then(function (q) {
+							if (q.ok) setInit({ verificationUrl: url, qrDataUrl: q.dataUrl });
+						}).catch(function () {});
+					}
+					var t = setTimeout(function () {
+						apiGet().then(function (d) {
+							if (!d.ok) return;
+							if (d.status && d.status.configured) { applyStatus(d.status); setStartError(null); }
+						}).catch(function () {});
+					}, 3000);
+					return function () { clearTimeout(t); };
+				}
+			}, [status, init]);
 
-			var schedulePoll = function (deviceCode) {
-				if (pollRef.current) clearTimeout(pollRef.current);
-				pollRef.current = setTimeout(function () {
-					if (Date.now() > deadlineRef.current) { setLogin(null); return; }
-					apiPost({ action: "poll", deviceCode: deviceCode }).then(function (d) {
-						if (d.ok) { setStatus(d.status); setLogin(null); return; }
-						schedulePoll(deviceCode);
-					}).catch(function () { schedulePoll(deviceCode); });
-				}, 4000);
-			};
+		var pollGenRef = react.useRef(0);
+		var schedulePoll = function (deviceCode) {
+			if (pollRef.current) clearTimeout(pollRef.current);
+			var gen = pollGenRef.current;
+			pollRef.current = setTimeout(function () {
+				if (Date.now() > deadlineRef.current) { setLogin(null); return; }
+				apiPost({ action: "poll", deviceCode: deviceCode }).then(function (d) {
+					// 轮询期间登录被取消/被建应用接管（代数已变）：不再续期，
+					// 否则界面收了二维码、后台却每 4s 起一个阻塞 CLI 轮询直到过期
+					if (gen !== pollGenRef.current) return;
+					if (d.ok) { applyStatus(d.status); setFinishWait(true); return; }
+					schedulePoll(deviceCode);
+				}).catch(function () { if (gen === pollGenRef.current) schedulePoll(deviceCode); });
+			}, 4000);
+		};
+
+		// 授权确认成功后（长轮询返回），applyStatus 更新状态行之前先亮一个
+		// 「正在获取授权结果」过渡态：状态行一渲染出已登录就收掉，
+		// 避免确认后那几秒里界面毫无反馈、像是没扫上。
+		var fw = react.useState(false);
+		var finishWait = fw[0], setFinishWait = fw[1];
 
 		var start = function () {
 			setBusy(true);
+			setFinishWait(false);
+			// 二维码互斥：发起扫码登录时收起建应用/更换的二维码并停其轮询，
+			// 服务端向导进程一并取消（否则它会在后台跑满 60s 超时才退出）
+			if (initPollRef.current) clearTimeout(initPollRef.current);
+			initPollGenRef.current += 1;
+			if (init) {
+				setInit(null);
+				apiPost({ action: "init-cancel" }).catch(function () {});
+			}
 			apiPost({ action: "start" }).then(function (d) {
 				if (!d.ok) { setBusy(false); setStartError(d.error || "发起登录失败"); return; }
 				return apiPost({ action: "qrcode", verificationUrl: d.verificationUrl }).then(function (q) {
@@ -92,9 +184,82 @@ window.__ModuleLoader__.load({
 			}).catch(function () { setBusy(false); setStartError("网络错误，请重试"); });
 		};
 
-			var cancel = function () {
-				if (pollRef.current) clearTimeout(pollRef.current);
-				setLogin(null);
+		var cancel = function () {
+			if (pollRef.current) clearTimeout(pollRef.current);
+			pollGenRef.current += 1; // 使在途轮询返回后不再续期
+			setLogin(null);
+			setFinishWait(false);
+		};
+
+		// ---- 应用创建 / 更换（config init）----
+		// 用户在浏览器完成应用创建后，lark-cli 才写入 ~/.lark-cli/config.json，
+		// 此时 auth status 的 configured 由 false 翻 true —— 靠它判定完成，无需设备码轮询。
+		// 更换应用走同一条命令但不带 --new（服务端 switch 参数）：完成时 appId 变化。
+		var initPollGenRef = react.useRef(0);
+		var scheduleInitPoll = function (isSwitch) {
+			if (initPollRef.current) clearTimeout(initPollRef.current);
+			var gen = initPollGenRef.current;
+			initPollRef.current = setTimeout(function () {
+				apiGet().then(function (d) {
+					// 轮询期间流程被取消/被扫码登录接管（代数已变）：不再续期
+					if (gen !== initPollGenRef.current) return;
+					if (!d.ok) return scheduleInitPoll(isSwitch);
+					var st = d.status;
+					if (!st) return scheduleInitPoll(isSwitch);
+				if (isSwitch) {
+					// 更换完成信号：服务端看到向导进程自然退出（initDone）。
+					// appId 对比只是旁路参考——用户重选同一个应用时 appId 不变，
+					// 但配置已被向导整体重写，靠 appId 永远等不到「完成」
+					if (st.initDone || (st.appId && switchFromRef.current && st.appId !== switchFromRef.current)) {
+						setInit(null);
+						applyStatus(st);
+						setStartError(null);
+						return;
+					}
+				} else if (st.configured) {
+						setInit(null);
+						setStatus(st);      // 应用就绪，直接进入扫码登录态
+						broadcastStatus(st);
+						setStartError(null);
+						return;
+					}
+					scheduleInitPoll(isSwitch);
+				}).catch(function () { if (gen === initPollGenRef.current) scheduleInitPoll(isSwitch); });
+			}, 3000);
+		};
+
+		var startInit = function (isSwitch) {
+			setBusy(true);
+			setStartError(null);
+			// 二维码互斥：发起建应用/更换时收起扫码登录的二维码并停其设备码轮询
+			if (pollRef.current) clearTimeout(pollRef.current);
+			pollGenRef.current += 1;
+			setLogin(null);
+			setFinishWait(false);
+			// 已有链接在展示时是「重新获取链接」：必须让服务端丢弃旧流程重开，
+			// 否则会拿回同一个 URL，二维码也不会刷新。
+			var refresh = Boolean(init);
+			// 更换模式记住当前 appId：轮询看到 id 变化可作为完成的旁路判定
+			switchFromRef.current = (status && status.appId) || null;
+			apiPost({ action: "init", refresh: refresh, switch: Boolean(isSwitch) }).then(function (d) {
+				if (!d.ok) { setBusy(false); setStartError(d.error || "创建应用失败"); return; }
+				return apiPost({ action: "qrcode", verificationUrl: d.verificationUrl }).then(function (q) {
+					setInit({
+						verificationUrl: d.verificationUrl,
+						qrDataUrl: q.ok ? q.dataUrl : null,
+						isSwitch: Boolean(isSwitch),
+					});
+					scheduleInitPoll(Boolean(isSwitch));
+					setBusy(false);
+				});
+			}).catch(function () { setBusy(false); setStartError("网络错误，请重试"); });
+		};
+
+			var cancelInit = function () {
+				if (initPollRef.current) clearTimeout(initPollRef.current);
+				initPollGenRef.current += 1; // 使在途轮询返回后不再续期
+				setInit(null);
+				apiPost({ action: "init-cancel" }).catch(function () {});
 			};
 
 			var logout = function () {
@@ -119,7 +284,7 @@ window.__ModuleLoader__.load({
 								setBusy(true);
 								apiPost({ action: "install" }).then(function (d) {
 									setBusy(false);
-									if (d.status) setStatus(d.status); else load();
+									if (d.status) applyStatus(d.status); else load();
 								}).catch(function () { setBusy(false); load(); });
 							},
 						}, status.installing ? "安装中…" : "自动安装 lark-cli"),
@@ -134,15 +299,19 @@ window.__ModuleLoader__.load({
 			var u = status.user || {};
 			var loggedIn = u.tokenStatus === "valid";
 			var needsRefresh = u.userName && u.tokenStatus !== "valid";
-			var renew = status.autoRenew || {};
-			// 用户视角三件事：我是谁 / 授权是否正常 / 凭证何时续期。
-			// 应用 ID、bot 状态这类运维字段不再铺在面上（排障走接口）。
-			var renewSuffix = renew.lastResult === "renewed"
-				? " ✓"
-				: renew.lastResult === "fresh" ? "" : renew.lastResult ? "（" + renew.lastResult + "）" : "";
+			var unconfigured = status.configured === false;
+			// 面板重开时若应用创建仍在进行，恢复二维码视图，用户不必重新创建；
+			// 更换应用流程进行中（isSwitch）同样要恢复——configured 此时已是 true
+			var initView = init
+				|| (unconfigured && status.initInProgress && status.initUrl
+					? { verificationUrl: status.initUrl, qrDataUrl: null } : null);
+			var switching = Boolean(initView && initView.isSwitch);
+			// 两个窗口都要露出来：expiresAt 是 access token（官方固定 ~2h，靠自动刷新不断续），
+			// refreshExpiresAt 才是「多久不用会彻底掉线」的窗口（每次刷新轮换重计 7 天）。
+			// 只显示前者会让人误以为 2 小时后就不能用了。
 			var renewalLine = loggedIn && u.expiresAt
-				? "凭证自动续期：当前至 " + fmtWhen(u.expiresAt) +
-					(renew.lastAt ? "，上次续期 " + fmtWhen(renew.lastAt) + renewSuffix : "")
+				? "凭证持续有效 · 下次刷新 " + fmtWhen(u.expiresAt) +
+					(u.refreshExpiresAt ? " · 授权有效期至 " + fmtWhen(u.refreshExpiresAt) : "")
 				: "";
 			// 技术明细挂 title 悬浮提示，界面上不再占一行
 			var techLine = "App " + (status.appId || "-") + " · 默认身份 " + (status.defaultIdentity || "-") +
@@ -154,17 +323,34 @@ window.__ModuleLoader__.load({
 					title: loggedIn || status.appId ? techLine : undefined,
 				},
 					react.createElement("span", { className: dotClass(status) }),
-					react.createElement("strong", null, u.userName || "未登录飞书账号"),
+					react.createElement("strong", null, unconfigured ? "尚未创建飞书应用" : (u.userName || "未登录飞书账号")),
 					u.userName ? react.createElement("span", { style: S.muted },
-						loggedIn ? "已登录 · agent 会以你的身份执行飞书操作" : "登录已过期，重新扫码即可") : null),
+						loggedIn ? "已登录 · agent 会以你的身份执行飞书操作" : "登录已过期，重新扫码即可")
+						: unconfigured ? react.createElement("span", { style: S.muted }, "创建应用后才能扫码登录") : null),
 				renewalLine
 					? react.createElement("div", { style: S.meta }, renewalLine)
+					: null,
+				unconfigured
+					? react.createElement("div", { style: S.meta },
+						"将在你的飞书租户内创建一个自建应用，供 agent 调用飞书接口（通讯录、文档、日历等）。")
 					: null,
 				react.createElement("div", { style: S.actions },
 					loggedIn
 						? react.createElement("button", { style: S.btn, onClick: logout, disabled: busy }, "退出登录")
-						: react.createElement("button", { style: Object.assign({}, S.btn, S.btnPrimary), onClick: start, disabled: busy },
-							needsRefresh ? "重新扫码授权" : "扫码登录飞书"),
+						: unconfigured
+							? react.createElement("button", {
+								style: Object.assign({}, S.btn, S.btnPrimary), onClick: function () { startInit(false); }, disabled: busy,
+							}, initView ? "重新获取链接" : "创建飞书应用")
+							: react.createElement("button", { style: Object.assign({}, S.btn, S.btnPrimary), onClick: start, disabled: busy },
+								needsRefresh ? "重新扫码授权" : "扫码登录飞书"),
+					// 已绑定应用但想换一个（当前应用无权限/换租户）：走 config init 选择/创建应用
+					!unconfigured && !initView
+						? react.createElement("button", {
+							style: S.btn, disabled: busy,
+							onClick: function () { startInit(true); },
+							title: "重新选择或创建 agent 使用的飞书应用（当前 " + (status.appId || "-") + "）",
+						}, "更换飞书应用")
+						: null,
 					close ? react.createElement("button", { style: S.btn, onClick: close }, "关闭") : null),
 				startError ? react.createElement("div", { style: S.warn },
 					startError, " · ", react.createElement("a", {
@@ -178,8 +364,31 @@ window.__ModuleLoader__.load({
 							: react.createElement("div", { style: S.qrLoading }, "二维码生成中…"),
 						react.createElement("div", { style: S.qrSide },
 							react.createElement("a", { href: login.verificationUrl, target: "_blank", rel: "noreferrer", style: S.link }, "打不开扫码？点这里授权 →"),
-							react.createElement("span", { style: S.muted }, "等待扫码确认…"),
-							react.createElement("button", { style: S.btn, onClick: cancel }, "取消")))) : null);
+							finishWait
+								? react.createElement("span", { style: S.waiting },
+									react.createElement("span", { className: "larka-spin" }),
+									"正在获取授权结果…")
+								: react.createElement("span", { style: S.waiting },
+									react.createElement("span", { className: "larka-spin" }),
+									"等待扫码确认",
+									react.createElement("span", { className: "larka-dots" })),
+							react.createElement("button", { style: S.btn, onClick: cancel }, finishWait ? "收起" : "取消")))) : null,
+				initView ? react.createElement("div", { style: S.qrBox },
+					react.createElement("div", { style: S.qrTip }, switching
+						? "扫码后可在浏览器里选择已有应用，或创建新的应用（完成后这里自动继续）"
+						: "用飞书 App 扫码，创建用于 agent 调用的自建应用"),
+					react.createElement("div", { style: S.qrRow },
+						initView.qrDataUrl
+							? react.createElement("img", { src: initView.qrDataUrl, alt: "飞书应用创建二维码", style: S.qrImg })
+							: react.createElement("div", { style: S.qrLoading }, "二维码生成中…"),
+						react.createElement("div", { style: S.qrSide },
+							react.createElement("a", { href: initView.verificationUrl, target: "_blank", rel: "noreferrer", style: S.link }, switching ? "打不开扫码？点这里选择应用 →" : "打不开扫码？点这里创建 →"),
+							react.createElement("span", { style: S.waiting },
+								react.createElement("span", { className: "larka-spin" }),
+								switching ? "等待应用切换" : "等待创建完成",
+								react.createElement("span", { className: "larka-dots" }),
+								"（本页自动继续）"),
+							react.createElement("button", { style: S.btn, onClick: cancelInit }, switching ? "取消更换" : "取消")))) : null);
 		}
 
 		// 样式（内联，避免与宿主 CSS 约定耦合；色值对齐官方 --dsw 变量优先）
@@ -208,6 +417,7 @@ window.__ModuleLoader__.load({
 			qrImg: { width: "168px", height: "168px", background: "#fff", padding: "6px", borderRadius: "8px" },
 			qrLoading: { width: "168px", height: "168px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", color: "#666", background: "#fff", borderRadius: "8px" },
 			qrSide: { display: "flex", flexDirection: "column", gap: "8px", alignItems: "flex-start" },
+			waiting: { display: "inline-flex", alignItems: "center", gap: "6px", color: "var(--dsw-alias-text-secondary, #888)", fontSize: "12px" },
 			link: { fontSize: "13px", color: "var(--dsw-alias-accent-bg, #4F46E5)" },
 		};
 
@@ -230,7 +440,14 @@ window.__ModuleLoader__.load({
 			+ "display:flex;overflow:hidden;white-space:nowrap}"
 			+ ".larka-entry:hover{background:var(--dsw-alias-interactive-bg-hover)}"
 			+ ".larka-entry.larka-rail{border-radius:50%;justify-content:center;gap:0;width:36px;height:36px;margin:8px 0 10px;padding:0}"
-			+ ":has(> [data-slot=\"sidebar.footer.action\"] .larka-entry){display:flex;flex-direction:column}";
+			+ ":has(> [data-slot=\"sidebar.footer.action\"] .larka-entry){display:flex;flex-direction:column}"
+			// 扫码等待动画：旋转圆环 + 省略号循环（官方 UI 无此等待态约定，自绘）
+			+ ".larka-spin{width:12px;height:12px;flex:none;border-radius:50%;"
+			+ "border:2px solid var(--dsw-alias-border-strong, rgba(0,0,0,.2));"
+			+ "border-top-color:var(--dsw-alias-accent-bg, #4F46E5);animation:larka-rotate .8s linear infinite}"
+			+ "@keyframes larka-rotate{to{transform:rotate(360deg)}}"
+			+ ".larka-dots::after{content:\"\";animation:larka-dots 1.2s steps(4,end) infinite}"
+			+ "@keyframes larka-dots{0%{content:\"\"}25%{content:\".\"}50%{content:\"..\"}75%{content:\"...\"}}";
 		var el = document.createElement("style");
 		el.id = "larka-dot-style";
 		el.textContent = css;
@@ -243,8 +460,32 @@ window.__ModuleLoader__.load({
 			var wide = props && props.wide;
 			ensureDotStyle();
 			var st = react.useState(null);
+			// 侧边栏常驻可见，而授权状态会被设置面板里的扫码/建应用改变；
+			// 只在挂载时取一次会永远停在旧状态（点完授权侧边栏仍显示未登录）。
+			// 面板内状态变化会广播即时刷新；另加低频轮询兜底（8s，页面隐藏时停）。
+			var iv = react.useRef(null);
 			react.useEffect(function () {
-				apiGet().then(function (d) { if (d.ok) st[1](d.status); }).catch(function () {});
+				// 轮询发现新状态时也广播出去，好让设置面板同步（面板自己不轮询，
+				// 否则「面板开着时 token 自然过期」会一直显示旧的已登录）。
+				var tick = function () {
+					if (typeof document !== "undefined" && document.hidden) return;
+					apiGet().then(function (d) {
+						if (!d.ok) return;
+						st[1](d.status);
+						broadcastStatus(d.status);
+					}).catch(function () {});
+				};
+				var onChanged = function (e) { st[1](e.detail); };
+				tick();
+				iv.current = setInterval(tick, 8000);
+				var onVisible = function () { if (!document.hidden) tick(); };
+				document.addEventListener(LARK_STATUS_EVENT, onChanged);
+				document.addEventListener("visibilitychange", onVisible);
+				return function () {
+					clearInterval(iv.current);
+					document.removeEventListener(LARK_STATUS_EVENT, onChanged);
+					document.removeEventListener("visibilitychange", onVisible);
+				};
 			}, []);
 			var openSettings = function () {
 				// 官方设置触发器挂 [data-slot="settings.trigger"]（ui-settings-general 注册）；
