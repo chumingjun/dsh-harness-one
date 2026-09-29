@@ -1,6 +1,6 @@
 {
   "name": "dsh-harness-one",
-  "version": "0.11.3",
+  "version": "0.11.4",
   "description": "Workflow One - Visual AI workflow orchestrator for DeepSeek Harness (dsh), with multi-agent DAGs, live execution, recovery, and Feishu integration",
   "license": "MIT",
   "repository": {
