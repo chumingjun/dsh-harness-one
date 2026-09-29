@@ -49,6 +49,9 @@ dsh-plugins/vendor/
 .codegraph/
 # ZCode CLI 会话本地目录（计划/状态，绝不提交）
 .zcode/
+# 外部工具的本地会话/评审产物（不是本仓库内容；`git add <目录>` 极易连带带入）
+.mimosa/
+.video_agent/
 
 # 单包装配产物（assemble-one.sh 生成，不入库）
 dsh-plugins/dsh-harness-one/
