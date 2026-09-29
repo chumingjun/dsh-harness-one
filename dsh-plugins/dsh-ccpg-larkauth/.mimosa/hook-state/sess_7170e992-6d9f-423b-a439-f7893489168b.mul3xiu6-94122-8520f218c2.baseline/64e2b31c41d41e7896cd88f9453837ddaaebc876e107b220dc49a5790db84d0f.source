@@ -9,7 +9,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { statSync, mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
-import { join, dirname, isAbsolute } from 'node:path';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
@@ -22,57 +22,6 @@ const CANDIDATES = [
   '/usr/local/bin/lark-cli',
   '/opt/homebrew/bin/lark-cli',
 ];
-
-const LARK_BIN_NAME = process.platform === 'win32' ? 'lark-cli.exe' : 'lark-cli';
-
-/** profile 内那一份 lark-cli 的二进制路径（装在 profile 里的 @larksuite/cli） */
-export function profileLarkBin(profileDir) {
-  return profileDir ? join(profileDir, 'node_modules', '@larksuite', 'cli', 'bin', LARK_BIN_NAME) : null;
-}
-
-// 装进 profile 的 lark-cli 既不在任何全局 bin 目录里，PATH 上通常也没有软链——
-// 桌面版就是这样（Electron 自带 runtime/bin，PATH 上只有 node/pnpm 壳）。
-// 不显式看 profile 目录就会把「已经装好、还登过录」判成「未安装」，所有授权动作被挡住。
-// 由 apply() 从内核的 profileContext 登记；普通 dsh 手动把包装进 profile 时同样受益。
-let _profileLarkDir = '';
-export function setLarkProfileDir(dir) {
-  _profileLarkDir = typeof dir === 'string' ? dir.trim() : '';
-}
-
-/**
- * 内核 profileContext 里本插件能用的部分：profile 目录，以及宿主随 profile 一起发布的
- * 包管理器调用 {command,args,env}。逐字段校验、缺一即弃——半截的调用跑不起来，
- * 那正是它要修的失败（与 dshmarket 的 hostPackageManagerOf 同一判据）。
- *
- * 官方 Electron 壳只发布这个服务：GUI 启动的进程不继承终端 PATH，没有 npm，
- * `npm i -g` 必然失败；宿主给的这条调用是唯一能在该 profile 里装包的路径。
- */
-export function profileContextOf(context) {
-  if (context === undefined || context === null || typeof context !== 'object') return null;
-  const dir = typeof context.dir === 'string' ? context.dir.trim() : '';
-  if (dir === '' || !isAbsolute(dir)) return null;
-  const published = context.packageManager;
-  let packageManager = null;
-  if (published !== null && typeof published === 'object' && !Array.isArray(published)) {
-    const command = typeof published.command === 'string' ? published.command.trim() : '';
-    const args = Array.isArray(published.args) && published.args.every((arg) => typeof arg === 'string')
-      ? [...published.args]
-      : null;
-    if (command !== '' && args) {
-      // 只留字符串值：子进程环境是 Record<string,string>，混进数字或对象只会被悄悄丢掉
-      const env = {};
-      for (const [key, value] of Object.entries(published.env ?? {})) {
-        if (typeof value === 'string') env[key] = value;
-      }
-      packageManager = { command, args, env };
-    }
-  }
-  return {
-    name: typeof context.name === 'string' ? context.name.trim() : '',
-    dir,
-    packageManager,
-  };
-}
 
 // config init 输出的应用创建链接。user_code 是 XXXX-XXXX 形态的连字符串，
 // 后面还跟 lpv/ocv/from 等 query 参数，一并捕获后由调用方 trim。
@@ -115,8 +64,7 @@ function terminateLark(child) {
 }
 
 export function larkCliBin() {
-  const found = [profileLarkBin(_profileLarkDir), ...CANDIDATES]
-    .find((p) => { try { return statSync(p).isFile(); } catch { return false; } });
+  const found = CANDIDATES.find((p) => { try { return statSync(p).isFile(); } catch { return false; } });
   if (found) return found;
   try {
     const r = spawnSync('which', ['lark-cli'], { timeout: 3000 });
@@ -615,19 +563,8 @@ function ensureAllowBuilds(profileDir) {
   }
 }
 
-/**
- * profile 内的 lark-cli runtime。
- *
- * 装包通道有两种来源，装包能力因此是二选一而不是可有可无：
- *   - desktopPnpm.run(args)  第三方桌面壳（deepseek-harness-desktop）发布的受管 pnpm
- *   - packageManager         官方 Electron 壳随 profile 一起发布的 {command,args,env}
- *                            （内核 profileContext.packageManager）
- * 两者都没有时只保留「已装就能用」的能力，install() 直接报错——那种宿主里既没有受管
- * pnpm 也没有 npm（GUI 启动不继承终端 PATH），跑 `npm i -g` 只会留下一个假失败。
- */
-export function createDesktopLarkCliRuntime({ desktopPnpm, packageManager, profileDir, version = LARK_CLI_VERSION }) {
-  if (!profileDir) throw new TypeError('profileDir is required');
-  if (!desktopPnpm?.run && !packageManager?.command) throw new TypeError('desktopPnpm or packageManager is required');
+export function createDesktopLarkCliRuntime({ desktopPnpm, profileDir, version = LARK_CLI_VERSION }) {
+  if (!desktopPnpm?.run || !profileDir) throw new TypeError('desktopPnpm and profileDir are required');
   const target = `@larksuite/cli@${version}`;
   let active = null;
   let initChild = null;
@@ -645,8 +582,9 @@ export function createDesktopLarkCliRuntime({ desktopPnpm, packageManager, profi
   };
 
   const binReady = () => {
+    const ext = process.platform === 'win32' ? '.exe' : '';
     try {
-      return statSync(profileLarkBin(profileDir)).isFile();
+      return statSync(join(profileDir, 'node_modules', '@larksuite', 'cli', 'bin', `lark-cli${ext}`)).isFile();
     } catch {
       return false;
     }
@@ -658,7 +596,7 @@ export function createDesktopLarkCliRuntime({ desktopPnpm, packageManager, profi
     return result;
   };
 
-  const runManagedPnpm = (args, { timeoutMs = 20000 } = {}) => enqueue(async () => {
+  const runPnpm = (args, { timeoutMs = 20000 } = {}) => enqueue(async () => {
     if (disposed) return { ok: false, error: 'Desktop generation disposed' };
     const controller = new AbortController();
     let timedOut = false;
@@ -692,86 +630,12 @@ export function createDesktopLarkCliRuntime({ desktopPnpm, packageManager, profi
     }
   });
 
-  /**
-   * 宿主发布的包管理器（官方 Electron 壳：profileContext.packageManager = 内置 node +
-   * pnpm.mjs + 它自己的 PATH）。自己 spawn，不用 desktopPnpm——那个 service 在官方壳里
-   * 根本不存在，等它等于让整条装包路径永远走不通。
-   * 环境合并规则照抄 dshmarket 的 spawnEnv：宿主那份 env 在前（GUI 进程的 PATH 上通常什么
-   * 都没有，内置 Node 必须赢），CI=true 压过一切（pnpm v10+ 没有 TTY 会永远等在交互提示上）。
-   */
-  const runPublishedPnpm = (args, { timeoutMs = 20000 } = {}) => enqueue(() => new Promise((resolve) => {
-    if (disposed) {
-      resolve({ ok: false, error: 'Desktop generation disposed' });
-      return;
-    }
-    const separator = process.platform === 'win32' ? ';' : ':';
-    const hostEnv = packageManager.env ?? {};
-    const env = {
-      ...process.env,
-      ...hostEnv,
-      PATH: [hostEnv.PATH, process.env.PATH].filter((part) => part !== '').join(separator),
-      CI: 'true',
-    };
-    let child;
-    try {
-      child = spawn(packageManager.command, [...packageManager.args, ...args], {
-        cwd: profileDir,
-        env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    } catch (error) {
-      resolve({ ok: false, error: String(error?.message || error) });
-      return;
-    }
-    let out = '';
-    let err = '';
-    let timedOut = false;
-    let settled = false;
-    const append = (current, chunk) => (current + String(chunk)).slice(-MAX_OUTPUT);
-    const finish = (code, signal, error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (active?.child === child) active = null;
-      if (error) {
-        resolve({ ok: false, error: String(error.message || error) });
-        return;
-      }
-      const ok = code === 0 && signal == null;
-      const parsed = parseResult(out, err, ok);
-      if (!ok) {
-        parsed.ok = false;
-        parsed.error ||= timedOut
-          ? `lark-cli operation timed out after ${timeoutMs}ms`
-          : `lark-cli operation failed: exit=${String(code)} signal=${String(signal)}`;
-      }
-      resolve(parsed);
-    };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, timeoutMs);
-    active = {
-      child,
-      cancel: () => child.kill(),
-      done: new Promise((done) => child.once('close', done)),
-    };
-    child.stdout.on('data', (chunk) => { out = append(out, chunk); });
-    child.stderr.on('data', (chunk) => { err = append(err, chunk); });
-    child.once('error', (error) => finish(null, null, error));
-    child.once('close', (code, signal) => finish(code, signal));
-  }));
-
-  const runPnpm = (args, options) => (
-    desktopPnpm?.run ? runManagedPnpm(args, options) : runPublishedPnpm(args, options)
-  );
-
   const runCli = (args, { cwd = profileDir, timeoutMs = 20000 } = {}) => enqueue(() => new Promise((resolve) => {
     if (disposed) {
       resolve({ ok: false, error: 'Desktop generation disposed' });
       return;
     }
-    const bin = profileLarkBin(profileDir);
+    const bin = join(profileDir, 'node_modules', '@larksuite', 'cli', 'bin', `lark-cli${process.platform === 'win32' ? '.exe' : ''}`);
     let child;
     let out = '';
     let err = '';
@@ -825,7 +689,7 @@ export function createDesktopLarkCliRuntime({ desktopPnpm, packageManager, profi
    */
   const configInit = ({ timeoutMs = 60000, switchApp = false, onDone } = {}) => {
     if (!binReady()) return Promise.resolve({ ok: false, error: 'lark-cli not installed' });
-    const bin = profileLarkBin(profileDir);
+    const bin = join(profileDir, 'node_modules', '@larksuite', 'cli', 'bin', `lark-cli${process.platform === 'win32' ? '.exe' : ''}`);
     if (switchApp) return larkConfigInitSwitchPty({ bin, cwd: profileDir, timeoutMs, onDone });
     const initArgs = ['config', 'init', '--new'];
     return new Promise((resolve) => {

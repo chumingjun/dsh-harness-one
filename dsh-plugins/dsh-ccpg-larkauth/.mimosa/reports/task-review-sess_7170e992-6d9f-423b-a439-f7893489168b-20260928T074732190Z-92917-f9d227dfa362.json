@@ -1,0 +1,340 @@
+{
+  "schema_version": "mimosa-task-review/v2",
+  "run_id": "20260928T074732190Z-92917-f9d227dfa362",
+  "run_status": "inconclusive",
+  "errors": [
+    {
+      "stage": "baseline",
+      "target": ".",
+      "reason": "baseline_partial: baseline capture had enumeration or snapshot errors"
+    }
+  ],
+  "coverage": {
+    "schema_version": "mimosa-hook-coverage/v1",
+    "status": "partial",
+    "scope": "hook_observed_diff",
+    "baseline": {
+      "complete": false,
+      "captured_files": 3,
+      "candidate_limit": 5000,
+      "truncated": false,
+      "enumeration_error_count": 0,
+      "snapshot_error_count": 0,
+      "compensated_target_count": 3
+    },
+    "change_tracking": {
+      "touched_observed": 3,
+      "touched_retained": 3,
+      "truncated": false,
+      "bash_mutation": true,
+      "bash_discovered": 3,
+      "bash_discovery_limit": 80,
+      "bash_discovery_truncated": false
+    },
+    "candidates": {
+      "eligible_files": 3,
+      "selected_files": 3,
+      "limit": 20,
+      "truncated": false
+    },
+    "scanning": {
+      "required_files": 3,
+      "scanned_files": 3,
+      "skipped_files": 0,
+      "failed_files": 0,
+      "project_checks_required": 0,
+      "project_checks_completed": 0
+    },
+    "notification": {
+      "eligible_findings": 0,
+      "detailed_findings": 0,
+      "detail_limit": 3,
+      "truncated": false
+    },
+    "reason_counts": {
+      "baseline_partial": 1,
+      "project_check_failed": 1
+    },
+    "reasons": [
+      {
+        "code": "baseline_partial",
+        "stage": "baseline",
+        "target": ".",
+        "detail": "baseline capture had enumeration or snapshot errors",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline",
+        "target": ".",
+        "detail": "baseline_partial: baseline capture had enumeration or snapshot errors",
+        "affects_completion": true
+      }
+    ],
+    "reasons_truncated": false
+  },
+  "generated_at": "2026-09-28T07:47:32.190Z",
+  "session_id": "sess_7170e992-6d9f-423b-a439-f7893489168b",
+  "target": ".",
+  "revision": "0cc477f27d413271aca1638c90ead2a3dd6d6c68",
+  "rules_version": "unavailable",
+  "diff_hash": "e3ae391128147fdf70da0b08e437943a8c5782abf6df380dcf928d401f68f003",
+  "diff": {
+    "algorithm": "sha256",
+    "changed_file_count": 3,
+    "changed_files": [
+      {
+        "file": "lib/client.js",
+        "ranges": [
+          {
+            "start": 32,
+            "end": 32
+          },
+          {
+            "start": 52,
+            "end": 55
+          },
+          {
+            "start": 62,
+            "end": 65
+          },
+          {
+            "start": 74,
+            "end": 92
+          },
+          {
+            "start": 127,
+            "end": 170
+          },
+          {
+            "start": 208,
+            "end": 211
+          },
+          {
+            "start": 232,
+            "end": 232
+          },
+          {
+            "start": 234,
+            "end": 235
+          },
+          {
+            "start": 239,
+            "end": 242
+          },
+          {
+            "start": 246,
+            "end": 251
+          },
+          {
+            "start": 266,
+            "end": 276
+          }
+        ],
+        "before_hash": "cde49de933daa4ee8cb34e8ecb713736c1758990f12e56caa47c64e9fad9f87d",
+        "after_hash": "dec2c11d802fd091cebcb8f2fbd89e25f2ed5292d55617b5b33652bef18396d5"
+      },
+      {
+        "file": "lib/index.js",
+        "ranges": [
+          {
+            "start": 68,
+            "end": 70
+          },
+          {
+            "start": 88,
+            "end": 92
+          }
+        ],
+        "before_hash": "75a8db68bd145b46d2c52f5de8627cc581397aeb02edefc422855fb534b00306",
+        "after_hash": "b69dfc06d437adcf471ace332932d5e2c3c98d7a557393ca40a0f196eeb7f547"
+      },
+      {
+        "file": "lib/lark-auth.js",
+        "ranges": [
+          {
+            "start": 25,
+            "end": 28
+          },
+          {
+            "start": 77,
+            "end": 94
+          },
+          {
+            "start": 104,
+            "end": 111
+          },
+          {
+            "start": 116,
+            "end": 116
+          },
+          {
+            "start": 139,
+            "end": 145
+          },
+          {
+            "start": 156,
+            "end": 208
+          },
+          {
+            "start": 246,
+            "end": 246
+          },
+          {
+            "start": 252,
+            "end": 252
+          },
+          {
+            "start": 288,
+            "end": 288
+          },
+          {
+            "start": 409,
+            "end": 409
+          },
+          {
+            "start": 523,
+            "end": 571
+          },
+          {
+            "start": 577,
+            "end": 577
+          },
+          {
+            "start": 614,
+            "end": 615
+          }
+        ],
+        "before_hash": "c63b6a2b9dc63832f2cef35a16014f31090721dd0f506deeb5bf545797e761cf",
+        "after_hash": "ba1b8dc376bcda994b2cb09262093fa62abe40ecbe9436e829c12151eea5ed8d"
+      }
+    ]
+  },
+  "timing": {
+    "started_at": "2026-09-28T07:47:31.674Z",
+    "completed_at": "2026-09-28T07:47:32.190Z",
+    "duration_ms": 516,
+    "measurement": "hook_wall_clock"
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "model_calls": 0,
+    "measurement": "known-zero"
+  },
+  "telemetry": {
+    "schemaVersion": "mimosa-gate-telemetry/v1",
+    "profile": "gate",
+    "operation": "Stop",
+    "outcome": "partial/INCONCLUSIVE",
+    "latencyMs": 516,
+    "peakMemoryBytes": 219283456,
+    "memoryMeasurement": "max-observed-process-rss",
+    "scannedFiles": 3,
+    "cache": {
+      "hits": 0,
+      "misses": 0,
+      "measurement": "not-applicable"
+    },
+    "denyCount": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "total": 0,
+      "modelCalls": 0,
+      "measurement": "known-zero"
+    }
+  },
+  "finding_count": 0,
+  "rewake_finding_count": 0,
+  "evidence_boundary": {
+    "scan": "candidate",
+    "static_fix_verification": "observed_static_only",
+    "runtime_verification": "not_performed"
+  },
+  "finding_events": [
+    {
+      "finding_id": "mimosa-569406edabdc4984ba194ef6",
+      "file": "lib/lark-auth.js",
+      "line": 9,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "blocked",
+      "decision": "deny",
+      "at": "2026-09-28T07:46:31.297Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "ef0d2b5031a12bd71c8db08ed039f2b1bd5b0d6e5931feaa3e2ba3ff33621062",
+        "runtime_oracle": false
+      }
+    },
+    {
+      "finding_id": "mimosa-ff45ae6dce7d95d142f4981b",
+      "file": "lib/lark-auth.js",
+      "line": 9,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "blocked",
+      "decision": "deny",
+      "at": "2026-09-28T07:46:41.804Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "702fa6323a2a23e53d1262ab64ab39ef26b718cf15b286ae8db7f12c33373e2f",
+        "runtime_oracle": false
+      }
+    },
+    {
+      "finding_id": "mimosa-77ed38e4661665808611e3d8",
+      "file": "lib/lark-auth.js",
+      "line": 11,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "blocked",
+      "decision": "deny",
+      "at": "2026-09-28T07:47:01.540Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "f8249407c12a86fd0bf394da4e395a614c125df7923e60a94f4186eb6fac347a",
+        "runtime_oracle": false
+      }
+    },
+    {
+      "finding_id": "mimosa-77ed38e4661665808611e3d8",
+      "file": "lib/lark-auth.js",
+      "line": 11,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "blocked",
+      "decision": "deny",
+      "at": "2026-09-28T07:47:12.966Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "f8249407c12a86fd0bf394da4e395a614c125df7923e60a94f4186eb6fac347a",
+        "runtime_oracle": false
+      }
+    }
+  ],
+  "findings": [],
+  "artifacts": {
+    "immutable_report": ".mimosa/reports/task-review-sess_7170e992-6d9f-423b-a439-f7893489168b-20260928T074732190Z-92917-f9d227dfa362.json",
+    "latest_report": ".mimosa/reports/task-review-sess_7170e992-6d9f-423b-a439-f7893489168b.json",
+    "history_summary": ".mimosa/history/run-20260928T074732190Z-92917-f9d227dfa362.json"
+  }
+}

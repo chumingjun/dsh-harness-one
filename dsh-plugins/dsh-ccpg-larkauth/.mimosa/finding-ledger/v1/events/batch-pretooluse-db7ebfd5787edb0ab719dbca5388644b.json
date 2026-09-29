@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "pretooluse-db7ebfd5787edb0ab719dbca5388644b",
+  "runId": null,
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": []
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "PreToolUse"
+  },
+  "revision": null,
+  "diffHash": null,
+  "rulesVersion": null,
+  "sessionHash": "07ccedcf2c2d742ed9b695bbc149c9353f9d1aaaac1ab9756fd64642c69a6073",
+  "reportRef": null,
+  "events": [
+    {
+      "eventId": "hook-9a7eb3f34c1e4aa75432eab39c9527d3",
+      "findingId": "mimosa-ff45ae6dce7d95d142f4981b",
+      "type": "finding_blocked",
+      "at": "2026-09-28T07:46:41.804Z",
+      "identity": {
+        "projectRelativeFile": "lib/lark-auth.js",
+        "ruleId": "security",
+        "codeEvidenceHash": "702fa6323a2a23e53d1262ab64ab39ef26b718cf15b286ae8db7f12c33373e2f",
+        "confidence": "stable"
+      },
+      "scope": "direct",
+      "line": 9,
+      "endLine": 9,
+      "reasonCode": "deny",
+      "reportedToAgent": true,
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "evidenceHash": "702fa6323a2a23e53d1262ab64ab39ef26b718cf15b286ae8db7f12c33373e2f"
+      },
+      "sequence": 0
+    }
+  ],
+  "observedFindingIds": [],
+  "verifiedFiles": [],
+  "recordedAt": "2026-09-28T07:46:42.004Z"
+}

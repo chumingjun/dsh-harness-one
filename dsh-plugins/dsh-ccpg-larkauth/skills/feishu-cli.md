@@ -9,6 +9,7 @@ description: "用 lark-cli 命令行操作飞书：读/写云文档、发消息�
 
 本机已安装 `lark-cli`（飞书官方 CLI）并完成应用配置。
 命令在 PATH 里：`~/.local/npm-global/bin/lark-cli`（若找不到则用全路径）。
+桌面版里它在 profile 内且 PATH 上没有软链：`<dsh profile 目录>/node_modules/@larksuite/cli/bin/lark-cli`（先 `which lark-cli`，取不到就按这个路径找）。
 
 ## 何时用 lark-cli vs 内置工具
 

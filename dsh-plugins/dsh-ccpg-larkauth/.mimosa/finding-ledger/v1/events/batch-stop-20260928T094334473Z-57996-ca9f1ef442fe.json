@@ -1,0 +1,136 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20260928T094334473Z-57996-ca9f1ef442fe",
+  "runId": "20260928T094334473Z-57996-ca9f1ef442fe",
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": []
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "0cc477f27d413271aca1638c90ead2a3dd6d6c68",
+  "diffHash": "ce64dc052a0843d7350b2addcd6e618fe6a4e22e2b4162d60b965a3f500dbe00",
+  "rulesVersion": "unavailable",
+  "sessionHash": "07ccedcf2c2d742ed9b695bbc149c9353f9d1aaaac1ab9756fd64642c69a6073",
+  "reportRef": ".mimosa/reports/task-review-sess_7170e992-6d9f-423b-a439-f7893489168b-20260928T094334473Z-57996-ca9f1ef442fe.json",
+  "events": [
+    {
+      "eventId": "hook-7462330a0e27d9a222de2b8182da44cd",
+      "findingId": "mimosa-77ed38e4661665808611e3d8",
+      "type": "finding_blocked",
+      "at": "2026-09-28T07:57:42.034Z",
+      "identity": {
+        "projectRelativeFile": "lib/lark-auth.js",
+        "ruleId": "security",
+        "codeEvidenceHash": "f8249407c12a86fd0bf394da4e395a614c125df7923e60a94f4186eb6fac347a",
+        "confidence": "stable"
+      },
+      "scope": "direct",
+      "line": 35,
+      "endLine": 35,
+      "reasonCode": "deny",
+      "reportedToAgent": true,
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "evidenceHash": "f8249407c12a86fd0bf394da4e395a614c125df7923e60a94f4186eb6fac347a"
+      },
+      "sequence": 0
+    },
+    {
+      "eventId": "hook-6cfc50206a06af6a37e51d397a47ba4e",
+      "findingId": "mimosa-77ed38e4661665808611e3d8",
+      "type": "static_fix_verified",
+      "at": "2026-09-28T08:00:03.182Z",
+      "identity": {
+        "projectRelativeFile": "lib/lark-auth.js",
+        "ruleId": "security",
+        "codeEvidenceHash": "f8249407c12a86fd0bf394da4e395a614c125df7923e60a94f4186eb6fac347a",
+        "confidence": "stable"
+      },
+      "scope": "direct",
+      "line": 35,
+      "endLine": 35,
+      "reasonCode": "static_rescan_passed",
+      "reportedToAgent": false,
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "observed",
+        "producer": "deterministic",
+        "evidenceHash": "f8249407c12a86fd0bf394da4e395a614c125df7923e60a94f4186eb6fac347a"
+      },
+      "sequence": 1
+    },
+    {
+      "eventId": "hook-ee6bf84c026d8db1f10b381b51762968",
+      "findingId": "mimosa-584e02d514e50afa86dfe99d",
+      "type": "finding_blocked",
+      "at": "2026-09-28T08:45:42.124Z",
+      "identity": {
+        "projectRelativeFile": "lib/lark-auth.js",
+        "ruleId": "security",
+        "codeEvidenceHash": "6df4edbe5e92973f2dde638649dd6ba78afb2cf9614ed4aa8aeef02c63b340fb",
+        "confidence": "stable"
+      },
+      "scope": "direct",
+      "line": 19,
+      "endLine": 19,
+      "reasonCode": "deny",
+      "reportedToAgent": true,
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "evidenceHash": "6df4edbe5e92973f2dde638649dd6ba78afb2cf9614ed4aa8aeef02c63b340fb"
+      },
+      "sequence": 2
+    },
+    {
+      "eventId": "hook-5997ddc10f4862de5191a4f94f58a0ca",
+      "findingId": "mimosa-631cd10f2673b188fb70d717",
+      "type": "finding_blocked",
+      "at": "2026-09-28T08:45:42.124Z",
+      "identity": {
+        "projectRelativeFile": "lib/lark-auth.js",
+        "ruleId": "security",
+        "codeEvidenceHash": "e17b020f99fb8f690c26f418faaf23225e99749810a37d39d7f791c964abd4b0",
+        "confidence": "stable"
+      },
+      "scope": "direct",
+      "line": 22,
+      "endLine": 22,
+      "reasonCode": "deny",
+      "reportedToAgent": true,
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "evidenceHash": "e17b020f99fb8f690c26f418faaf23225e99749810a37d39d7f791c964abd4b0"
+      },
+      "sequence": 3
+    }
+  ],
+  "observedFindingIds": [],
+  "verifiedFiles": [
+    {
+      "file": "lib/client.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "lib/lark-auth.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "lib/index.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    }
+  ],
+  "recordedAt": "2026-09-28T09:43:34.698Z"
+}
