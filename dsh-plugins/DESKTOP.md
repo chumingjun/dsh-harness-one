@@ -27,21 +27,23 @@ dsh plugin add dsh-ccpg-one
 重启后与普通 dsh Web UI 完全同构：
 
 - **官方对话主区**照常使用；点输入框旁的工作流按钮展开画布，或新标签页开 `http://127.0.0.1:<端口>/wf1/`（端口随机，以 Desktop 窗口实际地址为准）
-- **飞书扫码**：设置 → 飞书账号 → 扫码登录飞书。首次会提示安装 lark-cli——点「自动安装」即可，插件通过 Desktop 的受管 pnpm 把固定版本 `@larksuite/cli` 装进**当前 profile**（切换 profile 需分别安装）
+- **飞书扫码**：设置 → 飞书账号 → 扫码登录飞书。首次会提示安装 lark-cli——点「自动安装」即可，插件用宿主发布的包管理器把固定版本 `@larksuite/cli` 装进**当前 profile**（切换 profile 需分别安装）。已经装在 profile 里就直接用，不会再问你
 - **模型**：与普通 dsh 相同，在官方 UI「模型」页选型、存 key（dsh 用户级 credentials）
 
 ### 1.3 Desktop 环境须知（与普通 dsh 的差异）
 
 | 方面 | 普通 dsh | Harness Desktop |
 |---|---|---|
-| lark-cli 安装 | setup.sh / 插件自举装到 `~/.local/npm-global` | 用户点击「自动安装」后经受管 pnpm 装进当前 profile |
+| lark-cli 安装 | setup.sh / 插件自举装到 `~/.local/npm-global` | 用户点击「自动安装」后装进当前 profile；已在 profile 里就直接用 |
+| lark-cli 探测面 | 全局 bin 目录 + `which` | profile 的 `node_modules/@larksuite/cli/bin/lark-cli`（GUI 进程 PATH 上没有它，也没有 npm） |
 | Web 端口 | profile patch 固定（如 4021） | 随机 loopback 端口，勿改 |
 | profile 管理 | `dsh --profile <name>` | Desktop 托盘/设置切换（切换 = 重启新 generation） |
-| pnpm 操作 | 系统 pnpm | Desktop 受管 pnpm，**一个 generation 同时只允许一个包操作** |
+| pnpm 操作 | 系统 pnpm | 宿主发布的包管理器（官方壳：`profileContext.packageManager`；第三方壳：`desktopPnpm`），**一个 generation 同时只允许一个包操作** |
 
 ### 1.4 常见问题排查
 
-- **点「扫码登录飞书」没反应**：Desktop 的 pnpm 子进程强制 `CI=true`，若 profile 的 `pnpm-workspace.yaml` 里残留 pnpm 写入的占位值（`allowBuilds.'@larksuite/cli': set this to true or false`），`pnpm exec` 会静默 exit=1。0.1.0+ 的插件已内置自愈（自动把占位符改为 `true` 并补装）；旧版手动把该值改为 `true` 后在 profile 目录跑一次 `pnpm install`，重启 Desktop
+- **界面说「本机未安装 lark-cli」，但 profile 里明明有**：只扫全局 bin 目录与 `which` 的老插件会这样（GUI 进程 PATH 上本来就没有 lark-cli），官方壳还会因为没有 `desktopPnpm` service 被误判成普通 dsh，连点「自动安装」也是死路（那里没有 npm）。先 `ls <profile 目录>/node_modules/@larksuite/cli/bin/lark-cli` 确认，升级插件即可。命令行自查：`<profile 目录>/node_modules/@larksuite/cli/bin/lark-cli auth status --json`
+- **点「扫码登录飞书」没反应**：包管理器子进程强制 `CI=true`，若 profile 的 `pnpm-workspace.yaml` 里残留 pnpm 写入的占位值（`allowBuilds.'@larksuite/cli': set this to true or false`），`pnpm exec` 会静默 exit=1。0.1.0+ 的插件已内置自愈（自动把占位符改为 `true` 并补装）；旧版手动把该值改为 `true` 后在 profile 目录跑一次 `pnpm install`，重启 Desktop
 - **设置 → 插件列表里找不到 better-sidebar**：说明走的是逐包安装路径，单独 `dsh plugin add dsh-better-sidebar` 即可（见 1.1）
 - **页面空白/侧边栏整体消失**：检查 Desktop 设置里的呈现模式。compatibility（默认）与 advanced 都支持本套件；advanced 模式故障属于 Desktop 壳自身问题
 - **日志/状态位置**：Desktop 私有状态在 `~/Library/Application Support/DSH Desktop/`（macOS）；dsh 侧仍是 `~/.dsh/`（settings.yaml / profiles / sessions）
@@ -50,19 +52,36 @@ dsh plugin add dsh-ccpg-one
 
 ## 2. Desktop 开发兼容方式（给本仓库贡献者）
 
-### 2.1 官方契约：两个公开 Host service
+### 2.1 官方契约：两种宿主，两套 service
 
-Desktop 在 Electron main 进程的 Host Cordis generation 上多提供两个公开 service（完整契约见 upstream `dsh-plugin-desktop/docs/plugin-services.md`）：
+Desktop 生态里有两种壳，发布的 service **不同**，插件必须都能活下来：
 
-- **`desktopProfiles`**：`current`（`{name, dir}`，一个 generation 内不可变）/ `list()` / `select(name)`（= 请求重启，不是原地切换）
-- **`desktopPnpm`**：`run(args)`（低层 pnpm，cwd = profile 目录）/ `runPlugin(args, invokingDir)`（`dsh plugin --profile <active>` 语义，装/卸/更新插件用它）
+| 宿主 | 判别方式 | 提供的 service | 装包通道 |
+|---|---|---|---|
+| 官方 Electron 壳（DeepSeek Harness.app） | `ctx.get('desktopProfiles') === undefined` | 只有内核的 `profileContext`：`{name, dir, packageManager}` | `profileContext.packageManager`（宿主自带 node + pnpm.mjs + 自己的 PATH） |
+| 第三方壳 [deepseek-harness-desktop](https://github.com/anywhere-labs/deepseek-harness-desktop) | `ctx.get('desktopProfiles')` 有值 | `desktopProfiles`（`current: {name, dir}` / `list()` / `select(name)`）+ `desktopPnpm`（`run(args)` / `runPlugin(args, dir)`） | `desktopPnpm.run()` |
 
-关键边界：
+**两套都没有**是真实发生过的故障：官方壳 0.2.0-rc.1 的整个 app.asar 里 `desktopProfiles` / `desktopPnpm` 零命中，于是插件退回「普通 dsh」分支，去 `~/.local/npm-global/bin`、`/usr/local/bin`、`which` 里找 lark-cli——而 lark-cli 明明装在 profile 的 node_modules 里，GUI 进程 PATH 上又没有软链、`npm` 也没有，于是界面永远显示「本机未安装 lark-cli」，扫码/续约/退出登录全被挡住。
 
-- 这两个 service **只在 Desktop 中存在**——`ctx.get('desktopProfiles')` 返回 `undefined` 即普通 dsh 环境，这是官方指定的环境判别器
-- Renderer（浏览器端）**读不到**它们；带 UI 的插件继续走普通 DSH Web routes / slots / client bundle，不要给 client 侧写 Desktop 分支
+因此探测顺序固定为：
+
+```js
+const profiles = ctx.get('desktopProfiles');
+if (profiles !== undefined) { /* 第三方壳：受管 pnpm */ }
+else {
+  const profile = profileContextOf(ctx.get('profileContext')); // 官方壳：profile 目录 + 宿主包管理器
+  if (profile?.packageManager) { /* 官方壳：直连 profile 内二进制 + 宿主 pnpm 装包 */ }
+  else { /* 普通 dsh：npm i -g，但探测面仍要认 profile 目录 */ }
+}
+```
+
+官方壳的其余边界（完整契约见 upstream `dsh-plugin-desktop/docs/plugin-services.md`）：
+
+- **`desktopProfiles`**：一个 generation 内 `current` 不可变；`select(name)` = 请求重启，不是原地切换
+- **`desktopPnpm`**：`run(args)` 返回 handle（stdout/stderr 流 + `done` promise + `cancel()`），**没有内建超时**——仅包操作使用它，调用方自己包 AbortController/定时器，退出时在 `ctx.effect` disposer 里 `cancel()` 并 `await done`；一个 generation 同时只允许一个包操作（并发第二个同步抛错），子进程环境强制注入 `CI=true`、electron 构建三件套
+- **`profileContext.packageManager`**：`{command, args, env}`，逐字段校验后使用；env 合并规则照抄 dshmarket 的 `spawnEnv`——宿主那份 env 在前（GUI 进程 PATH 上通常什么都没有，内置 Node 必须赢），`CI=true` 压过一切
 - `desktopRuntime` / `desktopPnpmBootstrap` / Electron API 是 Desktop 私有实现，不依赖
-- `desktopPnpm` 一个 generation 同时只允许一个包操作（并发第二个同步抛错）；子进程环境强制注入 `CI=true`、electron 构建三件套（`npm_config_runtime=electron` 等）——任何依赖 pnpm 的逻辑要按「CI 模式、无交互、报错可能被吞」设计
+- Renderer（浏览器端）**读不到**任何 service；带 UI 的插件继续走普通 DSH Web routes / slots / client bundle，不要给 client 侧写 Desktop 分支
 
 ### 2.2 跨环境插件的标准写法
 
@@ -72,26 +91,38 @@ Desktop 在 Electron main 进程的 Host Cordis generation 上多提供两个公
 export const inject = ['webServer'];           // 只声明两边都有的依赖
 
 export function apply(ctx) {
-  const profiles = ctx.get('desktopProfiles'); // undefined = 普通 dsh
-  if (profiles === undefined) {
-    mount(ctx, null);                          // 普通 dsh：本机 lark-cli
+  const profiles = ctx.get('desktopProfiles'); // 有值 = 第三方壳
+  if (profiles !== undefined) {
+    ctx.inject(['desktopPnpm'], (desktopCtx) => { // 嵌套注入等 desktopPnpm
+      mount(desktopCtx, createDesktopLarkCliRuntime({
+        desktopPnpm: desktopCtx.desktopPnpm,
+        profileDir: profiles.current.dir,        // profile 目录以 current 为准
+      }), { desktop: true });
+    });
     return;
   }
-  ctx.inject(['desktopPnpm'], (desktopCtx) => { // 嵌套注入等 desktopPnpm
-    const runtime = createDesktopLarkCliRuntime({
-      desktopPnpm: desktopCtx.desktopPnpm,
-      profileDir: profiles.current.dir,        // profile 目录以 current 为准
-    });
-    mount(desktopCtx, runtime, { desktop: true });
-  });
+  // 官方壳没有那两个 service，只有 profileContext；再退才是普通 dsh
+  const profile = profileContextOf(ctx.get('profileContext'));
+  if (profile?.packageManager) {                // 官方壳：宿主自带 pnpm
+    mount(ctx, createDesktopLarkCliRuntime({
+      profileDir: profile.dir,
+      packageManager: profile.packageManager,
+    }), { desktop: true });
+    return;
+  }
+  setLarkProfileDir(profile?.dir);               // 普通 dsh，但探测面认 profile 目录
+  mount(ctx, null);
 }
 ```
 
 要点：
 
-- runtime 抽象统一两套执行链（`runtime.run(args)` / `runtime.install()` / `runtime.qrcode()`），上层业务函数（`larkAuthStatus` / `larkLoginStart` …）对环境无感知。Desktop 的 `runtime.run()` 直接执行当前 profile 内已下载的 `@larksuite/cli/bin/lark-cli`，避免把状态查询和授权命令放进 Electron 的 pnpm 子进程；`desktopPnpm` 只负责安装与修复该 profile 的包
+- **探测必须逐级退到底**：只判 `desktopProfiles` 会把官方壳误认成普通 dsh（见 2.1 的故障）；只判 `profileContext` 又会漏掉第三方壳。两条路都要走
+- runtime 抽象统一执行链（`runtime.run(args)` / `runtime.install()` / `runtime.qrcode()`），上层业务函数（`larkAuthStatus` / `larkLoginStart` …）对环境无感知。`runtime.run()` 直接执行当前 profile 内已下载的 `@larksuite/cli/bin/lark-cli`，避免把状态查询和授权命令放进包管理器子进程；装包通道才走 `desktopPnpm` 或宿主发布的包管理器
+- **探测面要覆盖 profile 目录**：`lark-cli` 装在 profile 里时不在任何全局 bin 目录，PATH 上通常也没有软链。只扫 `~/.local/npm-global/bin`、`/usr/local/bin`、`/opt/homebrew/bin` 和 `which` 会把「已装」判成「未装」
 - `desktopPnpm.run()` 返回 handle（stdout/stderr 流 + `done` promise + `cancel()`），**没有内建超时**——仅包操作使用它，调用方自己包 AbortController/定时器，退出时在 `ctx.effect` disposer 里 `cancel()` 并 `await done`
 - 包操作（add/install）只应由**明确的用户动作**触发（Desktop 官方 checklist 第 1 条）；插件启动时探测到未安装就等待用户确认，不要自作主张改 profile
+- **两条装包通道都没有时，构造期就抛**：给一个「装不了也看不出来」的 runtime 只会把用户骗到点按钮那一步才失败
 
 ### 2.3 插件形态通用约束（Desktop 下同样生效）
 

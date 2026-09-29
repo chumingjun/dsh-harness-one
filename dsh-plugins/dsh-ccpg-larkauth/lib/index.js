@@ -18,7 +18,8 @@ import z from '@deepseek-ai/schemastery';
 import {
   larkCliAvailable, larkCliInstalling, larkAuthStatus, larkLoginStart, larkLoginQrcode,
   larkLoginPoll, larkLogout, ensureLarkCli, setDefaultIdentityUser, renewUserToken,
-  ensureSkillFiles, createDesktopLarkCliRuntime, larkConfigInit, RENEW_INTERVAL_MS,
+  ensureSkillFiles, createDesktopLarkCliRuntime, larkConfigInit, profileContextOf,
+  setLarkProfileDir, RENEW_INTERVAL_MS,
 } from './lark-auth.js';
 
 export const name = 'dsh-ccpg-larkauth';
@@ -168,12 +169,28 @@ function mount(ctx, runtime, { desktop = false } = {}) {
     };
   }, 'larkauth runtime');
 
-  ctx.logger?.info?.(`dsh-ccpg-larkauth: /wf1/api/lark-auth 已注册（${desktop ? 'Desktop 受管 pnpm' : '普通 dsh'}）`);
+  ctx.logger?.info?.(`dsh-ccpg-larkauth: /wf1/api/lark-auth 已注册（${desktop ? 'Desktop profile' : '普通 dsh'}）`);
 }
 
 export function apply(ctx, _config) {
   const profiles = ctx.get?.('desktopProfiles');
   if (profiles === undefined) {
+    // 官方 Electron 壳（DeepSeek Harness.app）不发布 desktopProfiles / desktopPnpm ——
+    // 那两个 service 属于第三方壳 deepseek-harness-desktop（见 DESKTOP.md）。它只发布内核的
+    // profileContext，其中带 profile 目录和宿主自带的包管理器调用。
+    // 判别器照旧是 desktopProfiles：拿不到就退到 profileContext，而不是无脑当普通 dsh——
+    // GUI 启动的进程不继承终端 PATH，`npm i -g` 在那里必然失败，用户只会看到「未安装」。
+    const profile = profileContextOf(ctx.get?.('profileContext'));
+    if (profile?.packageManager) {
+      mount(ctx, createDesktopLarkCliRuntime({
+        profileDir: profile.dir,
+        packageManager: profile.packageManager,
+      }), { desktop: true });
+      return;
+    }
+    // 普通 dsh：仍走 npm 全局安装，但把 profile 目录登记进探测面，
+    // 免得「lark-cli 装在 profile 里、PATH 上没有」被误判成未安装。
+    setLarkProfileDir(profile?.dir);
     mount(ctx, null);
     return;
   }
