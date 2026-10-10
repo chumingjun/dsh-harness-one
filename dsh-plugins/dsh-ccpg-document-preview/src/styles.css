@@ -22,6 +22,9 @@
 .dsh-doc-preview-scroll { width: 100%; height: 100%; min-height: 0; overflow: auto; }
 .dsh-doc-preview-message { position: absolute; inset: 0; display: grid; place-items: center; padding: 32px; color: var(--dsh-doc-muted); text-align: center; pointer-events: none; z-index: 2; }
 .dsh-doc-preview-message.is-error { color: #f87171; }
+/* 容器 pointer-events:none，重试按钮单独恢复可点（#166 超时/失败态） */
+.dsh-doc-preview-retry { pointer-events: auto; margin-top: 12px; padding: 4px 14px; border: 1px solid var(--dsh-doc-border); border-radius: 6px; background: var(--dsh-doc-panel); color: var(--dsh-doc-text); font-size: 13px; cursor: pointer; }
+.dsh-doc-preview-retry:hover { border-color: var(--dsh-doc-border-strong); color: var(--dsh-doc-accent); }
 .dsh-doc-preview-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 0 10px; border: 1px solid var(--dsh-doc-border); border-radius: 6px; background: var(--dsh-doc-panel); color: var(--dsh-doc-text); cursor: pointer; }
 .dsh-doc-preview-button:disabled { opacity: .45; cursor: not-allowed; }
 .dsh-doc-preview-text { box-sizing: border-box; min-width: 100%; min-height: 100%; margin: 0; padding: 24px; color: var(--dsh-doc-text); background: var(--dsh-doc-panel); font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }

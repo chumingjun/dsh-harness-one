@@ -9,11 +9,25 @@ import { markdownSanitizeSchema } from './markdown-sanitize.mjs';
 import { documentPreviewKind, loadPreviewText, normalizePreviewDocument, previewErrorMessage } from './index.js';
 import './styles.css';
 
-const PdfRenderer = lazy(() => import('./renderers/pdf.jsx'));
-const DocxRenderer = lazy(() => import('./renderers/docx.jsx'));
-const SheetRenderer = lazy(() => import('./renderers/sheet.jsx'));
-const PptxRenderer = lazy(() => import('./renderers/pptx.jsx'));
-const UniverRenderer = lazy(() => import('./renderers/univer.jsx'));
+// 懒渲染器 chunk 拉取挂起兜底（#166）：超时 reject 让 error boundary 出错误态，
+// 而不是让 Suspense 永远停在「正在准备预览…」。弹窗每次打开都重挂载，重开即重试。
+const LAZY_LOAD_TIMEOUT_MS = 15000;
+const lazyWithTimeout = (load) => lazy(() => Promise.race([
+  load(),
+  new Promise((_, reject) => {
+    setTimeout(() => {
+      const error = new Error('预览组件加载超时，请关闭后重试。');
+      error.name = 'TimeoutError';
+      reject(error);
+    }, LAZY_LOAD_TIMEOUT_MS);
+  }),
+]));
+
+const PdfRenderer = lazyWithTimeout(() => import('./renderers/pdf.jsx'));
+const DocxRenderer = lazyWithTimeout(() => import('./renderers/docx.jsx'));
+const SheetRenderer = lazyWithTimeout(() => import('./renderers/sheet.jsx'));
+const PptxRenderer = lazyWithTimeout(() => import('./renderers/pptx.jsx'));
+const UniverRenderer = lazyWithTimeout(() => import('./renderers/univer.jsx'));
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 function Loading() {
@@ -32,7 +46,10 @@ class PreviewErrorBoundary extends Component {
 
   render() {
     if (this.state.error) {
-      return <div className="dsh-doc-preview-message is-error">预览组件加载失败，请刷新页面后重试。</div>;
+      const text = this.state.error?.name === 'TimeoutError'
+        ? this.state.error.message
+        : '预览组件加载失败，请刷新页面后重试。';
+      return <div className="dsh-doc-preview-message is-error">{text}</div>;
     }
     return this.props.children;
   }
@@ -40,6 +57,7 @@ class PreviewErrorBoundary extends Component {
 
 function TextRenderer({ document, kind, maxTextBytes }) {
   const [state, setState] = useState({ loading: true, error: '', text: '' });
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     setState({ loading: true, error: '', text: '' });
@@ -49,7 +67,7 @@ function TextRenderer({ document, kind, maxTextBytes }) {
         if (reason?.name !== 'AbortError') setState({ loading: false, error: previewErrorMessage(reason), text: '' });
       });
     return () => controller.abort();
-  }, [document.previewUrl, maxTextBytes]);
+  }, [document.previewUrl, maxTextBytes, attempt]);
 
   const text = useMemo(() => {
     if (kind !== 'json' || !state.text) return state.text;
@@ -57,7 +75,14 @@ function TextRenderer({ document, kind, maxTextBytes }) {
   }, [kind, state.text]);
 
   if (state.loading) return <Loading />;
-  if (state.error) return <div className="dsh-doc-preview-message is-error">{state.error}</div>;
+  if (state.error) {
+    return (
+      <div className="dsh-doc-preview-message is-error">
+        <span>{state.error}</span>
+        <button type="button" className="dsh-doc-preview-retry" onClick={() => setAttempt((n) => n + 1)}>重试</button>
+      </div>
+    );
+  }
   if (!text) return <div className="dsh-doc-preview-message">文件为空。</div>;
   if (kind === 'markdown') return <Markdown text={text} />;
   if (kind === 'csv') return <Csv text={text} />;

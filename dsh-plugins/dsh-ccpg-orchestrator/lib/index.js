@@ -3290,13 +3290,28 @@ export function apply(ctx, config) {
         files[key] = { missing: true, reason: 'artifact-not-found' };
         continue;
       }
+      // 预算按「实际返回内容」记账（截断后 ≤CLIP，#166）：此前按整文件 statSync 尺寸
+      // 记账，单个 >1.5MB 的文稿或累计超限后全部 omitted，每张卡都退回整文件单拉。
+      // 只读头部 CLIP*4 字节（utf8 单字符 ≤4 字节），超大文件也不整读进内存；
+      // 解码后按字符截断，避免切出半个多字节字符。
       const size = statSync(source).size;
-      if (used + size > BUDGET) {
+      if (used + Math.min(size, CLIP) > BUDGET) {
         files[key] = { omitted: true, reason: 'budget' };
         continue;
       }
-      const raw = readFileSync(source, 'utf8');
-      used += size;
+      const readCap = Math.min(size, CLIP * 4 + 3);
+      let raw = '';
+      if (readCap > 0) {
+        const fd = openSync(source, 'r');
+        try {
+          const buf = Buffer.alloc(readCap);
+          const read = readSync(fd, buf, 0, readCap, 0);
+          raw = buf.toString('utf8', 0, read);
+        } finally {
+          closeSync(fd);
+        }
+      }
+      used += Math.min(raw.length, CLIP);
       files[key] = raw.length > CLIP ? { content: `${raw.slice(0, CLIP)}…`, truncated: true } : { content: raw, truncated: false };
     }
     return json(res, 200, { files });

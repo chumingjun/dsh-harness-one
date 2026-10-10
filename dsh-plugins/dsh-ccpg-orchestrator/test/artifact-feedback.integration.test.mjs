@@ -158,6 +158,50 @@ try {
     assert.equal(res.status, 200);
     assert.equal(res.body.files[`n_batch\u0000missing.md`].missing, true);
   }
+  // 预算按截断口径记账（#166）：>1.5MB 的单个 md 不再 omitted，返回头部截断正文；
+  // CJK 多字节按字符截断不出replacement char，多个大文件也都能命中
+  {
+    const bigRun = {
+      runId: 'run_fb_big', workflowId: 'wf_fb', status: 'success',
+      startedAt: '2026-08-11T00:00:00.000Z', finishedAt: '2026-08-11T00:00:02.000Z',
+      nodeStates: { n_big: { status: 'success', artifacts: ['big.md', 'big2.md'] } },
+      artifactIndex: [
+        { id: 'art_big', nodeId: 'n_big', name: 'big.md', relativePath: 'big.md', snapshot: 'run_fb_big/art_big', previewable: true, size: 3 * 1024 * 1024, mediaType: 'text/markdown' },
+        { id: 'art_big2', nodeId: 'n_big', name: 'big2.md', relativePath: 'big2.md', snapshot: 'run_fb_big/art_big2', previewable: true, size: 3 * 1024 * 1024, mediaType: 'text/markdown' },
+      ],
+      schemaVersion: 3,
+    };
+    const db = new DatabaseSync(databaseFile(workspace));
+    try {
+      db.prepare(`INSERT INTO runs (run_id, workflow_id, status, started_at, finished_at, updated_at, document_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(run_id) DO UPDATE SET document_json=excluded.document_json`)
+        .run(bigRun.runId, bigRun.workflowId, bigRun.status, bigRun.startedAt, bigRun.finishedAt, new Date().toISOString(), JSON.stringify(bigRun));
+    } finally { db.close(); }
+    const { hashedKey } = await import('../lib/storage-paths.js');
+    const runDir = join(artifactDir, hashedKey('wf_fb'), hashedKey('run_fb_big'), 'artifacts', 'run_fb_big');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, 'art_big'), `# 大文件\n${'字'.repeat(1024 * 1024)}`); // ~3MB（多字节）
+    writeFileSync(join(runDir, 'art_big2'), `${'a'.repeat(2 * 1024 * 1024)}`); // 2MB（单字节）
+    const res = await call('POST', '/wf1/api/artifacts/content', {
+      runId: 'run_fb_big',
+      items: [
+        { node: 'n_big', file: 'big.md', artifactId: 'art_big' },
+        { node: 'n_big', file: 'big2.md', artifactId: 'art_big2' },
+      ],
+    });
+    assert.equal(res.status, 200);
+    const big = res.body.files[`n_big\u0000big.md`];
+    const big2 = res.body.files[`n_big\u0000big2.md`];
+    assert.equal(big.omitted, undefined, '单个 >1.5MB 文件不应再被预算 omitted');
+    assert.equal(big.truncated, true);
+    assert.ok(big.content.length === 4096 + 1, `CJK 截断应按字符到 4096 + 省略号，实际 ${big.content.length}`);
+    assert.ok(!big.content.slice(0, 4096).includes('\uFFFD'), '多字节截断不得产生 replacement char');
+    assert.ok(big.content.startsWith('# 大文件\n'));
+    assert.equal(big2.omitted, undefined, '累计超 1.5MB 的第二个大文件也应命中（预算按截断内容记账）');
+    assert.equal(big2.truncated, true);
+    assert.ok(big2.content.startsWith('aaaa'));
+  }
 
   console.log('feedback api integration tests:');
 
