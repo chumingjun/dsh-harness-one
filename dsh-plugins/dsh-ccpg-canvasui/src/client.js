@@ -121,7 +121,7 @@ window.__ModuleLoader__.load({
       };
     }
 
-    // conversation.input.left 的 owner props 拿不到 ctx，走模块级引用。
+    // 官方 UI 的 owner props 拿不到 ctx，走模块级引用。
     var betterSidebarRef = { svc: null };
     var sidebarServiceListeners = new Set();
     function setBetterSidebarService(svc) {
@@ -144,11 +144,6 @@ window.__ModuleLoader__.load({
       var el = document.createElement("style");
       el.id = "wf1-canvasui-style";
       el.textContent = [
-        ".wf1-open-btn{width:28px;height:28px;display:grid;flex:none;place-items:center;padding:0;border:0;border-radius:999px;background:var(--dsw-specific-selector);color:var(--dsw-alias-label-primary);cursor:pointer;transition:background-color 100ms ease,opacity 100ms ease;}",
-        ".wf1-open-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-solid);}",
-        ".wf1-open-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3);}",
-        ".wf1-open-btn:disabled{opacity:.5;cursor:default;}",
-        ".wf1-open-btn svg{width:15px;height:15px;display:block;}",
         // 官方 viewArea 是 flex "1 0 auto"（shrink=0），普通流内 iframe 会把它撑高。
         // root 正常占满 viewArea 并建立定位上下文，iframe absolute 锁在该内容区内。
         ".wf1-view-root{position:relative;display:block;flex:1 1 0;width:100%;height:100%;min-height:0;overflow:hidden;}",
@@ -948,56 +943,6 @@ window.__ModuleLoader__.load({
       });
     }
 
-
-    function WorkflowOpenButton(props) {
-      var [sidebarReady, setSidebarReady] = react.useState(
-        Boolean(betterSidebarRef.svc),
-      );
-      react.useEffect(function () {
-        return subscribeSidebarService(setSidebarReady);
-      }, []);
-      var disabled =
-        !props.input || props.input.phase !== "plain" || !sidebarReady;
-      var openWorkflow = function () {
-        if (disabled) return;
-        try {
-          openWorkflowSidebar();
-        } catch (e) {
-          /* 侧边栏状态异常时保持对话可用 */
-        }
-      };
-
-      return react.createElement(
-        "button",
-        {
-          type: "button",
-          className: "wf1-open-btn",
-          disabled: disabled,
-          title: "打开工作流画布",
-          "aria-label": "打开工作流画布",
-
-          onClick: openWorkflow,
-        },
-        react.createElement(
-          "svg",
-          {
-            viewBox: "0 0 16 16",
-            "aria-hidden": true,
-            fill: "none",
-            stroke: "currentColor",
-            "stroke-width": 1.45,
-            "stroke-linecap": "round",
-            "stroke-linejoin": "round",
-          },
-          react.createElement("circle", { cx: 3.25, cy: 4, r: 1.35 }),
-          react.createElement("circle", { cx: 12.75, cy: 3.25, r: 1.35 }),
-          react.createElement("circle", { cx: 12.75, cy: 12.75, r: 1.35 }),
-          react.createElement("path", {
-            d: "M4.6 4h2.15A2.25 2.25 0 0 1 9 6.25v4.25A2.25 2.25 0 0 0 11.25 12.75h.15M9 7V5.5a2.25 2.25 0 0 1 2.25-2.25h.15",
-          }),
-        ),
-      );
-    }
 
     // ---- 空会话示例指令条（#101）：conversation.input.dock 注入 ----
     // 官方 dock slot 在「已建会话的空白态（hero）」渲染于 hero 区与输入框之间，
@@ -2428,17 +2373,6 @@ window.__ModuleLoader__.load({
         );
       });
       startSettingsNavIcon("Workflow One", WF_NAV_ICON_SVG);
-
-      ctx.slots.inject("conversation.input.left", function () {
-        return ctx.slots.register(
-          {
-            name: "conversation.input.left",
-            id: "ccpg-workflow-open",
-            order: 30,
-          },
-          WorkflowOpenButton,
-        );
-      });
 
       // 空会话示例指令条：dock slot 在空白会话（hero 态）渲染于输入框上方。
       // 绑定状态胶囊（#106）/ 修改类补丁确认条（#105）/ 示例条（#101）同 dock。
