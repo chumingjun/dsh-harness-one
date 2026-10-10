@@ -115,7 +115,6 @@ client.apply({
 });
 assert.deepEqual(injectedSlots, [
   "settings.section",
-  "conversation.input.left",
   "conversation.input.dock", // #106 绑定胶囊
   "conversation.input.dock", // #105 确认条
   "conversation.input.dock", // #101 示例条
