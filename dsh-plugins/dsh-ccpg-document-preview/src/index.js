@@ -99,26 +99,63 @@ export async function fetchPreviewResponse(url, options = {}) {
   return response;
 }
 
+export const PREVIEW_LOAD_TIMEOUT_MS = 15000;
+
+function previewTimeoutError(timeoutMs) {
+  const error = new Error(`预览读取超时（${Math.round(timeoutMs / 1000)} 秒），请重试。`);
+  error.name = 'TimeoutError';
+  error.code = 'preview-timeout';
+  return error;
+}
+
+// 外部 signal 透传 + 读流超时兜底：fetch/读流挂起时 abort 并换成 TimeoutError。
+// 不能把超时留在 AbortError 里——调用方（TextRenderer 等）按「主动取消」忽略它，
+// loading 会永远挂着（issue #166）。
+async function withPreviewTimeout(options, run) {
+  const timeoutMs = options.timeoutMs ?? PREVIEW_LOAD_TIMEOUT_MS;
+  const external = options.signal;
+  if (!timeoutMs) return run(external || undefined);
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort(external?.reason);
+  if (external?.aborted) controller.abort(external.reason);
+  else external?.addEventListener('abort', forwardAbort);
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+  try {
+    return await run(controller.signal);
+  } catch (error) {
+    if (timedOut) throw previewTimeoutError(timeoutMs);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    external?.removeEventListener('abort', forwardAbort);
+  }
+}
+
 export async function loadPreviewText(url, options = {}) {
   const maxBytes = options.maxBytes ?? 2 * 1024 * 1024;
-  const response = await fetchPreviewResponse(url, { signal: options.signal });
-  const declaredSize = Number(response.headers.get('content-length') || 0);
-  const message = `Text preview exceeds ${Math.ceil(maxBytes / 1024 / 1024)}MB`;
-  if (declaredSize > maxBytes) throw new Error(message);
-  const text = await response.text();
-  if (new Blob([text]).size > maxBytes) throw new Error(message);
-  return text;
+  return withPreviewTimeout(options, async (signal) => {
+    const response = await fetchPreviewResponse(url, { signal });
+    const declaredSize = Number(response.headers.get('content-length') || 0);
+    const message = `Text preview exceeds ${Math.ceil(maxBytes / 1024 / 1024)}MB`;
+    if (declaredSize > maxBytes) throw new Error(message);
+    const text = await response.text();
+    if (new Blob([text]).size > maxBytes) throw new Error(message);
+    return text;
+  });
 }
 
 export async function loadPreviewArrayBuffer(url, options = {}) {
   const maxBytes = options.maxBytes ?? 50 * 1024 * 1024;
-  const response = await fetchPreviewResponse(url, { signal: options.signal });
-  const declaredSize = Number(response.headers.get('content-length') || 0);
-  const message = `Document preview exceeds ${Math.ceil(maxBytes / 1024 / 1024)}MB`;
-  if (declaredSize > maxBytes) throw new Error(message);
-  const data = await response.arrayBuffer();
-  if (data.byteLength > maxBytes) throw new Error(message);
-  return data;
+  return withPreviewTimeout(options, async (signal) => {
+    const response = await fetchPreviewResponse(url, { signal });
+    const declaredSize = Number(response.headers.get('content-length') || 0);
+    const message = `Document preview exceeds ${Math.ceil(maxBytes / 1024 / 1024)}MB`;
+    if (declaredSize > maxBytes) throw new Error(message);
+    const data = await response.arrayBuffer();
+    if (data.byteLength > maxBytes) throw new Error(message);
+    return data;
+  });
 }
 
 export function createDocumentPreviewHost() {

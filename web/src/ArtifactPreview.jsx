@@ -46,8 +46,16 @@ export function ArtifactPreviewModal({ artifact, onClose }) {
 
 export function ArtifactPreviewButton({ artifact, className = 'artifact-action', children = '预览' }) {
   const normalized = normalizeArtifact(artifact);
-  if (!normalized.previewUrl || !documentPreviewKind(normalized.name, normalized.mimeType)) return null;
-  return <DocumentPreviewButton document={normalized} className={className} title={`预览 ${normalized.name}`}>{children}</DocumentPreviewButton>;
+  if (!documentPreviewKind(normalized.name, normalized.mimeType)) return null;
+  if (normalized.previewUrl) {
+    return <DocumentPreviewButton document={normalized} className={className} title={`预览 ${normalized.name}`}>{children}</DocumentPreviewButton>;
+  }
+  // 可预览但拿不到安全预览地址（如过程文件未被 scoped URL 覆盖，#166）：
+  // 降级为下载动作，不再静默消失——卡头空无一物会让用户误判功能缺失。
+  if (normalized.downloadUrl) {
+    return <a className={className} href={normalized.downloadUrl} download title={`下载 ${normalized.name}`}>{children}</a>;
+  }
+  return null;
 }
 
 /** 文件名本体可点击：可预览→开预览弹窗；不可预览→退化为下载链接；无地址→纯文本 */

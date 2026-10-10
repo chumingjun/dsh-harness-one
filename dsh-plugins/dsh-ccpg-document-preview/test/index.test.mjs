@@ -8,6 +8,8 @@ import {
   canPreviewDocument,
   createDocumentPreviewHost,
   fetchPreviewResponse,
+  loadPreviewArrayBuffer,
+  loadPreviewText,
   previewErrorMessage,
   documentExtension,
   documentMimeType,
@@ -259,4 +261,97 @@ test('univer-core: resolveEndpointOf/fileKeyOf/pickWorktree 纯函数', async ()
     { worktreeId: 'm1', status: 'merged', createdAt: '2026-01-01' },
     { worktreeId: 'm2', status: 'merged', createdAt: '2026-05-01' },
   ]), 'm2');
+});
+
+// 挂起 stub 必须响应 signal（真实 fetch 在 abort 时 reject；不响应的话超时包装也只能干等）
+function neverSettlingFetch() {
+  return (_url, options) => new Promise((_resolve, reject) => {
+    options?.signal?.addEventListener('abort', () => {
+      const error = new Error('aborted');
+      error.name = 'AbortError';
+      reject(error);
+    });
+  });
+}
+
+test('loadPreviewText 挂起的 fetch 在超时后抛 TimeoutError（不再无限等待，#166）', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = neverSettlingFetch();
+  try {
+    await assert.rejects(
+      loadPreviewText('/artifact', { timeoutMs: 50 }),
+      (error) => error.name === 'TimeoutError' && error.code === 'preview-timeout' && error.message.includes('预览读取超时'),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('loadPreviewText 响应头到达但读流挂起同样超时', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (_url, options) => Promise.resolve({
+    ok: true,
+    headers: new Map([['content-length', '10']]),
+    text: () => new Promise((_resolve, reject) => {
+      options?.signal?.addEventListener('abort', () => {
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      });
+    }),
+  });
+  try {
+    await assert.rejects(
+      loadPreviewText('/artifact', { timeoutMs: 50 }),
+      (error) => error.name === 'TimeoutError',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('loadPreviewArrayBuffer 超时兜底与 Text 同款', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = neverSettlingFetch();
+  try {
+    await assert.rejects(
+      loadPreviewArrayBuffer('/artifact', { timeoutMs: 50 }),
+      (error) => error.name === 'TimeoutError',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('外部 signal 取消仍以 AbortError 透传（不被误报为超时）', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => {
+      const error = new Error('aborted');
+      error.name = 'AbortError';
+      reject(error);
+    });
+  });
+  const controller = new AbortController();
+  const pending = loadPreviewText('/artifact', { signal: controller.signal, timeoutMs: 5000 });
+  setTimeout(() => controller.abort(), 20);
+  try {
+    await assert.rejects(pending, (error) => error.name === 'AbortError');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('loadPreviewText 正常路径经超时包装不受影响', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    headers: new Map([['content-length', '5']]),
+    text: async () => 'hello',
+  });
+  try {
+    assert.equal(await loadPreviewText('/artifact', { timeoutMs: 1000 }), 'hello');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
