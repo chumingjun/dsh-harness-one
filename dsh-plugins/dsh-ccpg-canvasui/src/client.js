@@ -276,13 +276,20 @@ window.__ModuleLoader__.load({
 
     function openWorkflowSidebar() {
       if (!betterSidebarRef.svc) return false;
-      // 不传 path：openTab 的 path 语义是「文件路径」，宿主会把它编码成
-      // dsh-resource://file 会话文件地址并 realpath 校验，传假路径直接 ENOENT；
-      // 自定义 tab 类型走 kind 打开即可（single:true 注册保证单实例聚焦）。
-      betterSidebarRef.svc.openTab({
-        type: WORKFLOW_TAB_TYPE,
-        title: "工作流",
-      });
+      // 不传 path：path 语义是「文件路径」，宿主会编码成 dsh-resource://file
+      // 会话文件地址并 realpath 校验，传假路径直接 ENOENT；自定义 tab 类型
+      // 走 kind 打开即可（single:true 注册保证单实例聚焦）。
+      // better-sidebar 0.25 openTab 形状：{sessionId, kind, params, revealIfOpened}。
+      try {
+        betterSidebarRef.svc.openTab({
+          sessionId: currentDshSessionId(null),
+          kind: WORKFLOW_TAB_TYPE,
+          params: { title: "工作流" },
+          revealIfOpened: true,
+        });
+      } catch (e) {
+        return false; // 无会话/服务态异常：回退新窗口打开
+      }
       return true;
     }
 
@@ -2466,6 +2473,10 @@ window.__ModuleLoader__.load({
               id: WORKFLOW_TAB_TYPE,
               title: function () {
                 return "工作流";
+              },
+              // better-sidebar 0.25：宿主「+」菜单引导页展示的一行说明（不写则只剩标题）
+              description: function () {
+                return "Workflow One 画布";
               },
               icon: function (size) {
                 return react.createElement(

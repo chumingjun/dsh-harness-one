@@ -132,14 +132,16 @@ assert.deepEqual(registeredSources.map((s) => s.name + s.trigger), ["workflow-on
 
 const opened = [];
 client.__test.setBetterSidebarService({
-  openTab(tab) {
-    opened.push(tab);
+  openTab(input) {
+    opened.push(input);
   },
 });
 assert.equal(client.__test.openWorkflowSidebar(), true);
+// better-sidebar 0.25 openTab 形状（#168）：sessionId 取 localStorage 当前会话（此处无 → null）；
+// bundle 在 vm 上下文执行，嵌套对象原型不同，JSON 归一化后比较
 assert.deepEqual(
-  opened.map((tab) => ({ ...tab })),
-  [{ type: "ccpg:workflow", title: "工作流" }],
+  opened.map((input) => JSON.parse(JSON.stringify(input))),
+  [{ sessionId: null, kind: "ccpg:workflow", params: { title: "工作流" }, revealIfOpened: true }],
 );
 client.__test.setBetterSidebarService(null);
 assert.equal(client.__test.openWorkflowSidebar(), false);
@@ -169,6 +171,11 @@ assert.deepEqual(
   [...tabs].map((tab) => tab.id),
   ["workflow", "files", "terminal"],
 );
+// better-sidebar 0.25 起右列 splits 不再在插件 state（宿主原生管理）：只剩 bottomSplits 可走（#168）
+const tabs025 = client.__test.sidebarAllTabs({
+  bottomSplits: { kind: "leaf", tabs: [{ id: "workflow", type: "ccpg:workflow" }] },
+});
+assert.deepEqual([...tabs025].map((tab) => tab.id), ["workflow"]);
 
 const closedTabs = [];
 client.__test.removeLegacyChatTabs({
