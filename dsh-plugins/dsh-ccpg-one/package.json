@@ -46,7 +46,7 @@
     "cordis.patch.yml"
   ],
   "dependencies": {
-    "dsh-better-sidebar": "0.16.1",
+    "dsh-better-sidebar": "0.25.0",
     "dsh-ccpg-canvasui": "0.9.0",
     "dsh-ccpg-document-preview": "0.9.0",
     "dsh-ccpg-larkauth": "0.9.0",
