@@ -9,6 +9,7 @@ REPO_ROOT=$(cd "$HERE/.." && pwd)
 MODE="${1:-}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org}"
 PACK_DIR="${NPM_PACK_DIR:-$REPO_ROOT/dist-release}"
+NODE_BIN="${DSH_NODE:-${WF1_NODE:-node}}"
 LEGACY="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-llm-guard dsh-ccpg-one"
 [ -z "$MODE" ] || [ "$MODE" = "--dry-run" ] || { echo "用法: sh publish-npm.sh [--dry-run]"; exit 1; }
 
@@ -18,9 +19,12 @@ VERSION=$(node -e "console.log(require(process.argv[1]).version)" "$HERE/dsh-ccp
 
 if [ "${SKIP_BUILD:-}" != "1" ]; then
   sh "$HERE/build-web.sh"
-  sh "$HERE/assemble-one.sh"
-  node "$REPO_ROOT/scripts/verify-plugin-packages.mjs"
 fi
+sh "$HERE/assemble-one.sh" --public
+PUBLIC_BUILD=1 "$NODE_BIN" "$REPO_ROOT/scripts/verify-plugin-packages.mjs"
+
+"$NODE_BIN" -e "const p=require(process.argv[1]); if(p.private||p.ccpg?.channel==='internal') throw new Error('refusing to publish internal aggregate')" \
+  "$HERE/dsh-harness-one/package.json"
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT INT TERM

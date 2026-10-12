@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   createDesktopLarkCliRuntime,
+  createCurrentUserLarkCliService,
   LARK_CLI_VERSION,
   larkAuthStatus,
   larkLoginQrcode,
   larkLoginStart,
+  runCurrentUserLarkCli,
   profileContextOf,
+  setLarkProfileDir,
 } from '../lib/lark-auth.js';
 
 const PLACEHOLDER_YAML = `packages:\n  - .\n\nallowBuilds:\n  '@larksuite/cli': set this to true or false\n`;
@@ -44,6 +47,7 @@ if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
 fi
 if [ "$1" = "fail" ]; then echo 'bad' >&2; exit 7; fi
 if [ "$1" = "wait" ]; then sleep 30; exit 0; fi
+if [ "$1" = "write-local" ]; then printf 'local source' > "$2"; fi
 printf '%s' '{"ok":true,"appId":"cli_app","defaultAs":"user","identities":{"user":{"available":true,"tokenStatus":"valid"},"bot":{"status":"ready"}}}'
 `;
 
@@ -96,6 +100,19 @@ try {
   assert.equal(calls.length, 1, 'runtime qrcode must bypass desktopPnpm');
   assert.equal(existsSync(join(profileDir, '.dsh-ccpg-larkauth-qr-does-not-exist.png')), false);
   await runtime.dispose();
+
+  const workingDir = mkdtempSync(join(tmpdir(), 'wf1-local-lark-cwd-'));
+  const localFile = `${basename(workingDir)}-source.md`;
+  try {
+    setLarkProfileDir(profileDir);
+    const result = await runCurrentUserLarkCli(null, ['write-local', `./${localFile}`], { cwd: workingDir });
+    assert.equal(result.ok, true);
+    assert.equal(readFileSync(join(workingDir, localFile), 'utf8'), 'local source', 'local CLI must honor the caller workspace');
+  } finally {
+    setLarkProfileDir('');
+    rmSync(workingDir, { recursive: true, force: true });
+    if (existsSync(localFile)) rmSync(localFile);
+  }
 
   const failed = createDesktopLarkCliRuntime({ profileDir, desktopPnpm: { run: () => { throw new Error('pnpm should not run'); } } });
   const failure = await failed.run(['fail']);
@@ -269,6 +286,41 @@ if (command === 'add') {
   } finally {
     rmSync(hostDir, { recursive: true, force: true });
   }
+}
+
+{
+  const calls = [];
+  const runtime = {
+    available: () => true,
+    run(args) {
+      calls.push(args);
+      return Promise.resolve({
+        ok: true,
+        data: {
+          title: 'doc',
+          token: 'doccn-identifier',
+          access_token: 'must-not-leak',
+          nested: { refreshToken: 'must-not-leak-either', kept: 'visible' },
+        },
+      });
+    },
+  };
+  const result = await runCurrentUserLarkCli(runtime, ['docs', '+fetch', '--doc', 'doc_1']);
+  assert.deepEqual(calls[0], ['docs', '+fetch', '--doc', 'doc_1', '--as', 'user']);
+  assert.equal(result.ok, true);
+  assert.equal(result.data.token, 'doccn-identifier');
+  assert.equal(result.data.access_token, undefined);
+  assert.equal(result.data.nested.refreshToken, undefined);
+  assert.equal(result.data.nested.kept, 'visible');
+
+  await assert.rejects(
+    () => runCurrentUserLarkCli(runtime, ['docs', '+fetch', '--as', 'bot', '--doc', 'doc_1']),
+    /current user|--as user/i,
+  );
+  const service = createCurrentUserLarkCliService(runtime);
+  await service.run(['docs', '+fetch', '--as=user', '--doc', 'doc_1']);
+  assert.deepEqual(calls[1], ['docs', '+fetch', '--as=user', '--doc', 'doc_1']);
+  assert.equal(service.available(), true);
 }
 
 // profileContext 的逐字段校验：缺一即弃，半截的调用跑不起来

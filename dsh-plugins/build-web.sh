@@ -3,6 +3,7 @@
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 sh "$HERE/build-canvasui.sh"
+sh "$HERE/build-scheme.sh"
 sh "$HERE/build-document-preview.sh"
 cd "$HERE/../web"
 WF1_BASE=/wf1/ npm run build >/dev/null

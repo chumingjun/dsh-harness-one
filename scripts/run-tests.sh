@@ -25,6 +25,7 @@ run_suite dsh-plugins/dsh-ccpg-llm-guard/test '*.test.mjs'
 run_suite dsh-plugins/dsh-ccpg-canvasui/test '*.test.mjs'
 run_suite dsh-plugins/dsh-ccpg-larkauth/test '*.test.mjs'
 run_suite dsh-plugins/dsh-ccpg-one/test '*.test.mjs'
+run_suite dsh-plugins/dsh-ccpg-scheme/test '*.test.mjs'
 
 # document-preview 用 node --test runner
 echo "→ dsh-plugins/dsh-ccpg-document-preview/test"

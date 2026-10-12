@@ -13,6 +13,16 @@
 | `dsh-ccpg-llm-guard` | 默认 | 拦截模型返回的空 id/name/arguments 工具调用，自动重试且不污染会话 |
 | `dsh-ccpg-brand` | 独立可选 | 品牌定制（CCPG logo + 聊天 hero 标题）；默认安装与聚合包均不包含 |
 
+内部方案版另内置 `dsh-ccpg-scheme`：章节规则和标准技能、材料处理、成果面板、Word/ZIP 导出及当前用户飞书交付，随内部 `dsh-harness-one` 一次安装。PDF 与官方 Office 后备技能及解析库随包；飞书 CLI 由 larkauth 在当前 profile 初始化，用户首次登录仍需自己授权。方案不要求额外安装记忆、自动续跑、图片读取或上下文压缩社区插件，基础能力由 DSH 宿主提供。公共 npm 版不含内部方案规则和资源。
+
+### 内部方案包
+
+开发者运行 `npm run pack:internal -- 0.11.4-internal.portable.r15`，重新构建并生成 `dist-release/dsh-harness-one-0.11.4-internal.portable.r15.zip`。装配在临时目录完成，不覆盖 Desktop 当前链接的聚合目录。
+
+同事只需拿到该 ZIP，在 DSH 会话中说“请按包内说明帮我安装这个 CCPG 方案插件”。无需源码，安装与用户登录说明见 [INTERNAL-INSTALL.md](INTERNAL-INSTALL.md)。本入口与下方公共版本的源码/旧 tarball 安装流程分开。
+
+ZIP 仅包含内部聚合插件 `.tgz`、固定版本侧栏 `.tgz`、校验清单、跨平台 Node 安装器和安装说明。聚合插件按运行文件清单装配；保留章节技能、模板原件、知识依赖、图片、许可和必要客户端构建产物，排除 brand、旧聚合壳、拆分安装包、历史任务文档、测试、开发脚本、未构建页面源码和用户数据。JS/WASM 依赖由目标机包管理器安装，需联网；不携带开发机 node_modules 或 Office/canvas 原生二进制。
+
 ## 安装与使用
 
 普通 dsh 有 release/源码两种路径，前提是 **Node ≥ 22.15.0**（dsh 本体需要 `node:zlib` 的 zstd API）、`npm i -g @deepseek-ai/dsh`。Harness Desktop 自带运行时，走下面的原生插件命令。

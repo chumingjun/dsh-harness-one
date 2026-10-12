@@ -33,7 +33,7 @@ export const LEGACY_PACKAGES = [
   'dsh-ccpg-llm-guard',
   'dsh-ccpg-one',
 ];
-export const PACKAGES = [PACKAGE, ...LEGACY_PACKAGES, SIDEBAR];
+export const PACKAGES = [PACKAGE, ...LEGACY_PACKAGES, SIDEBAR, 'dsh-ccpg-scheme'];
 
 export function profilesRoot() {
   const home = process.env.DSH_HOME || join(homedir(), '.dsh');
@@ -56,6 +56,16 @@ function readPackageVersion(pkgDir) {
     return JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')).version || null;
   } catch {
     return null;
+  }
+}
+
+export function isInternalPackage(startPath) {
+  for (let directory = resolve(startPath); ; directory = dirname(directory)) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'));
+      if (manifest.name === PACKAGE && manifest.ccpg?.channel === 'internal') return true;
+    } catch {}
+    if (dirname(directory) === directory) return false;
   }
 }
 
@@ -86,7 +96,7 @@ export function collectInstallReport({ profilesRoot: root = profilesRoot() } = {
         const raw = spec.slice(5);
         let target = null;
         try {
-          target = isAbsolute(raw) ? realpathSync(raw) : null;
+          target = realpathSync(resolve(path, raw));
         } catch {
           target = null;
         }
@@ -97,9 +107,11 @@ export function collectInstallReport({ profilesRoot: root = profilesRoot() } = {
           target,
           version: target ? readPackageVersion(target) : null,
           gitRoot: target ? gitRootOf(target) : null,
+          ...(target && isInternalPackage(target) ? { channel: 'internal' } : {}),
         });
       } else {
-        packages.push({ name: pkg, kind: 'registry', spec, version: spec.replace(/^[^\d]*/, '') || null });
+        packages.push({ name: pkg, kind: 'registry', spec, version: spec.replace(/^[^\d]*/, '') || null,
+          ...(isInternalPackage(join(path, 'node_modules', pkg)) ? { channel: 'internal' } : {}) });
       }
     }
     // 残局探测：升级中断的 profile 被 dsh plugin remove 全量回收——依赖表与
@@ -129,6 +141,11 @@ export function planUpgrade(report) {
   const seenSourceRoots = new Set();
 
   for (const profile of report) {
+    if (profile.packages.some((pkg) => pkg.channel === 'internal' || pkg.name === 'dsh-ccpg-scheme')) {
+      actions.push({ type: 'manual-internal', title: `内部方案插件更新（profile: ${profile.name}）`,
+        profile: profile.name, instruction: '此安装包含内部方案插件，仅使用经过验收的内部安装包更新；不会拉取源码或用公共 npm latest 覆盖。' });
+      continue;
+    }
     const byName = new Map(profile.packages.map((p) => [p.name, p]));
     const hasNew = byName.get(PACKAGE);
     const legacyEntry = byName.get('dsh-ccpg-one');
@@ -200,7 +217,25 @@ export function planUpgrade(report) {
   if (!actions.length) {
     return { actions, warnings: [...warnings, '未发现可自动升级的安装（可能尚未安装本套件）'], restartRequired: false };
   }
-  return { actions, warnings, restartRequired: true };
+  return { actions, warnings, restartRequired: actions.some((action) => action.type !== 'manual-internal') };
+}
+
+export async function checkPackageUpdate(manifest, { fetchImpl = fetch } = {}) {
+  const current = manifest.version || null;
+  if (manifest.ccpg?.channel === 'internal') return { ok: true, current, latest: null, updateAvailable: false, channel: 'internal', manualUpdate: true };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetchImpl(`https://registry.npmjs.org/${PACKAGE}`, {
+      headers: { accept: 'application/vnd.npm.install-v1+json', 'user-agent': 'dsh-harness-one-upgrade-check' },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`registry ${response.status}`);
+    const latest = (await response.json())['dist-tags']?.latest || null;
+    return { ok: true, current, latest, updateAvailable: !!(latest && compareSemver(latest, current) > 0) };
+  } catch (error) {
+    return { ok: false, current, latest: null, updateAvailable: false, error: String(error.message || error) };
+  } finally { clearTimeout(timer); }
 }
 
 // npm 渠道实体落在 profile node_modules 里；link 渠道此路径不存在。
@@ -331,7 +366,7 @@ export function clip(text) {
 // 但 source-pull 的任何子步失败会终止该仓库后续重建步骤。
 // desktopPnpm/desktopProfile（可选）：Electron 独占 profile 的受管改包通道，
 // 命中该 profile 的 npm 动作改走服务而不 spawn dsh CLI（CLI 对 desktop 硬拒）。
-export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh, desktopPnpm = null, desktopProfile = null } = {}) {
+export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh, desktopPnpm = null, desktopProfile = null, platform = process.platform } = {}) {
   const log = [];
   let sawDesktop = false;
   const push = (line) => {
@@ -341,6 +376,10 @@ export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh, desk
   for (const action of plan.actions) {
     push(`▶ ${action.title}`);
     if (action.type === 'source-pull') {
+      if (platform === 'win32') {
+        push('  Windows 请使用标准插件安装包更新；源码构建需要 POSIX 开发环境，未拉取或修改源码。');
+        continue;
+      }
       const dirty = await runCmd('git', ['status', '--porcelain'], action.root);
       if (!dirty.ok) {
         push(`  ✗ git status 失败：${dirty.err}`);
@@ -365,6 +404,10 @@ export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh, desk
       if (!orchDeps.ok) push(`  ✗ orchestrator 依赖：${clip(orchDeps.err || orchDeps.out)}`);
       else push('  ✓ orchestrator 依赖就绪');
     } else if (action.type === 'npm-migrate' || action.type === 'npm-reinstall') {
+      if (isInternalPackage(join(action.profilePath, 'node_modules', PACKAGE)) || readDep(action.profilePath, 'dsh-ccpg-scheme')) {
+        push('  内部方案插件安装，仅允许内部包更新，已拒绝公共 npm 更新');
+        continue;
+      }
       const desktop = isDesktopAction(action, desktopProfile) && desktopPnpm;
       if (desktop) sawDesktop = true;
       const dsh = desktop ? null : (dshBin || await resolveDshBin(runCmd));
@@ -434,7 +477,7 @@ export async function executePlan(plan, { dshBin, runCmd = run, runSh = sh, desk
         push(sb.ok ? `  ✓ ${SIDEBAR} 已注册进 bundles（官方 UI 工作流侧栏）` : `  ⚠ better-sidebar 注册失败：${sb.out}（可手动 dsh plugin --profile ${action.profile} add ${SIDEBAR}）`);
         if (desktop && sb.ok) ensureProfileBundles(action.profilePath, { add: [SIDEBAR] });
       }
-    } else if (action.type === 'manual-overlay') {
+    } else if (action.type === 'manual-overlay' || action.type === 'manual-internal') {
       push(`  ${action.instruction}`);
     }
   }

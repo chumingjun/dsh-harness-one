@@ -16,13 +16,19 @@ try {
   assert.deepEqual(inject, ['webServer']);
 
   const ordinaryRoutes = [];
+  const provided = [];
+  const services = {};
   apply({
     get: () => undefined,
     webServer: { register: (route) => ordinaryRoutes.push(route) },
+    provide(name) { provided.push(name); },
+    set(name, value) { services[name] = value; },
     effect: () => {},
     logger: { info() {} },
   });
   assert.equal(ordinaryRoutes[0].path, '/wf1/api/lark-auth');
+  assert.deepEqual(provided, ['ccpgLarkUserCli']);
+  assert.equal(typeof services.ccpgLarkUserCli.run, 'function');
 
   const desktopRoutes = [];
   const requested = [];

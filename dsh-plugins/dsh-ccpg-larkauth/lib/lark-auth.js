@@ -144,11 +144,11 @@ function parseResult(out, err, ok) {
   }
 }
 
-function runLocal(args, { timeoutMs = 20000 } = {}) {
+function runLocal(args, { cwd, timeoutMs = 20000 } = {}) {
   const bin = larkCliBin();
   if (!bin) return Promise.resolve({ ok: false, error: 'lark-cli not installed' });
   return new Promise((resolve) => {
-    const child = spawn(bin, args, { timeout: timeoutMs });
+    const child = spawn(bin, args, { cwd, timeout: timeoutMs });
     let out = '', err = '';
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { err += d; });
@@ -165,6 +165,64 @@ function runtimeAvailable(runtime) {
 
 function runtimeRun(runtime, args, options) {
   return runtime ? runtime.run(args, options) : runLocal(args, options);
+}
+
+const SECRET_KEY = /access[_-]?token|refresh[_-]?token|tenant[_-]?access[_-]?token|user[_-]?access[_-]?token|refreshToken|secret|password|credential|private.*key|api.*key/i;
+
+function sanitizeCliValue(value) {
+  if (Array.isArray(value)) return value.map(sanitizeCliValue);
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (SECRET_KEY.test(key)) continue;
+    out[key] = sanitizeCliValue(child);
+  }
+  return out;
+}
+
+function userIdentityArgs(args) {
+  const out = [];
+  let sawIdentity = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = String(args[i]);
+    if (arg === '--as') {
+      const value = String(args[i + 1] || '');
+      if (value !== 'user') throw new Error('current user lark-cli requires explicit --as user and will not use bot or another identity');
+      sawIdentity = true;
+      out.push(arg, value);
+      i += 1;
+    } else if (arg.startsWith('--as=')) {
+      if (arg !== '--as=user') throw new Error('current user lark-cli requires explicit --as user and will not use bot or another identity');
+      sawIdentity = true;
+      out.push(arg);
+    } else {
+      out.push(arg);
+    }
+  }
+  if (!sawIdentity) out.push('--as', 'user');
+  return out;
+}
+
+export async function runCurrentUserLarkCli(runtime, args, options = {}) {
+  if (!Array.isArray(args) || !args.every((arg) => typeof arg === 'string')) throw new TypeError('lark-cli args must be string[]');
+  const res = await runtimeRun(runtime, userIdentityArgs(args), options);
+  return sanitizeCliValue(res);
+}
+
+export function createCurrentUserLarkCliService(runtime) {
+  return {
+    service: 'ccpgLarkUserCli',
+    available: () => runtimeAvailable(runtime),
+    async run(args, options) {
+      if (!Array.isArray(args) || !args.every((arg) => typeof arg === 'string')) throw new TypeError('lark-cli args must be string[]');
+      userIdentityArgs(args);
+      if (!runtimeAvailable(runtime)) {
+        const installed = await ensureLarkCli(runtime);
+        if (!installed.ok) return installed;
+      }
+      return runCurrentUserLarkCli(runtime, args, options);
+    },
+  };
 }
 
 /**

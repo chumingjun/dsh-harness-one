@@ -15,9 +15,13 @@
 # 用法：sh assemble-one.sh [--check]   # --check 只校验产物与源一致（防漂移），不重建
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-OUT="$HERE/dsh-harness-one"
+OUT="${ASSEMBLE_OUT:-$HERE/dsh-harness-one}"
 NODE_BIN="${DSH_NODE:-${WF1_NODE:-node}}"
-PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-llm-guard"
+PUBLIC=0
+[ "${1:-}" = "--public" ] && PUBLIC=1
+BASE_PLUGINS="dsh-ccpg-larkauth dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-llm-guard"
+PLUGINS="$BASE_PLUGINS"
+[ "$PUBLIC" = 0 ] && PLUGINS="$PLUGINS dsh-ccpg-scheme"
 
 CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
@@ -27,6 +31,11 @@ CHECK_ONLY=0
 [ -f "$HERE/dsh-ccpg-canvasui/lib/client.js" ] || { echo "✗ 缺 dsh-ccpg-canvasui/lib/client.js（先 sh build-canvasui.sh）"; exit 1; }
 [ -f "$HERE/dsh-ccpg-document-preview/dist/client.js" ] || { echo "✗ 缺 dsh-ccpg-document-preview/dist/client.js（先 sh build-document-preview.sh）"; exit 1; }
 [ -f "$HERE/dsh-ccpg-larkauth/lib/client.js" ] || { echo "✗ 缺 dsh-ccpg-larkauth/lib/client.js"; exit 1; }
+if [ "$PUBLIC" = 0 ]; then
+  for d in rules skills vendor; do
+    [ -d "$HERE/dsh-ccpg-scheme/$d" ] || { echo "✗ 内部方案包缺 dsh-ccpg-scheme/${d}（规则/技能未就绪）"; exit 1; }
+  done
+fi
 
 # 版本号与聚合包列车对齐：取 dsh-ccpg-one 的版本
 VERSION=$("$NODE_BIN" -e "console.log(require(process.argv[1]).version)" "$HERE/dsh-ccpg-one/package.json")
@@ -36,24 +45,52 @@ SIDEBAR_VER=$("$NODE_BIN" -e "console.log(require(process.argv[1]).dependencies[
 rm -rf "$OUT"
 mkdir -p "$OUT/lib" "$OUT/bin"
 
-# ---- 1. 子插件源码整体拷入（lib/src/dist/skills/package.json 按包实际形态）----
+# ---- 1. 子插件源码整体拷入（只拷运行时目录，不带测试、文档、材料或状态）----
 # package.json 必须拷：子插件代码用 ../package.json 读自身版本（selfPluginVersion）、
 # 定位 skills 种子等；不带的话运行时版本探测返回 null。
 for p in $PLUGINS; do
   mkdir -p "$OUT/$p"
   cp "$HERE/$p/package.json" "$OUT/$p/package.json"
-  for d in lib src dist skills; do
+  case "$p" in
+    dsh-ccpg-scheme) RUNTIME_DIRS="lib rules skills vendor licenses" ;;
+    dsh-ccpg-document-preview) RUNTIME_DIRS="dist" ;;
+    dsh-ccpg-web) RUNTIME_DIRS="lib web-dist" ;;
+    dsh-ccpg-larkauth|dsh-ccpg-orchestrator) RUNTIME_DIRS="lib skills" ;;
+    *) RUNTIME_DIRS="lib" ;;
+  esac
+  for d in $RUNTIME_DIRS; do
     [ -d "$HERE/$p/$d" ] && cp -R "$HERE/$p/$d" "$OUT/$p/$d"
   done
-  # web 画布产物单独拷（源码树 gitignore）
-  [ -d "$HERE/$p/web-dist" ] && cp -R "$HERE/$p/web-dist" "$OUT/$p/web-dist"
+  if [ "$p" = dsh-ccpg-document-preview ]; then
+    mkdir -p "$OUT/$p/src"
+    for f in host.js index.js markdown-compat.mjs markdown-sanitize.mjs; do
+      cp "$HERE/$p/src/$f" "$OUT/$p/src/$f"
+    done
+  fi
+  for f in LICENSE LICENSE.txt; do
+    if [ -f "$HERE/$p/$f" ]; then cp "$HERE/$p/$f" "$OUT/$p/$f"; fi
+  done
 done
-# ---- 1.5 orchestrator 运行时依赖：声明进单包 manifest（npm pack 不收 node_modules；
-# registry 安装时 npm/pnpm 把 ajv/cron-parser/quickjs 落到 profile node_modules，
-# ESM 从子插件目录向上解析命中——已实测 registry 布局通过）----
-# 本地 link: 开发形态的运行时依赖（ajv/cron/quickjs）由 setup.sh --one 软链进
-# profile node_modules（离线归档同路径），装配目录不放假链——绝对路径软链进了
-# tarball 会变成装机机上的断链。
+# ---- 1.5 本地 link 运行时依赖实体化 ----
+# registry 安装由 npm/pnpm 解析 dependencies；本地 link 不经过该安装布局，
+# DSH Desktop 会从聚合包自身解析子插件 import，因此这里放实体依赖。
+# npm pack 不收 node_modules，归档仍由 pack.sh 按同一清单实体化。
+materialize_runtime_deps() {
+  rm -rf "$OUT/node_modules"
+  mkdir -p "$OUT/node_modules"
+  if [ "$PUBLIC" = 0 ]; then
+    [ -d "$HERE/dsh-ccpg-scheme/node_modules" ] || { echo "✗ 内部方案解析依赖未安装（先运行 setup/pack 的依赖安装步骤）"; exit 1; }
+    for dep in "$HERE"/dsh-ccpg-scheme/node_modules/*; do
+      [ -e "$dep" ] || continue
+      [ "$(basename "$dep")" = "@deepseek-ai" ] && continue
+      cp -R "$dep" "$OUT/node_modules/"
+    done
+  fi
+  for dep in ajv cron-parser quickjs-emscripten fast-deep-equal fast-uri json-schema-traverse require-from-string luxon @jitl; do
+    [ -d "$HERE/dsh-ccpg-orchestrator/node_modules/$dep" ] || { echo "✗ 缺 orchestrator 运行依赖: $dep"; exit 1; }
+    cp -R "$HERE/dsh-ccpg-orchestrator/node_modules/$dep" "$OUT/node_modules/$dep"
+  done
+}
 
 # ---- 2. 聚合入口（服务端）----
 cat > "$OUT/lib/index.js" <<'EOF'
@@ -61,13 +98,21 @@ cat > "$OUT/lib/index.js" <<'EOF'
 // 子插件源码在本包各子目录（../dsh-ccpg-*/lib/index.js），cordis 形状原样生效
 // （name/inject/Config/apply 都由 ctx.plugin 消费）。可选件门控沿用 CCPG_* 环境变量：
 // CCPG_NO_LARK / CCPG_NO_PREVIEW / CCPG_NO_GUARD / CCPG_ONLY_CORE。
+import * as larkauth from '../dsh-ccpg-larkauth/lib/index.js';
 import * as tools from '../dsh-ccpg-tools/lib/index.js';
 import * as orchestrator from '../dsh-ccpg-orchestrator/lib/index.js';
 import * as web from '../dsh-ccpg-web/lib/index.js';
 import * as canvasui from '../dsh-ccpg-canvasui/lib/index.js';
 import * as preview from '../dsh-ccpg-document-preview/src/host.js';
-import * as larkauth from '../dsh-ccpg-larkauth/lib/index.js';
 import * as guard from '../dsh-ccpg-llm-guard/lib/index.js';
+EOF
+cp "$HERE/dsh-ccpg-scheme/lib/ccpg-cli.js" "$OUT/lib/ccpg-cli.js"
+if [ "$PUBLIC" = 0 ]; then
+  cat >> "$OUT/lib/index.js" <<'EOF'
+import * as scheme from '../dsh-ccpg-scheme/lib/index.js';
+EOF
+fi
+cat >> "$OUT/lib/index.js" <<'EOF'
 
 export const name = 'dsh-harness-one';
 export const inject = [];
@@ -80,13 +125,20 @@ const OPTIONAL = {
 
 export function apply(ctx) {
   // 挂载顺序即依赖顺序：tools 先注册（orchestrator 的助手依赖它），web 先于 canvasui
-  const subs = [tools, orchestrator, web, canvasui, preview, larkauth, guard];
+  const subs = [larkauth, tools, orchestrator, web, canvasui, preview, guard];
+EOF
+if [ "$PUBLIC" = 0 ]; then
+  cat >> "$OUT/lib/index.js" <<'EOF'
+  subs.push(scheme);
+EOF
+fi
+cat >> "$OUT/lib/index.js" <<'EOF'
   for (const sub of subs) {
     const off = OPTIONAL[sub.name] ? OPTIONAL[sub.name]() : false;
     if (off) { ctx.logger?.info?.(`dsh-harness-one: ${sub.name} 按环境变量跳过`); continue; }
     ctx.plugin(sub);
   }
-  ctx.logger?.info?.('dsh-harness-one: 7 个子插件已挂载（单包装配）');
+  ctx.logger?.info?.(`dsh-harness-one: ${subs.length} 个子插件已装配`);
 }
 EOF
 
@@ -97,15 +149,19 @@ EOF
 # 执行三个子客户端的 apply（各自包 try/catch 隔离失败）。
 # 实现方式：把三个源 bundle 的 __ModuleLoader__.load({...}) 调用改为注册进本地表
 # SUB_FACTORIES，再由尾部组合 factory 读取并驱动。
-"$NODE_BIN" - "$HERE" "$OUT" <<'NODE'
+"$NODE_BIN" - "$HERE" "$OUT" "$PUBLIC" <<'NODE'
 const fs = require('fs');
 const path = require('path');
-const [here, out] = process.argv.slice(2);
+const [here, out, publicRaw] = process.argv.slice(2);
+const isPublic = publicRaw === '1';
 const sources = [
   ['dsh-ccpg-canvasui', fs.readFileSync(path.join(here, 'dsh-ccpg-canvasui/lib/client.js'), 'utf8')],
   ['dsh-ccpg-larkauth', fs.readFileSync(path.join(here, 'dsh-ccpg-larkauth/lib/client.js'), 'utf8')],
   ['dsh-ccpg-document-preview', fs.readFileSync(path.join(here, 'dsh-ccpg-document-preview/dist/client.js'), 'utf8')],
 ];
+if (!isPublic && fs.existsSync(path.join(here, 'dsh-ccpg-scheme/lib/client.js'))) {
+  sources.push(['dsh-ccpg-scheme', fs.readFileSync(path.join(here, 'dsh-ccpg-scheme/lib/client.js'), 'utf8')]);
+}
 const header = `// dsh-harness-one 合并 client bundle（assemble-one.sh 生成，勿手改）。
 // 三个子客户端工厂注册进本地表 __oneFactories__，由尾部的 dsh-harness-one 组合
 // factory 依次驱动——单一 graph entry 单一 id，apply 内部组合三个子 apply。
@@ -129,6 +185,7 @@ __oneOriginalLoad__({
     exports.inject = ["slots"];
     exports.apply = function (ctx) {
       var order = ["dsh-ccpg-canvasui", "dsh-ccpg-larkauth", "dsh-ccpg-document-preview"];
+      if (__oneFactories__["dsh-ccpg-scheme"]) order.push("dsh-ccpg-scheme");
       for (var i = 0; i < order.length; i++) {
         var factory = __oneFactories__[order[i]];
         if (!factory) { console.warn("[dsh-harness-one] client 缺子工厂: " + order[i]); continue; }
@@ -175,6 +232,8 @@ fi
 # 但 react.js / renderers 的外部 chunk 路径在 dist/react.js（web 画布用 file: 依赖直引，不走本路由）。
 
 # ---- 5. 安装器（pnpm11 预写，沿用 dsh-ccpg-one 的实现）：包名替换 + 清空 SUBPLUGINS ----
+# 内部交付只用 ZIP 中的 install.mjs，不携带会安装公共 registry 包的旧入口。
+if [ "$PUBLIC" = 1 ]; then
 # 安装器在主 add 后补一条 dsh plugin add dsh-better-sidebar（见下方注入）。
 # 先清空多行数组（单包无子包依赖；正则吃到数组结尾的 `];`），再全局换名。
 sed -E "s/^const SUBPLUGINS = \[[^]]*\];/const SUBPLUGINS = [];/" "$HERE/dsh-ccpg-one/bin/install.js" \
@@ -200,6 +259,9 @@ open(p, 'w').write(s)
 print('installer: sidebar add injected')
 PYI
 "$NODE_BIN" --check "$OUT/bin/install.js" || { echo "✗ installer 注入后语法错误"; exit 1; }
+else
+  cp "$HERE/check-runtime.mjs" "$OUT/bin/check-runtime.mjs"
+fi
 
 # ---- 6. manifest 与 patch ----
 cat > "$OUT/package.json" <<EOF
@@ -261,6 +323,29 @@ cat > "$OUT/package.json" <<EOF
 }
 EOF
 
+if [ "$PUBLIC" = 0 ]; then
+  "$NODE_BIN" - "$OUT/package.json" "$HERE/dsh-ccpg-scheme/package.json" <<'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+pkg.description += ' (internal scheme-enabled edition)';
+pkg.private = true;
+pkg.engines.node = '>=22.19.0';
+pkg.files.splice(pkg.files.indexOf('cordis.patch.yml'), 0, 'dsh-ccpg-scheme');
+Object.assign(pkg.dependencies, JSON.parse(fs.readFileSync(process.argv[3], 'utf8')).dependencies);
+pkg.dsh.manifestVersion = 1;
+pkg.peerDependencies = { '@deepseek-ai/dsh-agent': '>=0.2.0-rc.2 <0.3.0' };
+pkg.peerDependenciesMeta = { '@deepseek-ai/dsh-agent': { optional: true } };
+delete pkg.publishConfig;
+delete pkg.bin;
+pkg.ccpg = { channel: 'internal', scheme: true };
+fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
+NODE
+fi
+
+materialize_runtime_deps
+echo "✓ 本地 link 运行依赖已实体化"
+
 cat > "$OUT/cordis.patch.yml" <<'EOF'
 # dsh-harness-one 单包 bundle patch：一条命令装齐 Workflow One 全部 7 个插件。
 #
@@ -287,8 +372,9 @@ const entry = fs.readFileSync('$OUT/lib/index.js', 'utf8');
 if (!entry.includes(\"export const name = 'dsh-harness-one'\")) throw new Error('入口 name 不对');
 if (!entry.includes('ctx.plugin(')) throw new Error('入口缺 ctx.plugin 挂载');
 const imports = (entry.match(/^import \* as /gm) || []).length;
-if (imports !== 7) throw new Error('入口应 import 7 个子插件，实际 ' + imports);
-console.log('✓ 聚合入口形态校验通过（7 子插件）');
+const expected = ${PUBLIC} === 0 ? 8 : 7;
+if (imports !== expected) throw new Error('入口子插件数量错误：期望 ' + expected + '，实际 ' + imports);
+console.log('✓ 聚合入口形态校验通过（' + expected + ' 子插件）');
 "
 
 echo "✓ dsh-harness-one@$VERSION 装配完成 → $OUT"

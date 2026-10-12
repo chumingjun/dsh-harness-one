@@ -24,7 +24,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.15.0
+          node-version: 22.19.0
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -42,7 +42,8 @@ jobs:
           # 依赖须在 test 前装好；build-document-preview.sh 的 npm ci 幂等复用。
           npm --prefix dsh-plugins/dsh-ccpg-orchestrator install --no-audit --no-fund
           npm --prefix dsh-plugins/dsh-ccpg-document-preview install --no-audit --no-fund
-          npm install --no-save --no-audit --no-fund @deepseek-ai/schemastery @deepseek-ai/dsh-llm @deepseek-ai/dsh-tools @deepseek-ai/dsh-session
+          npm --prefix dsh-plugins/dsh-ccpg-scheme ci --ignore-scripts --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund @deepseek-ai/schemastery @deepseek-ai/dsh-llm @deepseek-ai/dsh-tools @deepseek-ai/dsh-session @deepseek-ai/dsh-typert-protocol
 
       - name: test
         run: npm test
@@ -50,7 +51,7 @@ jobs:
       - name: build
         run: sh dsh-plugins/build-web.sh
         env:
-          DSH_NODE: node # Workflow One 用 node:sqlite，要求 ≥22.15.0；CI 里就是 node 本身
+          DSH_NODE: node # 内部方案解析依赖要求 ≥22.19.0；CI 使用同一最低版本
 
       - name: assemble single package
         run: sh dsh-plugins/assemble-one.sh
