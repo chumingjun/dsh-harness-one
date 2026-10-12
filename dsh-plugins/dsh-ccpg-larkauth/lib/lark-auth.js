@@ -26,8 +26,8 @@ const CANDIDATES = [
 const LARK_BIN_NAME = process.platform === 'win32' ? 'lark-cli.exe' : 'lark-cli';
 
 /** profile 内那一份 lark-cli 的二进制路径（装在 profile 里的 @larksuite/cli） */
-export function profileLarkBin(profileDir) {
-  return profileDir ? join(profileDir, 'node_modules', '@larksuite', 'cli', 'bin', LARK_BIN_NAME) : null;
+export function profileLarkBin(profileDir, platform = process.platform) {
+  return profileDir ? join(profileDir, 'node_modules', '@larksuite', 'cli', 'bin', platform === 'win32' ? 'lark-cli.exe' : 'lark-cli') : null;
 }
 
 // 装进 profile 的 lark-cli 既不在任何全局 bin 目录里，PATH 上通常也没有软链——
@@ -114,11 +114,15 @@ function terminateLark(child) {
   }
 }
 
-export function larkCliBin() {
-  const found = [profileLarkBin(_profileLarkDir), ...CANDIDATES]
+export function larkCliBin({ platform = process.platform, env = process.env } = {}) {
+  const paths = (env.PATH || env.Path || '').split(platform === 'win32' ? ';' : ':').filter(Boolean);
+  const found = [profileLarkBin(_profileLarkDir, platform),
+    ...paths.flatMap((dir) => [profileLarkBin(dir, platform), join(dir, platform === 'win32' ? 'lark-cli.exe' : 'lark-cli')]),
+    ...(platform === 'win32' ? [profileLarkBin(NPM_GLOBAL, platform), profileLarkBin(env.APPDATA ? join(env.APPDATA, 'npm') : null, platform)] : CANDIDATES)]
     .find((p) => { try { return statSync(p).isFile(); } catch { return false; } });
   if (found) return found;
   try {
+    if (platform === 'win32') return null;
     const r = spawnSync('which', ['lark-cli'], { timeout: 3000 });
     const p = r.status === 0 ? String(r.stdout).trim() : '';
     if (p && statSync(p).isFile()) return p;
