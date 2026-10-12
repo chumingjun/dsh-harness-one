@@ -1,0 +1,12 @@
+# Material reading contract
+
+Use DSH's native agent, file capabilities and official Office skills. The plugin records sources, saves results and validates chapter inputs; it does not run another model loop.
+
+- `material_parse` preserves one original source and extracts reusable Markdown, exact numbers, tables, source locations and images. `complete` text-only documents need no image reading.
+- `needs-review` means readable text has additional content to review, not that every embedded image must be viewed. Inspect the original through the appropriate Office/PDF skill. Review business images, diagrams, comments and unsupported parts as needed; use native multimodal capabilities only for facts requiring visual interpretation.
+- `needs-vision` means the source lacks reliable readable text, such as a scan or image. Use the configured multimodal model via DSH's native capabilities. A file handle is a reference for the agent to read, not proof that binary bytes reached the model.
+- Save the document interpretation as Markdown in the scheme workspace. `material_complete` takes the registered source ID, unchanged source hash, Markdown path, review description and explicit `unresolved` list. It preserves extracted text and creates one reusable material; unresolved business facts still block required inputs.
+- Exporter name/time watermarks are decorative, not business facts. The parser excludes only structurally identified decorations with readable body text. Retain original files, body pictures, ordinary header pictures, reused images and uncertain content. Do not transcribe decorative watermarks into chapter results.
+- Historical visual progress files may remain in an existing scheme directory for compatibility, but new sessions do not expose or call the old per-image completion tools. New work uses `material_parse` followed by the document-level `material_complete` route. A tool result or a review declaration alone does not prove semantic accuracy.
+
+Preserve exact text, numbers, blank cells, formulas, stored values, headers and locations. Notes/summaries never replace source interpretation. Save results promptly and reuse them; do not reattach or reparse unchanged files. For large sources read relevant ranges and save progress through native capabilities, without loading every image into the conversation. DSH owns context and compression. Do not install OCR, guess unreadable facts, retry an unchanged over-window request, or switch models/providers after permission, balance or capability failures.
