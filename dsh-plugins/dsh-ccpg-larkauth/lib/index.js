@@ -19,7 +19,7 @@ import {
   larkCliAvailable, larkCliInstalling, larkAuthStatus, larkLoginStart, larkLoginQrcode,
   larkLoginPoll, larkLogout, ensureLarkCli, setDefaultIdentityUser, renewUserToken,
   ensureSkillFiles, createDesktopLarkCliRuntime, larkConfigInit, profileContextOf,
-  setLarkProfileDir, RENEW_INTERVAL_MS,
+  setLarkProfileDir, RENEW_INTERVAL_MS, createCurrentUserLarkCliService,
 } from './lark-auth.js';
 
 export const name = 'dsh-ccpg-larkauth';
@@ -29,6 +29,10 @@ export const Config = z.object({});
 
 function mount(ctx, runtime, { desktop = false } = {}) {
   const log = (msg) => ctx.logger?.info?.(`[larkauth] ${msg}`);
+  const userCli = createCurrentUserLarkCliService(runtime);
+  ctx.provide?.('ccpgLarkUserCli');
+  ctx.set?.('ccpgLarkUserCli', userCli);
+  if (ctx.ccpgLarkUserCli === undefined) ctx.ccpgLarkUserCli = userCli;
   const json = (res, code, body) => {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(body));

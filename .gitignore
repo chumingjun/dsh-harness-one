@@ -8,6 +8,7 @@ node_modules/
 dist/
 dsh-plugins/dsh-ccpg-web/web-dist/
 dsh-plugins/dsh-ccpg-canvasui/lib/client.js
+dsh-plugins/dsh-ccpg-scheme/lib/client.js
 
 # macOS
 .DS_Store
@@ -55,3 +56,6 @@ dsh-plugins/vendor/
 
 # 单包装配产物（assemble-one.sh 生成，不入库）
 dsh-plugins/dsh-harness-one/
+
+# Private Feishu source downloads and project rehearsal inputs, never packaged.
+local-data/ccpg-scheme/

@@ -51,7 +51,7 @@ import {
   validateStructuredOutputWithRepair,
 } from './agent-schema.js';
 import { createFeishuNotificationChannel } from './notification-feishu.js';
-import { collectInstallReport, compareSemver, executePlan, planUpgrade, PACKAGE as UPGRADE_PACKAGE } from './system-upgrade.js';
+import { collectInstallReport, checkPackageUpdate, isInternalPackage, executePlan, planUpgrade } from './system-upgrade.js';
 import { NotificationChannelRegistry, WorkflowNotificationManager, summarizeNotificationText } from './notifications.js';
 import { listFeishuCreds, addFeishuCred, removeFeishuCred, setDefaultFeishuCred, getFeishuCredOrEnv } from './credentials.js';
 import { Orchestrator, lintGraph, getKind } from './engine.js';
@@ -1440,7 +1440,7 @@ export function apply(ctx, config) {
     }
     // lark-cli 环境探测：装了才告知，避免误导
     if (skillIds.some((x) => x === 'feishu-cli') && larkCliAvailable()) {
-      systemPrompt += `\n\n飞书操作：本机装有 lark-cli（飞书官方 CLI，在 dsh 设置「飞书账号」扫码授权一次即可）。默认身份已固定为 user，执行 lark-cli 命令默认加 --as user；user token 由宿主后台自动续约，无需关心过期。user 身份报错/授权失效时降级 --as bot 并在结果注明"需用户重新扫码"。详见技能 feishu-cli。输出 JSON 信封，成功看 ok==true。`;
+      systemPrompt += `\n\n飞书操作：本机装有 lark-cli（飞书官方 CLI，在 dsh 设置「飞书账号」扫码授权一次即可）。默认身份已固定为 user，执行 lark-cli 命令必须显式加 --as user；user 身份报错、授权失效或权限不足时停止并提示用户重新授权/补充材料，不要降级 --as bot 或切换另一套 CLI 账号。详见技能 feishu-cli。输出 JSON 信封，成功看 ok==true。`;
     }
     // 通用提示词（设置面板「Workflow One」，issue #129）：部署级行为约束，
     // 尾部注入——节点提示词定义「做什么」，通用约束修正「怎么做」并覆盖前面指令。
@@ -2791,28 +2791,9 @@ export function apply(ctx, config) {
 
   register({ kind: 'exact', path: '/wf1/api/system/check-update', async handler(req, res) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
-    const current = selfPluginVersion();
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 8000);
-      // 发版渠道自 0.5.0 起是单包 dsh-harness-one（老包 latest 永钉 0.4.1，
-      // 查老包会让所有 0.5+ 用户永远「已是最新」）；与 system-upgrade 的
-      // latestVersion() 同源，保证检查口径 = 实际升级口径。
-      const r = await fetch(`https://registry.npmjs.org/${UPGRADE_PACKAGE}`, {
-        headers: { accept: 'application/vnd.npm.install-v1+json', 'user-agent': 'dsh-harness-one-upgrade-check' },
-        signal: ctrl.signal,
-      });
-      clearTimeout(timer);
-      if (!r.ok) throw new Error(`registry ${r.status}`);
-      const doc = await r.json();
-      const latest = doc['dist-tags']?.latest || null;
-      return json(res, 200, {
-        ok: true, current, latest,
-        updateAvailable: !!(latest && compareSemver(latest, current) > 0),
-      });
-    } catch (error) {
-      return json(res, 200, { ok: false, current, latest: null, updateAvailable: false, error: String(error.message || error) });
-    }
+    const packageRoot = fileURLToPath(new URL('../', import.meta.url));
+    const internal = isInternalPackage(packageRoot) || collectInstallReport().some((profile) => profile.packages.some((pkg) => pkg.name === 'dsh-ccpg-scheme' || pkg.channel === 'internal'));
+    return json(res, 200, await checkPackageUpdate({ version: selfPluginVersion(), ...(internal ? { ccpg: { channel: 'internal' } } : {}) }));
   } }, { scoped: false });
 
   register({ kind: 'exact', path: '/wf1/api/system/upgrade', async handler(req, res) {

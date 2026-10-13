@@ -50,7 +50,7 @@ lark-cli approvals list --format json                   # 审批任务
    失败 `{"ok": false, "error": {...}}` 在 stderr、退出码非 0。
    **判断成功看 `ok == true` 或退出码，绝不要看 `code == 0`**（成功信封没有 code 字段）。
 2. **身份**：默认身份已在 CLI 级配置为 `user`（`config default-as user`），执行时仍建议显式加 `--as user`。
-   仅当 user 身份报错或 token 失效时降级 `--as bot`（能力有限：公开文档、群消息），并在结果注明"需要用户重新扫码授权"。
+   user 身份报错、token 失效或权限不足时停止并提示用户重新授权/补充材料，不要降级 `--as bot` 或切换另一套 CLI 账号。
    查身份：`lark-cli auth status --json`（看 `defaultAs` 与 `identities.user.tokenStatus`）。
 3. **授权续约**：user token 由宿主后台自动续约（无需干预）；若 `tokenStatus` 变为 `needs_refresh`
    且自动续约失败（refresh 窗口过期），提示用户到 dsh 设置「飞书账号」重新扫码。

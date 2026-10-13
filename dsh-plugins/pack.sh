@@ -15,31 +15,52 @@
 #   sh pack.sh [tag]     # tag 默认取最近 git tag（无则 0.0.0）
 # 环境变量：
 #   PACK_DIR   打包根目录（默认 /tmp/dsh-ccpg-pack），结束后可删
-#   DSH_NODE   构建与打包用的 node（默认自动探测，要求 >=22.15.0；兼容旧名 WF1_NODE）
+#   DSH_NODE   构建与打包用的 node（默认自动探测，要求 >=22.19.0；兼容旧名 WF1_NODE）
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO_ROOT=$(cd "$HERE/.." && pwd)
+INTERNAL=0
+if [ "${1:-}" = "--internal" ]; then INTERNAL=1; shift; fi
 TAG="${1:-$(git -C "$REPO_ROOT" describe --tags --abbrev=0 2>/dev/null || echo 0.0.0)}"
 TAG="${TAG#v}"
 OUT="${PACK_DIR:-/tmp/dsh-ccpg-pack}"
 DIST_DIR="$REPO_ROOT/dist-release"
 PKG="dsh-harness-one-plugins-$TAG"
 TAR="$DIST_DIR/$PKG.tar.gz"
-PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-llm-guard"
+PLUGINS="dsh-ccpg-larkauth dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-llm-guard dsh-ccpg-scheme"
 OPTIONAL_PLUGINS="dsh-ccpg-brand"
 # 单包（assemble-one.sh 装配产物，7 插件合一）；brand 独立可选
 AGG="dsh-harness-one"
 
-# ---- 0. node（>=22.15.0，内置 node:sqlite）----
+# ---- 0. node（>=22.19.0，scheme 内置解析器依赖）----
 NODE_BIN="${DSH_NODE:-${WF1_NODE:-}}"
-[ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "const [a,b]=process.versions.node.split('.').map(Number); console.log(a>22||(a===22&&b>=15)?process.execPath:'')" 2>/dev/null || true)
-if [ -z "$NODE_BIN" ] || ! "$NODE_BIN" -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>22||(a===22&&b>=15)?0:1)" 2>/dev/null; then
-  echo "✗ 需要 node>=22.15.0（或设 DSH_NODE 指向）"
+[ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "const [a,b]=process.versions.node.split('.').map(Number); console.log(a>22||(a===22&&b>=19)?process.execPath:'')" 2>/dev/null || true)
+if [ -z "$NODE_BIN" ] || ! "$NODE_BIN" -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>22||(a===22&&b>=19)?0:1)" 2>/dev/null; then
+  echo "✗ 内部方案包需要 node>=22.19.0（或设 DSH_NODE 指向）"
   exit 1
 fi
 echo "✓ node: $("$NODE_BIN" -v)"
 PATH=$(dirname "$NODE_BIN"):$PATH
 export PATH
+if [ "$INTERNAL" = 1 ]; then
+  if [ "$#" = 0 ]; then
+    TAG=$("$NODE_BIN" -e "console.log(require(process.argv[1]).version + '-internal.portable.r15')" "$HERE/dsh-ccpg-one/package.json")
+  fi
+  "$NODE_BIN" -e "if (!/^\d+\.\d+\.\d+-internal\.[a-zA-Z0-9.-]+$/.test(process.argv[1])) throw new Error('内部包必须使用 internal 预发布版本号')" "$TAG"
+  npm ci --ignore-scripts --no-audit --no-fund --prefix "$HERE/dsh-ccpg-orchestrator"
+  npm ci --ignore-scripts --no-audit --no-fund --prefix "$HERE/dsh-ccpg-scheme"
+  sh "$HERE/bootstrap-deps.sh" "$HERE/dsh-ccpg-orchestrator"
+  sh "$HERE/bootstrap-deps.sh" "$HERE/dsh-ccpg-scheme"
+  sh "$HERE/build-web.sh"
+  INTERNAL_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/dsh-internal-build.XXXXXX")
+  trap 'rm -rf "$INTERNAL_STAGE"' EXIT HUP INT TERM
+  ASSEMBLE_OUT="$INTERNAL_STAGE/dsh-harness-one"
+  export ASSEMBLE_OUT
+  sh "$HERE/assemble-one.sh"
+  "$NODE_BIN" "$REPO_ROOT/scripts/verify-plugin-packages.mjs"
+  "$NODE_BIN" "$REPO_ROOT/scripts/package-internal.mjs" "$TAG"
+  exit 0
+fi
 # release 与 npm 聚合包使用同一精确 sidebar 版本，避免两个渠道漂移。
 SIDEBAR_VER=$("$NODE_BIN" -e "console.log(require(process.argv[1]).dependencies['dsh-better-sidebar'] || '')" "$HERE/dsh-ccpg-one/package.json")
 [ -n "$SIDEBAR_VER" ] || { echo "✗ dsh-ccpg-one 未声明 dsh-better-sidebar 精确依赖"; exit 1; }
@@ -58,7 +79,8 @@ echo "✓ 画布已构建"
 
 # ---- 1.2 单包装配（干净 checkout 无产物目录，此处现装）----
 sh "$HERE/assemble-one.sh"
-echo "✓ 单包已装配（7 插件合一）"
+echo "✓ 内部单包已装配（8 插件合一）"
+node "$REPO_ROOT/scripts/verify-plugin-packages.mjs"
 
 # ---- 2. orchestrator 真依赖（ajv/cron-parser/QuickJS WASM）----
 cd "$HERE/dsh-ccpg-orchestrator"
@@ -88,6 +110,12 @@ if [ -n "$SDK_DIR" ] && [ -d "$SDK_DIR/dsh-tools" ]; then
 fi
 echo "✓ orchestrator 依赖已装"
 
+# Pure JS/WASM parser dependencies; no platform-specific Office/canvas binary.
+npm ci --ignore-scripts --no-audit --no-fund --prefix "$HERE/dsh-ccpg-scheme"
+echo "✓ scheme 解析依赖已装"
+sh "$HERE/bootstrap-deps.sh" "$HERE/dsh-ccpg-scheme" >/dev/null
+echo "✓ scheme DSH SDK 软链已恢复"
+
 # ---- 2.5 canvasui bundle 重建（必须在 rsync 组装之前）----
 # lib/client.js 由 src/client.js 生成：先重建源码目录再组装，
 # rsync 才会把新产物带进归档——放组装之后就只校验了源码目录，归档仍是旧文件。
@@ -96,13 +124,22 @@ sh "$HERE/build-canvasui.sh" --check
 echo "✓ canvasui bundle 已重建并校验"
 
 # ---- 3. 组装（rsync 到临时目录）----
-rm -rf "$OUT" "$DIST_DIR"
 mkdir -p "$OUT" "$DIST_DIR"
 cd "$REPO_ROOT"
 
 rsync -a --delete \
   --exclude 'node_modules/@deepseek-ai' \
+  --exclude '.DS_Store' \
+  --exclude 'dsh-ccpg-scheme/src' \
+  --exclude 'dsh-ccpg-scheme/scripts' \
+  --exclude 'dsh-ccpg-scheme/authoring' \
+  --exclude 'dsh-ccpg-scheme/test' \
+  --exclude 'dsh-ccpg-scheme/tasks' \
+  --exclude 'dsh-ccpg-scheme/docs' \
+  --exclude 'dsh-ccpg-scheme/.superpowers' \
+  --exclude 'dsh-ccpg-scheme/AGENTS.md' \
   --exclude 'dsh-ccpg-one/node_modules' \
+  --exclude 'dsh-ccpg-scheme/node_modules' \
   --exclude 'dsh-ccpg-one/pnpm-lock.yaml' \
   --exclude 'web-dist' \
   --exclude 'data/runs' \
@@ -120,6 +157,7 @@ rsync -a "$HERE/dsh-ccpg-web/web-dist/" "$OUT/dsh-plugins/dsh-ccpg-web/web-dist/
 # 归档现场把 orchestrator 依赖树拷成实体——离线装机 setup.sh --one 直接软链可用。
 ONE_NM="$OUT/dsh-plugins/dsh-harness-one/node_modules"
 rm -rf "$ONE_NM"; mkdir -p "$ONE_NM"
+rsync -a --exclude '@deepseek-ai' "$HERE/dsh-ccpg-scheme/node_modules/" "$ONE_NM/"
 for dep in ajv cron-parser quickjs-emscripten fast-deep-equal fast-uri json-schema-traverse require-from-string luxon @jitl; do
   cp -R "$HERE/dsh-ccpg-orchestrator/node_modules/$dep" "$ONE_NM/$dep"
 done
@@ -215,8 +253,11 @@ for p in $PLUGINS $OPTIONAL_PLUGINS $AGG; do
 done
 tar -tzf "$TAR" "dsh-plugins/vendor/dsh-better-sidebar-$SIDEBAR_VER.tgz" >/dev/null 2>&1 \
   || { echo "✗ tarball 缺失: vendor/dsh-better-sidebar-$SIDEBAR_VER.tgz"; exit 1; }
-if tar -tzf "$TAR" | grep -q '/node_modules/@deepseek-ai/'; then
+# Reject machine-local SDK symlinks; JS/WASM dependencies are ordinary files.
+BAD_SDK_LINKS=$(tar -tvzf "$TAR" | awk '$1 ~ /^l/ && /node_modules\/@deepseek-ai\//')
+if [ -n "$BAD_SDK_LINKS" ]; then
   echo "✗ tarball 含不可分发的 @deepseek-ai SDK 软链"
+  printf '%s\n' "$BAD_SDK_LINKS"
   exit 1
 fi
 echo "✓ 打包完成: $TAR ($(du -h "$TAR" | cut -f1))"

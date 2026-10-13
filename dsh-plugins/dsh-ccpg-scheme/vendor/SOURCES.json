@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "sources": {
+    "office": {
+      "package": "@deepseek-ai/dsh-skill-office",
+      "version": "0.2.0-rc.2",
+      "source": "https://github.com/deepseek-ai/deepseek-harness/tree/main/packages/skill/skill-office",
+      "license": "MIT",
+      "licenseFile": "dsh-skill-office/LICENSE"
+    },
+    "pdf": {
+      "repository": "https://github.com/openai/skills",
+      "path": "skills/pdfs",
+      "commit": "49f948faa9258a0c61caceaf225e179651397431",
+      "license": "Apache-2.0",
+      "licenseFile": "openai-skills/pdf/LICENSE.txt"
+    }
+  }
+}

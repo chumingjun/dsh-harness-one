@@ -1,0 +1,19 @@
+{
+  "chapter-7": {
+    "source": {
+      "kind": "internal-supplement",
+      "date": "2026-10-10",
+      "basis": "内部测试补充通用正文结构；源业务表未定义输出，最终结构待业务验收。"
+    },
+    "outputs": [
+      {
+        "id": "7",
+        "name": "要求的管理与变更控制",
+        "kind": "body",
+        "template": "要求的管理与变更控制（本技能正文结构）",
+        "sourceRows": [],
+        "dependencies": []
+      }
+    ]
+  }
+}

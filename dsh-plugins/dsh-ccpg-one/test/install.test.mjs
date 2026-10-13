@@ -10,6 +10,22 @@ import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const installJs = join(here, '../bin/install.js');
+const manifest = JSON.parse(readFileSync(join(here, '../package.json'), 'utf8'));
+assert.equal(manifest.dependencies['dsh-better-sidebar'], '0.25.0', 'native DSH 0.2 requires the compatible sidebar release');
+const workspace = readFileSync(join(here, '../pnpm-workspace.yaml'), 'utf8');
+assert.match(workspace, /dsh-better-sidebar@0\.25\.0/);
+for (const name of ['dsh-agent', 'dsh-client-locale', 'dsh-client-ui-conversation', 'dsh-client-ui-primitives', 'dsh-client-ui-settings', 'dsh-client-ui-slots', 'dsh-host-webserver', 'dsh-invariants', 'dsh-llm', 'dsh-session', 'dsh-settings', 'dsh-subagent', 'dsh-tools']) {
+  assert(workspace.includes(`"@deepseek-ai/${name}": "0.2.0-rc.2"`), `${name} must match the sidebar DSH peer contract`);
+}
+for (const script of ['setup.sh', 'pack.sh', 'assemble-one.sh']) {
+  const source = readFileSync(join(here, '../../', script), 'utf8');
+  assert(source.includes("dependencies['dsh-better-sidebar']"), `${script} must read the canonical exact sidebar pin`);
+}
+assert.match(readFileSync(join(here, '../../assemble-one.sh'), 'utf8'), /materialize_runtime_deps/, 'local link aggregate must carry runtime dependencies');
+assert.match(readFileSync(join(here, '../../assemble-one.sh'), 'utf8'), /ccpg-cli\.js/, 'aggregate must package the CCPG CLI runtime');
+const setup = readFileSync(join(here, '../../setup.sh'), 'utf8');
+assert(!setup.includes('$HERE/dsh-harness-one/bin/install.js'), 'source setup must not require the removed internal public installer');
+assert(setup.includes('$HERE/dsh-ccpg-one/bin/install.js'), 'source setup retains its development-only prewrite helper');
 
 // ---- 纯函数行为经 --prewrite 子进程间接断言（同时也是 ESM 整链冒烟）----
 // 用临时 DSH_HOME 造出 issue #24 现场（占位符 + 部分条目），跑 --prewrite 后校验产物。

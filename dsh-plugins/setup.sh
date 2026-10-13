@@ -15,15 +15,15 @@ PROFILE="${1:-dsh-ccpg}"
 PORT="${2:-4021}"
 HERE=$(cd "$(dirname "$0")" && pwd)
 NODE_BIN="${DSH_NODE:-}"
-[ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "const [a,b]=process.versions.node.split('.').map(Number); console.log(a>22||(a===22&&b>=15)?process.execPath:'')" 2>/dev/null || true)
-if [ -z "$NODE_BIN" ] || ! "$NODE_BIN" -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>22||(a===22&&b>=15)?0:1)" 2>/dev/null; then
-  echo "✗ 需要 node>=22.15.0（或设 DSH_NODE 指向）"
+[ -z "$NODE_BIN" ] && NODE_BIN=$(node -e "const [a,b]=process.versions.node.split('.').map(Number); console.log(a>22||(a===22&&b>=19)?process.execPath:'')" 2>/dev/null || true)
+if [ -z "$NODE_BIN" ] || ! "$NODE_BIN" -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>22||(a===22&&b>=19)?0:1)" 2>/dev/null; then
+  echo "✗ 内部方案包需要 node>=22.19.0（或设 DSH_NODE 指向）"
   exit 1
 fi
 PATH=$(dirname "$NODE_BIN"):$PATH
 export PATH
 export DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
-PLUGINS="dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-larkauth dsh-ccpg-llm-guard"
+PLUGINS="dsh-ccpg-larkauth dsh-ccpg-tools dsh-ccpg-orchestrator dsh-ccpg-web dsh-ccpg-canvasui dsh-ccpg-document-preview dsh-ccpg-llm-guard dsh-ccpg-scheme"
 # better-sidebar 安装源：release 包 vendor/ 里的 tgz 优先（版本与聚合包精确依赖一致，
 # 断网/下架也能装），没有则回退 npm registry 拉同一版本。源码仓库 checkout 没有
 # vendor/（不入库），自动走 registry。
@@ -34,9 +34,16 @@ SIDEBAR_VER=$("$NODE_BIN" -e "console.log(require(process.argv[1]).dependencies[
 # 逻辑回填 ajv/cron-parser/quickjs 实体（源：解包树自带的 orchestrator 依赖或
 # 装机现场 npm install 的产物）。
 if [ "$AGGREGATE" = 1 ]; then
+  if [ ! -d "$HERE/dsh-ccpg-scheme/node_modules/@hyzyla/pdfium" ]; then
+    npm ci --ignore-scripts --no-audit --no-fund --prefix "$HERE/dsh-ccpg-scheme"
+  fi
   sh "$HERE/assemble-one.sh" || { echo "✗ 单包装配失败"; exit 1; }
   ONE_NM="$HERE/dsh-harness-one/node_modules"
   rm -rf "$ONE_NM"; mkdir -p "$ONE_NM"
+  for dep in "$HERE"/dsh-ccpg-scheme/node_modules/*; do
+    [ -e "$dep" ] || continue
+    [ "$(basename "$dep")" = "@deepseek-ai" ] || cp -R "$dep" "$ONE_NM/"
+  done
   for dep in ajv cron-parser quickjs-emscripten fast-deep-equal fast-uri json-schema-traverse require-from-string luxon @jitl; do
     [ -d "$HERE/dsh-ccpg-orchestrator/node_modules/$dep" ] \
       && cp -R "$HERE/dsh-ccpg-orchestrator/node_modules/$dep" "$ONE_NM/$dep"
@@ -112,6 +119,13 @@ fi
 sh "$HERE/build-canvasui.sh" --check >/dev/null || { echo "✗ canvasui bundle 构建失败"; exit 1; }
 echo "✓ canvasui bundle 就绪"
 
+if ! sh "$HERE/build-scheme.sh" --check >/dev/null 2>&1; then
+  echo "· scheme bundle 缺失或与源不一致，重建…"
+  sh "$HERE/build-scheme.sh"
+fi
+sh "$HERE/build-scheme.sh" --check >/dev/null || { echo "✗ scheme bundle 构建失败"; exit 1; }
+echo "✓ scheme bundle 就绪"
+
 # 定位 dsh bin
 DSH_BIN=$("$NODE_BIN" -e "console.log(require.resolve('@deepseek-ai/dsh/lib/bin.js'))" 2>/dev/null || true)
 [ -z "$DSH_BIN" ] && DSH_BIN=$(command -v dsh 2>/dev/null || true)
@@ -148,7 +162,7 @@ if [ "$AGGREGATE" = 1 ]; then
   # ---- 单包安装：只 add dsh-harness-one（7 插件合一，assemble-one.sh 已在头部装配）----
   # pnpm 11 预放行（issue #24）：node-pty（better-sidebar 传递依赖）原生构建被
   # strict-dep-builds 拦截会让 add 非零退出——复用包内安装入口的预写（幂等）。
-  "$NODE_BIN" "$HERE/dsh-harness-one/bin/install.js" "$PROFILE" --prewrite
+  "$NODE_BIN" "$HERE/dsh-ccpg-one/bin/install.js" "$PROFILE" --prewrite
   if ! "$NODE_BIN" "$DSH_BIN" plugin --profile "$PROFILE" add "$HERE/dsh-harness-one" >"$PLUGIN_LOG" 2>&1; then
     cat "$PLUGIN_LOG" >&2
     echo "✗ 单包安装失败（pnpm 11 用户可改用: npx dsh-harness-one $PROFILE，自带放行预写）"
@@ -199,7 +213,7 @@ echo "✓ 插件已安装"
 sh "$HERE/bootstrap-deps.sh" "$PDIR" >/dev/null
 SDK_DIR=$("$NODE_BIN" -e "console.log(require('path').dirname(require('path').dirname(process.argv[1])) + '/node_modules/@deepseek-ai')" "$DSH_BIN")
 LINK_ROOTS="$PLUGINS"
-[ "$AGGREGATE" = 1 ] && LINK_ROOTS="$PLUGINS dsh-harness-one/dsh-ccpg-tools dsh-harness-one/dsh-ccpg-orchestrator dsh-harness-one/dsh-ccpg-web dsh-harness-one/dsh-ccpg-canvasui dsh-harness-one/dsh-ccpg-document-preview dsh-harness-one/dsh-ccpg-larkauth dsh-harness-one/dsh-ccpg-llm-guard"
+[ "$AGGREGATE" = 1 ] && LINK_ROOTS="$PLUGINS dsh-harness-one/dsh-ccpg-tools dsh-harness-one/dsh-ccpg-orchestrator dsh-harness-one/dsh-ccpg-web dsh-harness-one/dsh-ccpg-canvasui dsh-harness-one/dsh-ccpg-document-preview dsh-harness-one/dsh-ccpg-larkauth dsh-harness-one/dsh-ccpg-llm-guard dsh-harness-one/dsh-ccpg-scheme"
 for pkg in $LINK_ROOTS; do
   mkdir -p "$HERE/$pkg/node_modules/@deepseek-ai"
   for dep in schemastery cordis dsh-tools dsh-llm dsh-session dsh-agent; do

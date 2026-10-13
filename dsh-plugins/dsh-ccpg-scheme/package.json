@@ -1,0 +1,71 @@
+{
+  "name": "dsh-ccpg-scheme",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "lib/index.js",
+  "description": "CCPG CLI native scheme chapter workbench for DSH",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@hyzyla/pdfium": "3.0.0",
+    "@jsquash/webp": "1.5.0",
+    "@resvg/resvg-wasm": "2.6.2",
+    "docx": "9.10.0",
+    "image-size": "2.0.4",
+    "jszip": "3.10.1",
+    "markdown-it": "15.0.2",
+    "pngjs": "7.0.0",
+    "saxes": "6.0.0",
+    "xlsx": "0.18.5"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-typert-protocol": "*",
+    "@deepseek-ai/schemastery": "*",
+    "@deepseek-ai/dsh-session": "*",
+    "@deepseek-ai/dsh-tools": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-typert-protocol": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-commands"
+      ]
+    }
+  },
+  "files": [
+    "lib",
+    "rules",
+    "skills",
+    "vendor",
+    "licenses",
+    "cordis.patch.yml",
+    "LICENSE"
+  ]
+}

@@ -9,6 +9,7 @@
     "test": "sh scripts/run-tests.sh",
     "build": "sh dsh-plugins/build-web.sh",
     "verify:packages": "node scripts/verify-plugin-packages.mjs",
+    "pack:internal": "sh dsh-plugins/pack.sh --internal",
     "publish:dry-run": "sh dsh-plugins/publish-npm.sh --dry-run"
   },
   "dependencies": {
