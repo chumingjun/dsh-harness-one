@@ -105,6 +105,7 @@ export class Orchestrator {
     resume = null,
   } = {}) {
     const id = runId || `run_${Date.now().toString(36)}_${++runSeq}`;
+    if (this.runs.has(id)) throw new Error(`runId ${id} is already active`);
     const safeRunInputs = structuredClone(runInputs || {});
     const run = {
       runId: id, startedAt: new Date().toISOString(), status: 'running',
