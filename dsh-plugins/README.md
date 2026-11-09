@@ -90,7 +90,7 @@ npm 渠道等价命令行（无需源码）：老版（dsh-ccpg-one）在设置�
 
 ```sh
 git clone https://github.com/chumingjun/dsh-harness-one.git
-cd harness-one/dsh-plugins
+cd dsh-harness-one/dsh-plugins
 
 npm test                                # （可选）先跑全量单测
 sh build-web.sh                         # 构建画布——产物不入库，源码安装必跑

@@ -42,7 +42,7 @@
 
 ```sh
 dsh plugin --profile web add dsh-harness-one
-dsh plugin --profile web add dsh-better-sidebar   # DSH UI 侧栏宿主（画布 tab）
+dsh plugin --profile web add dsh-better-sidebar   # DSH UI sidebar host (canvas tab)
 dsh web
 ```
 
@@ -65,7 +65,7 @@ sh start.sh wf1                         # http://127.0.0.1:4021/
 
 ```sh
 git clone https://github.com/chumingjun/dsh-harness-one.git
-cd harness-one
+cd dsh-harness-one
 npm install
 npm --prefix web install
 sh dsh-plugins/build-web.sh             # Required for source installs
