@@ -370,6 +370,7 @@ export class Orchestrator {
         ...(extra?.turns != null ? { turns: extra.turns } : {}),
         ...(extra?.durationMs != null ? { durationMs: extra.durationMs } : {}),
         ...(extra?.model ? { model: extra.model } : {}),
+        ...(extra?.usage ? { usage: extra.usage } : {}),
         ...(extra?.artifacts ? { artifacts: extra.artifacts } : {}),
         ...(extra?.sessionId ? { sessionId: extra.sessionId } : {}),
       });
