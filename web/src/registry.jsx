@@ -8,6 +8,7 @@ const ICONS = {
   agent: I('<rect x="5" y="7" width="14" height="11" rx="3"/><circle cx="9.5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="12" r="1" fill="currentColor" stroke="none"/><path d="M12 7V4m-4 14v1.5a1.5 1.5 0 003 0V18m2 0v1.5a1.5 1.5 0 003 0V18"/>'),
   condition: I('<path d="M6 4v6a2 2 0 002 2h8"/><path d="M18 20v-6a2 2 0 00-2-2H8"/><circle cx="6" cy="4" r="1.6" fill="currentColor" stroke="none"/><circle cx="18" cy="20" r="1.6" fill="currentColor" stroke="none"/>'),
   http: I('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18M12 3a15 15 0 000 18"/>'),
+  systemone: I('<path d="M4.5 19a9 9 0 1 1 15 0"/><path d="M12 14l3.5-3.5"/><circle cx="12" cy="14" r="1.4" fill="currentColor" stroke="none"/>'),
   script: I('<path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/>'),
   output: I('<path d="M12 15V3m0 0l-4 4m4-4l4 4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/>'),
   notify: I('<path d="M10.3 21a2 2 0 003.4 0"/><path d="M4 17h16c-1.5-1.6-2-3.2-2-7a6 6 0 00-12 0c0 3.8-.5 5.4-2 7z"/>'),
@@ -47,6 +48,25 @@ export const NODE_REGISTRY = [
     preset: () => ({ label: 'HTTP 请求', url: '', method: 'GET', headers: '', body: '' }),
     summary: (d) => `${(d.method || 'GET')} ${(d.url || '(未配置 URL)').slice(0, 30)}`,
     badges: (d) => d.url ? [{ text: '接口' }] : [],
+  },
+  {
+    type: 'systemone',
+    icon: ICONS.systemone, label: '轻判断', color: 'var(--type-systemone)',
+    preset: () => ({ label: '轻判断', mode: 'noul', state: '', statement: '', instructions: '', options: [], levels: [] }),
+    summary: (d) => {
+      const mode = d.mode || 'noul';
+      if (mode === 'choice') return `分类 · ${(d.options || []).length} 选项`;
+      if (mode === 'score') return `评分 · ${(d.levels || []).length} 档`;
+      return `是否 · ${d.statement || '未配置语句'}`;
+    },
+    badges: (d) => {
+      const mode = d.mode || 'noul';
+      return [
+        { text: mode === 'choice' ? '分类' : mode === 'score' ? '评分' : '是否', cls: 'badge-cond' },
+        mode === 'choice' && (d.options || []).length > 0 && { text: `${d.options.length} 选项` },
+        mode === 'score' && (d.levels || []).length > 0 && { text: `${d.levels.length} 档` },
+      ].filter(Boolean);
+    },
   },
   {
     type: 'script',

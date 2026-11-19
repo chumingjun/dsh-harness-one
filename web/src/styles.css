@@ -51,12 +51,14 @@ html[data-theme='dark'], :root {
   --type-http-fg: #062a30;
   --type-script-fg: #2B1104;
   --type-note-fg: #F5F5F4;
+--type-systemone-fg: #FDF2F8;
 
   /* 类型色（节点/工具栏一致性；灯亮度适配暗底） */
   --type-input: #3B82F6;
   --type-agent: #8B5CF6;
   --type-condition: #F59E0B;
   --type-http: #06B6D4;
+  --type-systemone: #EC4899;
   --type-script: #F97316;
   --type-output: #10B981;
   --type-note: #78716C;
@@ -121,12 +123,14 @@ html[data-theme='light'] {
   --type-http-fg: #062a30;
   --type-script-fg: #2B1104;
   --type-note-fg: #F5F5F4;
+--type-systemone-fg: #FDF2F8;
 
   /* 类型色（深一档，浅底上可辨） */
   --type-input: #2563EB;
   --type-agent: #7C3AED;
   --type-condition: #D97706;
   --type-http: #0891B2;
+  --type-systemone: #DB2777;
   --type-script: #EA580C;
   --type-output: #059669;
   --type-note: #78716C;
@@ -694,6 +698,37 @@ body {
 }
 .badge-plan { background: rgba(236,72,153,.12); color: var(--pink); border-color: rgba(236,72,153,.25); }
 .badge-cond { background: rgba(245,158,11,.1); color: var(--warn-fg); border-color: rgba(245,158,11,.25); }
+
+/* ---- System One 判决卡：结论与分布同屏，待定琥珀不算失败 ---- */
+.s1-verdict { border: 1px solid var(--border); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.s1-verdict-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.s1-verdict-label { font-size: 20px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s1-tone-yes .s1-verdict-label { color: var(--ok-fg, #10B981); }
+.s1-tone-no .s1-verdict-label { color: var(--err-fg, #EF4444); }
+.s1-tone-unsettled .s1-verdict-label { color: var(--warn-fg, #F59E0B); }
+.s1-verdict-value { font-size: 14px; font-variant-numeric: tabular-nums; opacity: .8; flex-shrink: 0; }
+.s1-scale { display: flex; flex-direction: column; gap: 2px; }
+.s1-scale-track { position: relative; height: 8px; border-radius: 4px; background: rgba(128,128,128,.15); }
+.s1-scale-zone { position: absolute; top: 0; bottom: 0; }
+.s1-zone-no { left: 0; background: rgba(239,68,68,.35); border-radius: 4px 0 0 4px; }
+.s1-zone-unsettled { background: rgba(245,158,11,.35); }
+.s1-zone-yes { background: rgba(16,185,129,.35); border-radius: 0 4px 4px 0; }
+.s1-scale-pointer { position: absolute; top: -3px; width: 3px; height: 14px; border-radius: 2px; background: var(--fg); transform: translateX(-50%); }
+.s1-scale-ticks { position: relative; height: 12px; font-size: 10px; opacity: .6; }
+.s1-scale-ticks span { position: absolute; transform: translateX(-50%); }
+.s1-bars { display: flex; flex-direction: column; gap: 4px; }
+.s1-bar-row { display: grid; grid-template-columns: minmax(60px,140px) 1fr 40px; align-items: center; gap: 6px; font-size: 12px; }
+.s1-bar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s1-bar-track { height: 6px; border-radius: 3px; background: rgba(128,128,128,.15); overflow: hidden; }
+.s1-bar-fill { display: block; height: 100%; border-radius: 3px; background: rgba(128,128,128,.45); }
+.s1-bar-winner .s1-bar-fill { background: var(--type-systemone); }
+.s1-bar-winner .s1-bar-name { font-weight: 600; }
+.s1-bar-pct { text-align: right; font-variant-numeric: tabular-nums; opacity: .75; }
+.s1-confidence { font-size: 11px; opacity: .65; }
+.s1-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; opacity: .75; align-items: center; }
+.s1-truncated { font-size: 11px; color: var(--warn-fg, #F59E0B); }
+.s1-raw summary { font-size: 11px; cursor: pointer; opacity: .7; }
+.s1-raw pre { max-height: 200px; overflow: auto; font-size: 11px; }
 
 /* 连接桩 */
 .flow-handle {
