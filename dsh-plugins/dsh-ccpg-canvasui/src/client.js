@@ -278,15 +278,18 @@ window.__ModuleLoader__.load({
       if (!betterSidebarRef.svc) return false;
       // 不传 path：path 语义是「文件路径」，宿主会编码成 dsh-resource://file
       // 会话文件地址并 realpath 校验，传假路径直接 ENOENT；自定义 tab 类型
-      // 走 kind 打开即可（single:true 注册保证单实例聚焦）。
-      // better-sidebar 0.25 openTab 形状：{sessionId, kind, params, revealIfOpened}。
+      // 走 type 打开即可（single:true 注册保证单实例聚焦）。
+      // better-sidebar 0.32 openTab 形状：(seed{type,target,reveal}, scope{sessionId})。
+      // 旧的 {kind,params,revealIfOpened} 会被静默忽略（不抛错，按钮看着像死的）；
+      // target 必须显式 'right'，否则落插件自己的底部工作台，画布只剩一条窄缝。
       try {
+        var sessionId = currentDshSessionId(null);
         betterSidebarRef.svc.openTab({
-          sessionId: currentDshSessionId(null),
-          kind: WORKFLOW_TAB_TYPE,
-          params: { title: "工作流" },
-          revealIfOpened: true,
-        });
+          type: WORKFLOW_TAB_TYPE,
+          title: "工作流",
+          target: "right",
+          reveal: true,
+        }, sessionId ? { sessionId: sessionId } : undefined);
       } catch (e) {
         return false; // 无会话/服务态异常：回退新窗口打开
       }
