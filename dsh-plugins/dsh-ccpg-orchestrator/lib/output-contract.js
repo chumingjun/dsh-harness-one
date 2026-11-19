@@ -141,6 +141,7 @@ export function describeNodeOutput(node) {
   if (type === 'http') data.fields = ['status', 'ok', 'headers', 'body', 'json'];
   else if (type === 'condition') data.fields = ['branch', 'source', 'include', 'exclude'];
   else if (type === 'input') data.fields = ['text', 'triggerInput', 'upstreamText'];
+  else if (type === 'systemone') data.fields = ['mode', 'verdict', 'value', 'probabilities', 'confidence', 'unsettled', 'legend', 'stateTruncated'];
   else if (type === 'script' && node?.data?.outputSchema) data.schema = node.data.outputSchema;
   return base;
 }

@@ -8,6 +8,14 @@ import {
 } from '../lib/systemone.js';
 import { Orchestrator, getKind, lintGraph } from '../lib/engine.js';
 import { renderTemplate } from '../lib/template.js';
+import { validateGraphOps, canvasAssistantPersona, withPatchHint } from '../lib/assistant.js';
+import { buildNodeVariableItem } from '../lib/variable-schema.js';
+import { describeNodeOutput } from '../lib/output-contract.js';
+import { apply, Config } from '../lib/index.js';
+import { EventEmitter } from 'node:events';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 let passed = 0;
 async function test(name, fn) {
@@ -417,6 +425,142 @@ await test('集成：lintGraph 对改名选项的旧 branch 边报 error', () =>
   const r = lintGraph(graph);
   assert.equal(r.ok, false);
   assert.ok(r.issues.some((i) => i.level === 'error' && /分支/.test(i.message)));
+});
+
+// ---- 宿主接线 + 双端契约注册 ----
+
+await test('契约：助手接受 systemone addNode，connect branch 透传', () => {
+  const graph = { nodes: [{ id: 'in', type: 'input', position: { x: 0, y: 0 }, data: { label: '输入', text: 'x' } }], edges: [] };
+  const r = validateGraphOps(graph, [{ op: 'addNode', type: 'systemone', label: '轻判断', after: 'in', data: { mode: 'noul', statement: 's' } }]);
+  assert.equal(r.ok, true, r.errors?.join('; '));
+  const added = r.patch[0];
+  const r2 = validateGraphOps(r.graph, [{ op: 'addNode', type: 'output', label: '是路' }]);
+  assert.equal(r2.ok, true);
+  const outId = r2.patch[0].id;
+  const r3 = validateGraphOps(r2.graph, [{ op: 'connect', from: added.id, to: outId, branch: 'yes' }]);
+  assert.equal(r3.ok, true);
+  assert.equal(r3.patch[0].branch, 'yes');
+});
+
+await test('契约：persona 含 systemone 三模式与三路分流范式', () => {
+  const persona = canvasAssistantPersona();
+  assert.ok(persona.includes('systemone'));
+  assert.ok(persona.includes('轻判断'));
+  assert.ok(persona.includes('unsettled'));
+});
+
+await test('契约：PATCH_HINTS 覆盖 systemone 常见错误', () => {
+  assert.match(withPatchHint('轻判断「x」：选项数必须 2–255（当前 1）'), /修复建议/);
+  assert.match(withPatchHint('轻判断「x」：未配置判断语句'), /修复建议/);
+  assert.match(withPatchHint('轻判断「x」：分支「refund」不是合法判决（可用：refund_request/shipping）'), /修复建议/);
+});
+
+await test('契约：变量树 systemone data 字段齐全', () => {
+  const node = { id: 'j1', type: 'systemone', data: { label: '轻判断' } };
+  const item = buildNodeVariableItem(node, {
+    output: '是 0.99',
+    structuredOutput: { version: 1, type: 'json', value: { mode: 'noul', verdict: 'yes', value: 0.99, unsettled: false } },
+    nodeState: { status: 'success' },
+  });
+  const dataChannel = item.children.find((c) => c.label === 'data');
+  const keys = dataChannel.children.map((c) => c.label);
+  for (const k of ['mode', 'verdict', 'value', 'probabilities', 'confidence', 'unsettled', 'legend', 'stateTruncated']) {
+    assert.ok(keys.includes(k), `变量树缺字段 ${k}`);
+  }
+});
+
+await test('契约：describeNodeOutput systemone fields', () => {
+  const d = describeNodeOutput({ id: 'j1', type: 'systemone', data: {} });
+  const fields = d.variables[1].fields;
+  for (const k of ['mode', 'verdict', 'value', 'probabilities', 'confidence', 'unsettled']) {
+    assert.ok(fields.includes(k), `fields 缺 ${k}`);
+  }
+});
+
+await test('接线：Config 默认本地 Ollama 地址/模型', () => {
+  const c = Config({}); // schemastery schema 可调用，应用默认值
+  assert.equal(c.systemoneUrl, 'http://localhost:11434/v1/systemone');
+  assert.equal(c.systemoneModel, 'pplx-decider-flash');
+});
+
+// 假 webServer 直调路由（与 agent-defaults-api.integration 同模式）
+function responseCapture() {
+  return {
+    status: 0, chunks: [], writableEnded: false,
+    writeHead(status) { this.status = status; },
+    write(chunk) { this.chunks.push(Buffer.from(chunk)); },
+    end(chunk) { if (chunk) this.chunks.push(Buffer.from(chunk)); this.writableEnded = true; },
+    on() { return this; }, once() { return this; },
+    json() { return JSON.parse(Buffer.concat(this.chunks).toString('utf8') || '{}'); },
+  };
+}
+function request(method, url, body) {
+  const req = new EventEmitter();
+  req.method = method; req.url = url; req.headers = {};
+  queueMicrotask(() => {
+    if (body !== undefined) req.emit('data', Buffer.from(typeof body === 'string' ? body : JSON.stringify(body)));
+    req.emit('end');
+  });
+  return req;
+}
+const s1Home = mkdtempSync(join(tmpdir(), 'wf1-s1-home-'));
+const s1Ws = mkdtempSync(join(tmpdir(), 'wf1-s1-ws-'));
+process.env.DSH_HOME = s1Home;
+const s1Legacy = join(s1Home, 'package-legacy');
+mkdirSync(join(s1Legacy, 'state'), { recursive: true });
+writeFileSync(join(s1Legacy, 'state', 'graph.json'), JSON.stringify({ nodes: [], edges: [] }));
+process.env.WF1_LEGACY_DATA_DIR = s1Legacy;
+const s1Ctx = {
+  webServer: { register(route) { this.routes.push(route); }, routes: [] },
+  tools: { register() {}, schemas() { return []; } },
+  get(name) {
+    if (name === 'sessions') return { get: () => ({ header: { cwd: s1Ws } }), flush: async () => {} };
+    if (name === 'agentDefaultModel') return { currentSelection: () => ({ provider: 'deepseek', model: 'deepseek-chat' }) };
+    return null;
+  },
+  skills: { async list() { return []; } },
+  llm: { listProviders() { return []; }, async listModels() { return []; }, async resolveModelInfo() { return {}; } },
+  agentPresets: { async mount() {} },
+  logger: { info() {}, warn() {}, error() {} },
+  effect() {},
+};
+apply(s1Ctx, { systemoneUrl: 'http://mock:11434/v1/systemone', systemoneModel: 'm' });
+const routeOf = (path) => s1Ctx.webServer.routes.find((e) => e.kind === 'exact' && e.path === path)?.handler;
+const callRoute = async (path, method, body) => {
+  const res = responseCapture();
+  const url = `${path}?sessionId=session-1`; // scoped 路由经 requestStore 解析会话工作区
+  await routeOf(path)(request(method, url, body), res);
+  return { status: res.status, body: res.json() };
+};
+
+await test('接线：status 路由 GET 探针 /api/tags，POST 405', async () => {
+  assert.ok(routeOf('/wf1/api/systemone/status'), 'status 路由已注册');
+  const impl = captureFetch(() => jsonRes({ models: [{ name: 'm:latest' }] }));
+  await withFetch(impl, async () => {
+    const r = await callRoute('/wf1/api/systemone/status', 'GET');
+    assert.equal(r.status, 200);
+    assert.equal(r.body.ok, true);
+    assert.equal(r.body.available, true);
+    assert.equal(impl.calls[0].url, 'http://mock:11434/api/tags');
+    assert.equal(impl.calls[0].init.method, 'GET');
+  });
+  const bad = await callRoute('/wf1/api/systemone/status', 'POST');
+  assert.equal(bad.status, 405);
+});
+
+await test('接线：试运行 orchLike 拿到 endpoint，响应带 usage/durationMs', async () => {
+  const impl = captureFetch(() => noulRes(0.99));
+  await withFetch(impl, async () => {
+    const r = await callRoute('/wf1/api/node/test', 'POST', {
+      node: { id: 'j1', type: 'systemone', data: { mode: 'noul', statement: 's' } },
+      upstreamOutputs: {}, upstreamLabels: {}, triggerInput: '',
+    });
+    assert.equal(r.body.ok, true, r.body.error);
+    assert.equal(r.body.structuredOutput.value.verdict, 'yes');
+    assert.deepEqual(r.body.usage, { inputTokens: 93, outputTokens: 0 });
+    assert.equal(typeof r.body.durationMs, 'number');
+    assert.equal(impl.calls[0].url, 'http://mock:11434/v1/systemone');
+  });
 });
 
 console.log(`\n${passed} passed${process.exitCode ? '（存在失败）' : ''}`);

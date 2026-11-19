@@ -55,6 +55,7 @@ import { collectInstallReport, compareSemver, executePlan, planUpgrade, PACKAGE 
 import { NotificationChannelRegistry, WorkflowNotificationManager, summarizeNotificationText } from './notifications.js';
 import { listFeishuCreds, addFeishuCred, removeFeishuCred, setDefaultFeishuCred, getFeishuCredOrEnv } from './credentials.js';
 import { Orchestrator, lintGraph, getKind } from './engine.js';
+import { probeSystemOne } from './systemone.js';
 import { validateWorkflowInputs } from './workflow-inputs.js';
 import {
   MAX_CHILD_RUNS_PER_ROOT,
@@ -179,6 +180,10 @@ export const inject = ['agents', 'agentDefaultModel', 'sessions', 'tools', 'webS
 
 export const Config = z.object({
   staticDir: z.string().default(''),
+  // System One 本地轻判断模型：部署级地址/模型，绝不进节点 data——
+  // 画布、导入图、助手补丁都没有把请求指向任意地址的面（无 SSRF）。
+  systemoneUrl: z.string().default('http://localhost:11434/v1/systemone'),
+  systemoneModel: z.string().default('pplx-decider-flash'),
 });
 
 const workspaceContext = new AsyncLocalStorage();
@@ -1202,6 +1207,8 @@ export function apply(ctx, config) {
     });
     return { ...result, artifacts: safeWsList(ws) };
   };
+  // System One 部署级配置注入：正式运行与试运行（orchLike）共用同一引用，单点覆盖。
+  orch.systemone = { url: config.systemoneUrl, model: config.systemoneModel };
 
   // ---- webhook 完成回调（失败隔离：只记日志/内存元数据，绝不影响运行状态）----
   const pendingHookCallbacks = new Map(); // runId → hook
@@ -2179,6 +2186,7 @@ export function apply(ctx, config) {
       emit: broadcast, // runAgentNode 的流式事件直接进 SSE
       nodeRunner: (node, run, s, ctl) => runAgentNode(ctx, node, run, s, ctl), // agent kind 经此调用
       scriptRunner: orch.scriptRunner,
+      systemone: orch.systemone,
       renderTemplate,
       templateCtx(n) {
         return {
@@ -2207,6 +2215,7 @@ export function apply(ctx, config) {
       const kind = getKind(node.type);
       if (kind) {
         // 真实执行（agent 会流式推 agent-progress）
+        const testStartedAt = Date.now();
         const r = await kind.execute({
           node, s: orchLike, engine: orchLike,
           signal: testAbort.signal, emit: broadcast, runId,
@@ -2223,6 +2232,7 @@ export function apply(ctx, config) {
           ok: true, output, structuredOutput: normalized.structuredOutput,
           ...(typeof r === 'object' && r ? {
             turns: r.turns, model: r.model, artifacts: r.artifacts,
+            usage: r.usage, durationMs: Date.now() - testStartedAt,
             ...(r.input !== undefined ? { input: r.input } : {}),
             ...(r.workspaceStats !== undefined ? { workspaceStats: r.workspaceStats } : {}),
           } : {}),
@@ -2237,6 +2247,14 @@ export function apply(ctx, config) {
       clearTimeout(testTimer);
     }
   } });
+
+  // System One 就绪探针：只 GET Ollama /api/tags 查模型在不在，不 POST 判断（避免触发模型加载）。
+  // scoped:false——部署级状态，不涉工作区数据（与 agent-defaults 同语义）。
+  register({ kind: 'exact', path: '/wf1/api/systemone/status', async handler(req, res) {
+    if (req.method !== 'GET') return json(res, 405, { error: 'method' });
+    const probe = await probeSystemOne({ url: config.systemoneUrl, model: config.systemoneModel });
+    json(res, 200, { ok: true, ...probe });
+  } }, { scoped: false });
 
   // ---- 运行历史 ----
   // ---- 运行列表共享整形（/runs API 与 workflow_runs 助手工具同源，不双写）----
