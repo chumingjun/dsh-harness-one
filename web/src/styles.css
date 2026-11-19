@@ -694,6 +694,12 @@ body {
 }
 .badge-plan { background: rgba(236,72,153,.12); color: var(--pink); border-color: rgba(236,72,153,.25); }
 .badge-cond { background: rgba(245,158,11,.1); color: var(--warn-fg); border-color: rgba(245,158,11,.25); }
+.badge-runtime { background: rgba(6,182,212,.12); color: var(--accent); border-color: rgba(6,182,212,.28); font-family: var(--font-mono); }
+/* 外部 runtime 图标：节点头部类型图标旁 + 徽标内，便于一眼区分执行底座 */
+.flow-node-runtime-icon { display: inline-flex; align-items: center; margin: 0 1px; opacity: .95; }
+.flow-node-runtime-icon svg { width: 13px; height: 13px; }
+.badge-icon { display: inline-flex; align-items: center; margin-right: 3px; }
+.badge-icon svg { width: 11px; height: 11px; }
 
 /* 连接桩 */
 .flow-handle {

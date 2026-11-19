@@ -131,7 +131,7 @@ function ScriptParameterRow({ input, index, error, templateProps, onChange, onRe
   );
 }
 
-export function NodePanel({ node, onChange, onDelete, onTest, onClose, availableTools = [], availableWorkflows = [], skills = [], feishuEnabled = false, feishuCreds = [], notificationChannels = [], llmConfig = {}, upstreamNodes = [], upstreamPreviews = {}, graph, workflowId, runId, workflowVariables, inputSchema, runInputs, triggerInput, globalVariableEpoch, progress }) {
+export function NodePanel({ node, onChange, onDelete, onTest, onClose, availableTools = [], availableWorkflows = [], skills = [], feishuEnabled = false, feishuCreds = [], notificationChannels = [], llmConfig = {}, runtimes = [], upstreamNodes = [], upstreamPreviews = {}, graph, workflowId, runId, workflowVariables, inputSchema, runInputs, triggerInput, globalVariableEpoch, progress }) {
   if (!node) return null;
   const [copied, setCopied] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -145,6 +145,21 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
   useElapsedTick(d.runStatus === 'running');
   const set = (patch) => onChange(node.id, patch);
   const selectedTools = Array.isArray(d.tools) ? d.tools : [];
+  // 执行底座：缺省/空 = dsh，逐字保持原行为。externalModel 是配置字段，
+  // 与瞬态结果字段 runtimeModel（运行事件回填、保存时剔除）严格分开。
+  const runtimeId = String(d.runtime || 'dsh');
+  const isExternalRuntime = runtimeId !== 'dsh';
+  const runtimeOptions = runtimes.length ? runtimes : [{ id: 'dsh', available: true }];
+  const selectedRuntime = runtimeOptions.find((r) => r.id === runtimeId) || null;
+  const runtimeReasonText = (r) => ({
+    'not-installed': 'PATH 中未找到该 CLI',
+    'not-delivered': '该 runtime 尚未交付',
+    'disabled-by-host': 'pi 无沙箱，默认禁用：到 dsh 设置 → Workflow One → 本地执行底座开启',
+    'unsupported-platform': '当前平台不支持',
+    'probe-timeout': '探测超时',
+    'probe-failed': '探测失败（CLI 无法执行 --version）',
+    'spawn-failed': '无法启动该 CLI',
+  }[r?.reason] || r?.reason || '不可用');
   const selectedSkills = Array.isArray(d.skills) ? d.skills : [];
   const scriptInputs = normalizeScriptInputs(d.inputs);
   const scriptInputErrors = validateScriptInputs(scriptInputs);
@@ -586,6 +601,93 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
             />
           </Section>
 
+          <Section title="执行底座" hint={isExternalRuntime ? runtimeId : 'dsh 内置 agent'} defaultOpen={isExternalRuntime}>
+            <Field label="runtime" hint="委派给本机 CLI 执行">
+              <select
+                value={runtimeId}
+                onChange={(e) => {
+                  const next = e.target.value || 'dsh';
+                  // 切换底座清除跨底座模型（pi 的 provider/model 不能交给 codex）与权限模式
+                  // （claude 的 bash/full 不能静默沿用成 codex 的值，评审 §18.2）；
+                  // dsh 的渠道/模型/思考档位/工具/技能值保留不动，切回时原样恢复。
+                  set({ runtime: next === 'dsh' ? undefined : next, externalModel: undefined, runtimePermission: undefined });
+                }}>
+                {runtimeOptions.map((r) => (
+                  <option key={r.id} value={r.id} disabled={r.id !== 'dsh' && !r.available}>
+                    {r.id === 'dsh' ? 'dsh 底座（内置 agent）' : r.id}
+                    {r.id !== 'dsh' && !r.available ? `（${runtimeReasonText(r)}）` : ''}
+                    {r.version ? ` · ${r.version}` : ''}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            {isExternalRuntime && (
+              <>
+                <Field label="模型" hint={runtimeId === 'pi' ? '必填 provider/model' : '留空跟随该 CLI 自己的默认模型'}>
+                  <input
+                    value={d.externalModel || ''}
+                    onChange={(e) => set({ externalModel: e.target.value || undefined })}
+                    placeholder={runtimeId === 'pi' ? 'airouter/glm-5.3-flash' : '（CLI 默认）'} />
+                </Field>
+                <div className="check-stack">
+                  <label className="check-row">
+                    <input type="checkbox" checked={d.requireArtifact === true}
+                      onChange={(e) => set({ requireArtifact: e.target.checked || undefined })} />
+                    <span>要求本次产出新的非空文件（否则判失败）</span>
+                  </label>
+                </div>
+                {(runtimeId === 'codex' || runtimeId === 'claude') && (() => {
+                  const def = runtimeId === 'codex' ? 'sandbox' : 'restricted';
+                  const perm = d.runtimePermission || def;
+                  const elevated = (runtimeId === 'codex' && perm === 'full')
+                    || (runtimeId === 'claude' && (perm === 'bash' || perm === 'full'));
+                  return (
+                    <>
+                      <Field label="权限模式" hint="默认受限；高权限运行前需显式授权">
+                        <select value={perm} onChange={(e) => set({ runtimePermission: e.target.value === def ? undefined : e.target.value })}>
+                          {runtimeId === 'codex' ? (
+                            <>
+                              <option value="sandbox">沙箱（写限工作区、禁网）</option>
+                              <option value="full">全权限（不限写范围、可联网）</option>
+                            </>
+                          ) : (
+                            <>
+                              <option value="restricted">受限（文件编辑，禁 Bash）</option>
+                              <option value="bash">放行 Bash（无命令级边界）</option>
+                              <option value="full">全权限（全部工具全自动）</option>
+                            </>
+                          )}
+                        </select>
+                      </Field>
+                      {elevated && (
+                        <p className="panel-note note-warn">高权限：以 dsh 用户身份全自动执行，可写工作区外、联网、删改文件。运行前需在画布显式授权（定时与触发同样受此约束）。</p>
+                      )}
+                      {runtimeId === 'claude' && perm === 'restricted' && (
+                        <p className="sec-hint">claude 默认 acceptEdits：自动接受文件编辑，但 Bash 会被拒。需要跑命令请选「放行 Bash」。</p>
+                      )}
+                    </>
+                  );
+                })()}
+                <Field label="节点超时（秒）" hint="整个节点生命周期，所有 runtime 的硬上限">
+                  <input type="number" min="10" max="86400" value={d.timeoutSec ?? ''}
+                    onChange={(e) => set({ timeoutSec: e.target.value === '' ? undefined : Number(e.target.value) })}
+                    placeholder={wf1Timeouts.nodeTimeoutSec} />
+                </Field>
+                <p className="sec-hint">
+                  外部 CLI 用自带工具与技能：dsh 的工具白名单、技能、渠道/模型/思考档位对它不生效（值已保留，切回 dsh 恢复）。
+                  轮数上限与单次请求超时也不生效——codex 的多个工具调用在同一次 turn 内，claude 只有最终轮数，无法在线限轮。
+                </p>
+                {runtimeId === 'pi' && (
+                  <p className="panel-note note-warn">pi 无沙箱：以 dsh 用户身份全自动执行命令与读写文件，仅在受信工作区使用。</p>
+                )}
+                {selectedRuntime && !selectedRuntime.available && (
+                  <p className="panel-note note-warn">当前 runtime 不可用：{runtimeReasonText(selectedRuntime)}。可切回 dsh 底座。</p>
+                )}
+              </>
+            )}
+          </Section>
+
+          {!isExternalRuntime && (<>
           <Section title="工具" hint="勾选后仅这些可用" count={selectedTools.length || undefined} defaultOpen={false}>
             <div className="tool-chips">
               {availableTools.map((t) => {
@@ -694,6 +796,7 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
                 placeholder={wf1Timeouts.modelTimeoutSec} />
             </Field>
           </Section>
+          </>)}
         </>
       )}
 
