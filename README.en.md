@@ -18,6 +18,10 @@
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/chumingjun/dsh-harness-one" alt="MIT license"></a>
 </p>
 
+> **Notice**: Starting with v0.13.0, the standalone Express deployment under `server/` (default port 4020) is removed from this repository. This form had already been frozen as a fallback path supporting only script-node trial runs.
+> This change affects **only** the standalone Express deployment; the dsh plugin path (`/wf1/api/*`) and the standalone canvas are fully unaffected.
+> If you still rely on the 4020 standalone deployment, migrate to the dsh plugin install: `sh setup.sh --one wf1 4021` — see the [Install](#install) section.
+
 ## Turn real agents into observable workflows
 
 `Workflow One` is a visual AI workflow orchestrator for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness). Describe what you need in natural language and the AI will plan and create a DAG of real dsh agents, scripts, conditions, and HTTP nodes. Fine-tune it on the canvas when needed, then start the flow, inspect every node's input, output, and artifacts, and resume interrupted runs without starting over.

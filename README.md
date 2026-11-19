@@ -18,6 +18,10 @@
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/chumingjun/dsh-harness-one" alt="MIT 许可证"></a>
 </p>
 
+> **公告**：自 v0.13.0 起，本仓库移除 `server/` 独立 Express 部署形态（默认端口 4020）。该形态此前已冻结为仅支持 script 节点试运行的回退路径。
+> 此变更只影响独立 Express 部署；dsh 插件路径（`/wf1/api/*`）与独立画布完全不受影响。
+> 仍在使用 4020 独立部署的用户请迁移至 dsh 插件安装形态：`sh setup.sh --one wf1 4021`，详见[安装](#安装)。
+
 ## 一句话，把真实 Agent 变成可观察的工作流
 
 `Workflow One` 是运行在 [DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) 中的可视化 AI 工作流编排器。只需用自然语言描述需求，AI 会自动规划并创建由真实 dsh agent、脚本、条件分支和 HTTP 节点组成的 DAG；也可在画布中微调后启动流程，实时查看每个节点的输入、输出和产物，失败后从中断处恢复。
