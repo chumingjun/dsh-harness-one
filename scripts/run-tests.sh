@@ -1,16 +1,19 @@
 #!/bin/sh
 # 全量单测聚合入口（根 npm test / ECC pre-push / PR CI 共用）。
 # 各套件均为零依赖 node:assert 脚本，直接 node 运行；任一失败即退出非零。
+# 末行输出实际通过的套数统计，文档中的套数以该输出为准。
 set -e
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 
 fail=0
+passed=0
 run_suite() { # run_suite <目录> <glob>
   dir=$1 glob=$2
   for t in "$HERE/$dir"/$glob; do
     [ -e "$t" ] || continue
     if out=$(node "$t" 2>&1); then
       echo "✓ ${t#"$HERE"/}"
+      passed=$((passed+1))
     else
       echo "✗ ${t#"$HERE"/}"
       echo "$out" | tail -20
@@ -28,10 +31,14 @@ run_suite dsh-plugins/dsh-ccpg-one/test '*.test.mjs'
 
 # document-preview 用 node --test runner
 echo "→ dsh-plugins/dsh-ccpg-document-preview/test"
-(cd "$HERE/dsh-plugins/dsh-ccpg-document-preview" && npm test --silent) || fail=1
+if (cd "$HERE/dsh-plugins/dsh-ccpg-document-preview" && npm test --silent); then
+  passed=$((passed+1))
+else
+  fail=1
+fi
 
 if [ "$fail" -ne 0 ]; then
   echo "存在失败用例"
   exit 1
 fi
-echo "✓ 全部单测通过"
+echo "✓ 全部单测通过（${passed} 套）"

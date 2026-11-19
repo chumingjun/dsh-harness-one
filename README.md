@@ -239,7 +239,7 @@ Workflow One 嵌在 dsh 官方界面中，推荐从 AI 对话开始创建复杂�
 cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done
 node dsh-plugins/dsh-ccpg-canvasui/test/client.test.mjs
 node dsh-plugins/dsh-ccpg-document-preview/test/index.test.mjs
-cd web && npm test
+cd web && for t in src/*.test.mjs; do node "$t"; done
 ```
 
 ## 已知限制

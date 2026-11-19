@@ -59,14 +59,14 @@
 ### 常用命令
 
 ```sh
-npm test                                   # 全量单测聚合（scripts/run-tests.sh：web 25 套 + orchestrator 32 套 + llm-guard 1 套 + canvasui 1 套 + larkauth 4 套 + one 1 套 + document-preview 18 例 node --test）
+npm test                                   # 全量单测聚合（scripts/run-tests.sh；末行输出实际通过套数，文档套数以它为准）
 sh dsh-plugins/build-web.sh                 # 画布双构建（/wf1/ base + 根 base），改前端后必跑（产物不入库，仅落工作区）
 sh dsh-plugins/setup.sh [profile] [端口]    # 安装（默认 dsh-ccpg / 4021）
 sh dsh-plugins/start.sh <profile>           # 启动
 sh dsh-plugins/pack.sh <tag>                # 打包 release（CI 同源）
 
 # 分套运行（改哪跑哪）
-cd web && npm test                          # 前端 25 套
+cd web && for t in src/*.test.mjs; do node "$t"; done  # 前端全量 25 套（package.json 分套 test 脚本仅枚举 22 套，勿以 npm test 替代）
 cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # orchestrator 32 套
 node dsh-plugins/dsh-ccpg-canvasui/test/client.test.mjs         # canvasui 客户端
 cd dsh-plugins/dsh-ccpg-document-preview && npm test --silent    # node --test，18 例
