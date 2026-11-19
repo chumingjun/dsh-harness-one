@@ -15,15 +15,30 @@
 
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, copyFileSync, cpSync, unlinkSync, renameSync, realpathSync, rmSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, statSync, lstatSync, copyFileSync, cpSync, unlinkSync, renameSync, realpathSync, rmSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
 import { join, dirname, extname, isAbsolute, relative, resolve, sep, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import z from '@deepseek-ai/schemastery';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { SessionId } from '@deepseek-ai/dsh-session';
 import { installModelSelection } from '@deepseek-ai/dsh-agent';
+import { buildChildEnv, probeRuntime, runExternalCli, assertInsideRealRoot, clearProbeCache, resolveRuntimePermission, LIMITS as RUNTIME_LIMITS } from './runtime-cli.js';
+import { RuntimeSettingsStore } from './runtime-settings.js';
+import { elevatedSetOf, grantMatches, elevatedListOf } from './runtime-grants.js';
+import { codexRuntime } from './runtime-codex.js';
+import { claudeRuntime } from './runtime-claude.js';
+import { piRuntime } from './runtime-pi.js';
+
+// 外部 runtime 注册表：只有已交付并通过验收的 adapter 才在此登记。
+// 未登记的 id 显式报错，绝不静默回退 dsh。
+// pi 无沙箱，登记但执行受 config.enablePiRuntime 部署级门禁（默认禁用）。
+const EXTERNAL_RUNTIMES = new Map([
+  [codexRuntime.id, codexRuntime],
+  [claudeRuntime.id, claudeRuntime],
+  [piRuntime.id, piRuntime],
+]);
 import { renderTemplate, validateTemplate } from './template.js';
 import { describeNodeOutput, normalizeExecutionResult, RUN_SCHEMA_VERSION } from './output-contract.js';
 import { resolveInside, safeFileId, safeFilename } from './safe-path.js';
@@ -48,6 +63,7 @@ import {
   getAgentOutputConfig,
   readableStructuredOutput,
   structuredOutputInstruction,
+  validateStructuredOutput,
   validateStructuredOutputWithRepair,
 } from './agent-schema.js';
 import { createFeishuNotificationChannel } from './notification-feishu.js';
@@ -179,6 +195,9 @@ export const inject = ['agents', 'agentDefaultModel', 'sessions', 'tools', 'webS
 
 export const Config = z.object({
   staticDir: z.string().default(''),
+  // pi 无沙箱：以 dsh 用户身份全自动执行命令与读写文件。默认禁用，
+  // 需部署级显式启用（profile patch / 插件 config）；画布、导入图、助手补丁、HTTP 参数都不能自我授权。
+  enablePiRuntime: z.boolean().default(false),
 });
 
 const workspaceContext = new AsyncLocalStorage();
@@ -289,6 +308,53 @@ export function apply(ctx, config) {
   });
   // agent 节点默认值是 dsh 用户级偏好（跨工作区共享），不随 workspace store 走
   const agentDefaultsStore = new AgentDefaultsStore();
+  // pi 准入用户级开关（设置面板「本地执行底座」）：与部署级 config 组成 OR 双源门禁。
+  const runtimeSettingsStore = new RuntimeSettingsStore();
+  const piEnabledEffective = () => config.enablePiRuntime === true || runtimeSettingsStore.read().enablePiRuntime === true;
+
+  // dsh 宿主对插件 handler 路由没有全局 Origin/CSRF 防护（取证：register 原样存路由、
+  // 无 token 的 loopback curl 得 409 非 401）。改变执行授权的新写路由必须自带防护：
+  // Sec-Fetch-Site 是浏览器禁改头，cross-site 直接拒；无该头的旧浏览器回退 Origin 同源核对；
+  // 无 Origin 的 loopback 请求（本地 CLI/curl）放行。既有写路由的同类暴露为既有问题，另行跟进。
+  const rejectCrossSite = (req, res) => {
+    if (req.headers['sec-fetch-site'] === 'cross-site') {
+      json(res, 403, { error: '跨站请求被拒绝', code: 'cross-site-rejected' });
+      return true;
+    }
+    const origin = req.headers.origin;
+    if (origin && !req.headers['sec-fetch-site']) {
+      let same = false;
+      try { same = new URL(origin).host === req.headers.host; } catch { /* 非法 Origin 按跨域拒 */ }
+      if (!same) {
+        json(res, 403, { error: '跨域请求被拒绝', code: 'cross-origin-rejected' });
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // ---- 高权限运行授权（设计 §18.1）：节点数据不是授权证据 ----
+  const grantsFile = () => join(currentStore().paths.state, 'runtime-grants.json');
+  const readGrants = () => {
+    try {
+      const doc = JSON.parse(readFileSync(grantsFile(), 'utf8'));
+      return doc?.grants && typeof doc.grants === 'object' ? doc.grants : {};
+    } catch { return {}; }
+  };
+  // 启动前校验：elevated 集合非空且无精确匹配 grant → 拒绝（覆盖所有运行入口）。
+  const checkRuntimeGrant = (graph, workflowId) => {
+    const elevated = elevatedSetOf(graph);
+    if (!Object.keys(elevated).length) return { ok: true };
+    const list = elevatedListOf(graph, elevated);
+    if (!workflowId) {
+      return { ok: false, code: 'RUNTIME_PERMISSION_UNGRANTED', elevated: list, error: '含高权限节点的工作流须先保存，再到画布运行一次以授权' };
+    }
+    if (grantMatches(readGrants()[workflowId], elevated)) return { ok: true };
+    return {
+      ok: false, code: 'RUNTIME_PERMISSION_UNGRANTED', elevated: list,
+      error: `工作流含 ${list.length} 个高权限节点（全权限/放行 Bash），需运行者显式授权后才能执行（含定时与触发）`,
+    };
+  };
   const currentPaths = () => currentStore().paths;
   const currentDatabase = () => currentStore().database;
   const currentHooks = () => currentStore().hooks;
@@ -444,6 +510,9 @@ export function apply(ctx, config) {
       const err = lint.issues.find((i) => i.level === 'error')?.message || '图存在错误';
       return { ok: false, error: `图有错误不能运行：${err}`, code: 'workflow-invalid-graph', issues: lint.issues };
     }
+    // 高权限授权：助手/trigger/schedule/catch-up/列表运行全经此入口，未授权一律拒
+    const grant = checkRuntimeGrant(wf.graph, wf.id);
+    if (!grant.ok) return { ok: false, error: grant.error, code: grant.code, elevated: grant.elevated };
     let globals; try { globals = globalContext(); } catch (error) { return { ok: false, error: String(error.message || error), code: error.code }; }
     let inputs;
     try {
@@ -1404,6 +1473,215 @@ export function apply(ctx, config) {
   };
 
   // ---- agent 节点执行（升级版）----
+  // 外部 runtime 的 docTail：跳过符号链接 + 物理根校验 + 只读普通文件。
+  // 词法子路径检查不足以证明归属——outputDir 里一个指向外部文本的 symlink
+  // 就能把工作区外内容送进 SSE（resolveInside 只做 resolve+relative，无 realpath）。
+  function scanRuntimeDocTail(ws) {
+    try {
+      const root = realpathSync(ws);
+      let newest = null;
+      for (const entry of readdirSync(root, { recursive: true })) {
+        const name = String(entry);
+        if (!/\.(md|markdown|txt|csv)$/i.test(name)) continue;
+        const full = resolveInside(root, name);
+        if (!full) continue;
+        let st;
+        try { st = lstatSync(full); } catch { continue; }
+        if (st.isSymbolicLink() || !st.isFile()) continue;
+        const real = realpathSync(full);
+        if (real !== root && !real.startsWith(root + sep)) continue;
+        if (!newest || st.mtimeMs > newest.mtime) newest = { full, mtime: st.mtimeMs, size: st.size, name: basename(name) };
+      }
+      if (!newest || newest.size === 0) return undefined;
+      const start = Math.max(0, newest.size - 2048);
+      const fd = openSync(newest.full, 'r');
+      try {
+        const buf = Buffer.alloc(newest.size - start);
+        readSync(fd, buf, 0, buf.length, start);
+        return { name: newest.name, size: newest.size, tail: decodeTailWindow(buf, { trimStart: start > 0 }), growing: true };
+      } finally { closeSync(fd); }
+    } catch { return undefined; }
+  }
+
+  // 外部 runtime（codex/claude/pi）执行路径。与 dsh 路径共用 persona/输入/结构化契约与收尾形状，
+  // 但不创建 dsh agent、不解析 dsh 渠道模型、不注入 dsh 工具与技能索引。
+  async function runExternalAgentNode({ node, run, s, d, external, ws, outputDir, outputConfig, persona, userPrompt, inputFiles, signal, emit, runId }) {
+    const store = currentStore();
+    const modelLabel = `${external.id}:${d.externalModel || '(CLI 默认)'}`;
+    // 权限单点解析（设计 §17/§18）：实际生效值在分派顶部定死，成功/失败/取消/试运行
+    // 全路径留痕同一个值；非法值 fail-closed，留痕记原始值而非「已生效模式」。
+    let permission;
+    try {
+      permission = resolveRuntimePermission(external.id, d.runtimePermission);
+    } catch (error) {
+      error.nodeDetails = { model: modelLabel, runtime: external.id, input: userPrompt, runtimePermissionRaw: d.runtimePermission };
+      throw error;
+    }
+    const fail = (message, code, retryable = false, extra = {}) => {
+      const err = new Error(message);
+      err.code = code;
+      err.retryable = retryable;
+      err.nodeDetails = { model: modelLabel, runtime: external.id, permission, input: userPrompt, ...extra };
+      return err;
+    };
+
+    // pi 无沙箱：双源 opt-in 门禁（部署级 config OR 用户级设置开关）。正式运行/试运行/
+    // trigger/schedule/catch-up/助手工具全部经 runAgentNode → 此处，单点覆盖；
+    // 画布、导入图、助手补丁、HTTP 参数无法自我授权。
+    if (external.id === 'pi' && !piEnabledEffective()) {
+      throw fail('pi 无沙箱（以 dsh 用户身份全自动执行命令与读写文件），默认禁用；到 dsh 设置 → Workflow One → 本地执行底座开启', 'RUNTIME_NOT_AUTHORIZED', false);
+    }
+    const probe = await probeRuntime(external);
+    if (!probe.available) {
+      throw fail(`runtime「${external.id}」不可用（${probe.reason}）`, 'RUNTIME_UNAVAILABLE', false);
+    }
+    // 产物目录的物理归属：词法子路径不足以证明仍在宿主运行根内
+    try {
+      if (!assertInsideRealRoot(ws, store.workspaceRoot)) {
+        throw fail('节点输出目录不在工作区物理根内，拒绝执行', 'RUNTIME_WORKSPACE_ESCAPE', false);
+      }
+    } catch (error) {
+      if (error.code === 'RUNTIME_WORKSPACE_ESCAPE') throw error;
+      throw fail(`节点输出目录不可用：${error.message}`, 'RUNTIME_WORKSPACE_MISSING', false);
+    }
+
+    // 跑前清单：requireArtifact 只认本次新增的非空文件，上次失败残留不算成果
+    const before = new Set(safeWsList(ws));
+    const scratch = mkdtempSync(join(tmpdir(), 'wf1-runtime-'));
+    const files = {
+      resultFile: join(scratch, 'final-answer.txt'),
+      schemaFile: null,
+      schema: outputConfig.mode === 'structured' ? outputConfig.schema : null,
+    };
+    let liveTrace = null;
+    if (runId) {
+      if (!liveTracesByRun.has(runId)) liveTracesByRun.set(runId, new Map());
+      const liveTraces = liveTracesByRun.get(runId);
+      if (!liveTraces.has(node.id)) liveTraces.set(node.id, { model: modelLabel, entries: [{ kind: 'input', text: userPrompt }] });
+      liveTrace = liveTraces.get(node.id);
+    }
+
+    let result;
+    try {
+      if (outputConfig.mode === 'structured') {
+        files.schemaFile = join(scratch, 'output-schema.json');
+        writeFileSync(files.schemaFile, JSON.stringify(outputConfig.schema), { mode: 0o600 });
+      }
+      let spawn;
+      try {
+        spawn = external.buildSpawn({
+          persona, userPrompt, cwd: store.workspaceRoot, model: String(d.externalModel || '').trim(), files,
+          permission,
+        });
+      } catch (error) {
+        // 启动前抛错（如 pi 非法模型）也要带留痕，不能绕过 details
+        error.nodeDetails = { model: modelLabel, runtime: external.id, permission, input: userPrompt };
+        throw error;
+      }
+      const { argv, stdin } = spawn;
+      let lastEmit = 0;
+      result = await runExternalCli({
+        adapter: external, bin: probe.bin, argv, stdin,
+        cwd: store.workspaceRoot, env: buildChildEnv(), signal, files,
+        onProgress: (acc) => {
+          if (liveTrace) {
+            liveTrace.entries = [{ kind: 'input', text: userPrompt }, ...acc.entries];
+          }
+          const now = Date.now();
+          if (now - lastEmit < 1000) return; // 与 dsh 路径同量级的节流，不广播原始 CLI 帧
+          lastEmit = now;
+          emit('agent-progress', {
+            runId, nodeId: node.id, turns: acc.turns,
+            preview: outputConfig.mode === 'structured' ? '' : acc.preview.slice(0, 4096),
+            docTail: outputConfig.mode === 'structured' ? undefined : scanRuntimeDocTail(ws),
+            structured: outputConfig.mode === 'structured' || undefined,
+          });
+        },
+      });
+    } finally {
+      try { rmSync(scratch, { recursive: true, force: true }); } catch { /* 临时目录清理失败不影响结果 */ }
+    }
+
+    const trace = { model: modelLabel, entries: [{ kind: 'input', text: userPrompt }, ...result.entries] };
+    const inputFileSet = new Set(inputFiles);
+    const artifacts = safeWsList(ws).filter((file) => !inputFileSet.has(file));
+    const details = {
+      model: modelLabel,
+      runtime: external.id,
+      permission,
+      turns: result.turns || 0,
+      artifacts,
+      trace,
+      input: userPrompt,
+      ...(result.usage ? { usage: result.usage } : {}),
+      ...(result.entriesTruncated ? { traceTruncated: true } : {}),
+      ...(result.unknownEvents?.length ? { unknownEvents: result.unknownEvents.slice(0, 20) } : {}),
+      // 诊断尾部进运行记录：失败时用户要能看到原因，而不是只有一个错误码（已脱敏+限长）
+      ...(result.stderrTail ? { stderrTail: result.stderrTail.slice(-1200) } : {}),
+      ...(result.stdoutPlainTail ? { stdoutPlainTail: result.stdoutPlainTail.slice(-1200) } : {}),
+    };
+
+    if (result.error) {
+      // 引擎 abort（节点超时或用户取消）时不自己分类：引擎只在 execute resolve 后
+      // 才检查 timedOut（engine.js:344），并按 run.canceled 抛「运行已取消」。
+      // 自己抛 '运行已取消' 会让超时被误判成用户取消（真跑实测踩到），故交回引擎判定。
+      if (result.canceled) return { output: result.text || '(已中断)', ...details };
+      const err = result.error;
+      err.nodeDetails = details;
+      // 清理未确认 / 协议错误 / 授权失败不得被 continueOnFail 吞掉
+      if (err.code === 'RUNTIME_CLEANUP_UNCONFIRMED') err.tolerateForbidden = true;
+      throw err;
+    }
+
+    let text = result.text;
+    let structuredOutput;
+    if (outputConfig.mode === 'structured') {
+      // 外部 runtime 首期不做修复重跑：重跑会重复写文件/重复外部副作用，
+      // 且无法证明 CLI 的 hooks/扩展/MCP 不会执行。校验失败即失败。
+      let validated;
+      try {
+        validated = validateStructuredOutput(text, outputConfig.schema);
+      } catch (validationError) {
+        const envelope = createStructuredFailureEnvelope(validationError, { repaired: false });
+        const err = new Error(`结构化输出校验失败：${(envelope.validationErrors || []).join('；')}`);
+        err.code = 'RUNTIME_STRUCTURED_INVALID';
+        err.retryable = false;
+        err.nodeDetails = { ...details, structuredMeta: { repaired: false, validationErrors: envelope.validationErrors } };
+        throw err;
+      }
+      structuredOutput = createStructuredEnvelope(validated, { schema: outputConfig.schema });
+      text = readableStructuredOutput(validated.data);
+      details.structuredMeta = { repaired: false, validationErrors: [] };
+    }
+
+    // 显式交付物验收：只有 requireArtifact=true 才要求本次新增非空文件。
+    // 自由文本任务没有可机器验证的业务条件，不承诺识别任意未履约。
+    if (d.requireArtifact === true) {
+      const fresh = artifacts.filter((file) => {
+        if (before.has(file)) return false;
+        const full = resolveInside(ws, file);
+        if (!full) return false;
+        try {
+          const st = lstatSync(full);
+          return st.isFile() && st.size > 0;
+        } catch { return false; }
+      });
+      if (!fresh.length) {
+        const err = new Error(`节点要求交付物（requireArtifact），但本次未产出新的非空文件`);
+        err.code = 'RUNTIME_NO_ARTIFACT';
+        err.retryable = false;
+        err.nodeDetails = details;
+        throw err;
+      }
+    }
+
+    return {
+      output: text || '(agent 无输出)',
+      ...(structuredOutput ? { structuredOutput } : {}),
+      ...details,
+    };
+  }
+
   async function runAgentNode(ctx, node, run, s, { signal, emit, runId }) {
     const store = currentStore();
     const ws = workspaceFor(node, { workflowId: run.workflowId || 'draft', runId });
@@ -1421,25 +1699,41 @@ export function apply(ctx, config) {
       globalVariables: s.globalVariables, workflowVariables: s.workflowVariables, runInputs: s.runInputs,
       implicitUpstream: false,
     };
+    // 外部 runtime（codex/claude/pi）分派：缺省/空/'dsh' 逐字保持原行为。
+    // 未知 id 显式报错，不回退 dsh（否则用户以为在跑 codex 实际跑了 dsh）。
+    const runtimeId = String(d.runtime || 'dsh').trim() || 'dsh';
+    if (runtimeId !== 'dsh' && !EXTERNAL_RUNTIMES.has(runtimeId)) {
+      const err = new Error(`节点「${d.label || node.id}」选择了不可用的 runtime「${runtimeId}」（未交付或未启用）`);
+      err.code = 'RUNTIME_UNAVAILABLE';
+      err.retryable = false;
+      throw err;
+    }
+    const external = runtimeId === 'dsh' ? null : EXTERNAL_RUNTIMES.get(runtimeId);
     const renderedPrompt = renderTemplate(d.prompt || '你是一个帮助完成任务的助手。', promptCtx);
+    // skill 工具是 dsh 专属，外部 CLI 没有；其余 persona 文本两端共用且 dsh 侧逐字不变
+    const skillLine = external ? '' : '\n- 会话技能目录里匹配任务的技能，先用 skill 工具加载对应规范再动手，输出遵守规范。';
+    // 真跑根因：共享 persona 的「可直接读取工作区已有文件」会引导模型去探索 .workflow-one
+    // 里的工作流图与其他节点产物（thinking 实测在推理别的节点、写工作流模板文件），
+    // 转而去做工作流的任务而非本节点任务，空转多轮不产出。外部 runtime 收紧为只处理本任务。
+    const cwdLine = external
+      ? '\n- 只处理下面这一个任务：不要探索工作区其他文件，不要读取或修改 .workflow-one 目录与其他节点的输出目录。'
+      : '\n- 当前目录是用户工作区根，可直接读取其中已有文件。';
     let systemPrompt = `${renderedPrompt.text}
 
-你是一个独立运行的智能体，自主决定步骤完成下面的任务：
-- 当前目录是用户工作区根，可直接读取其中已有文件。
-- 本节点的专属输出目录是 ${outputDir}；交付物（报告/工单/回复稿等）必须写入该目录，中间产物也应写入该目录，不要修改工作区中的其他文件。
-- 会话技能目录里匹配任务的技能，先用 skill 工具加载对应规范再动手，输出遵守规范。
+你是一个独立运行的智能体，自主决定步骤完成下面的任务：${cwdLine}
+- 本节点的专属输出目录是 ${outputDir}；交付物（报告/工单/回复稿等）必须写入该目录，中间产物也应写入该目录，不要修改工作区中的其他文件。${skillLine}
 - 完成后在最终回复里给出交付物文件清单（文件名 + 一句话说明），不要复述全文。`;
     const skillIds = Array.isArray(d.skills) ? d.skills.slice() : [];
     // feishu-cli 默认对所有 agent 可用（lark-cli 已装时）：索引带上，agent 自行决定加载
     if (larkCliAvailable() && !skillIds.includes('feishu-cli')) skillIds.push('feishu-cli');
-    const idx = await skillIndexPromptSafe(skillIds);
+    const idx = external ? '' : await skillIndexPromptSafe(skillIds);
     if (idx) systemPrompt += `\n\n${idx}`;
     const outputConfig = getAgentOutputConfig(d);
     if (outputConfig.mode === 'structured') {
       systemPrompt += `\n\n${structuredOutputInstruction(outputConfig.schema)}`;
     }
-    // lark-cli 环境探测：装了才告知，避免误导
-    if (skillIds.some((x) => x === 'feishu-cli') && larkCliAvailable()) {
+    // lark-cli 环境探测：装了才告知，避免误导（外部 runtime 不注入 dsh 专属续期说明）
+    if (!external && skillIds.some((x) => x === 'feishu-cli') && larkCliAvailable()) {
       systemPrompt += `\n\n飞书操作：本机装有 lark-cli（飞书官方 CLI，在 dsh 设置「飞书账号」扫码授权一次即可）。默认身份已固定为 user，执行 lark-cli 命令默认加 --as user；user token 由宿主后台自动续约，无需关心过期。user 身份报错/授权失效时降级 --as bot 并在结果注明"需用户重新扫码"。详见技能 feishu-cli。输出 JSON 信封，成功看 ok==true。`;
     }
     // 通用提示词（设置面板「Workflow One」，issue #129）：部署级行为约束，
@@ -1475,7 +1769,7 @@ export function apply(ctx, config) {
           }
         } catch { /* 单个附件失败不阻塞 */ }
       }
-      userPrompt += `\n\n可用附件已放入节点输出目录 ${outputDir}，用 read 工具读取：${attachments.map((a) => `${outputDir}/${a.filename}`).join(', ')}`;
+      userPrompt += `\n\n可用附件已放入节点输出目录 ${outputDir}，${external ? '用你的文件读取工具读取' : '用 read 工具读取'}：${attachments.map((a) => `${outputDir}/${a.filename}`).join(', ')}`;
     }
 
     // 节点级模型解析链：节点显式配置 > 设置面板「Workflow One」默认值 > dsh 全局选择；
@@ -1515,6 +1809,15 @@ export function apply(ctx, config) {
 
     const maxRounds = Number(d.maxRounds) > 0 ? Number(d.maxRounds) : 0;
     const personaText = systemPrompt;
+
+    // 外部 runtime 分派：复用上面已渲染好的 persona / userPrompt / 附件与结构化契约，
+    // 但不走 dsh 的渠道模型解析、工具白名单与 skill 索引。
+    if (external) {
+      return await runExternalAgentNode({
+        node, run, s, d, external, ws, outputDir, outputConfig,
+        persona: personaText, userPrompt, inputFiles, signal, emit, runId,
+      });
+    }
 
     let handle; // agents.create() 直接返回 AgentHandle（.agent + .dispose()）
     let canceledByUser = false;
@@ -2101,6 +2404,9 @@ export function apply(ctx, config) {
     if (!graph || !Array.isArray(graph.nodes)) return json(res, 400, { error: '缺少 graph' });
     const lint = lintWorkflowGraph(graph);
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });
+    // 画布手动运行直走 startRun（不经 startWorkflowRun），授权校验须在此同样把守
+    const grant = checkRuntimeGrant(graph, workflowId);
+    if (!grant.ok) return json(res, 403, { ok: false, error: grant.error, code: grant.code, elevated: grant.elevated });
     const { runId } = startRun(graph, {
       triggerInput: body.triggerInput ?? '', workflowName, workflowId,
       canvasId: body.canvasId || null,
@@ -2157,6 +2463,17 @@ export function apply(ctx, config) {
     const body = await readBody(req);
     const node = body?.node;
     if (!node?.id || !node?.type) return json(res, 400, { error: '缺少 node' });
+    // elevated 节点试运行须每次显式确认（不存持久 grant，设计 §18.1）
+    if (node.type === 'agent') {
+      const elevated = elevatedSetOf({ nodes: [node] });
+      if (Object.keys(elevated).length && body.confirmPermission !== true) {
+        return json(res, 200, {
+          ok: false, code: 'RUNTIME_PERMISSION_UNGRANTED',
+          error: '该节点为高权限（全权限/放行 Bash），请在试运行弹窗勾选确认后执行',
+          elevated: elevatedListOf({ nodes: [node] }, elevated),
+        });
+      }
+    }
     try { rejectInlineGlobalContext(body); } catch (error) { return routeError(res, error); }
     let globals; try { globals = globalContext(); } catch (error) { return routeError(res, error); }
     const persistedWorkflow = body?.workflowId ? readWf(body.workflowId) : null;
@@ -2214,6 +2531,14 @@ export function apply(ctx, config) {
         });
         const normalized = normalizeExecutionResult(r);
         const output = normalized.output;
+        // 试运行不走引擎 run 循环，引擎的 timedOut 分类在这里不生效；
+        // 外部 runtime 在 abort 时会 resolve 部分结果（交引擎分类），若不在这里拦截
+        // 就会把超时/取消误报成 ok:true（真跑实测踩到）。
+        if (testTimedOut || testAbort.signal.aborted) {
+          const message = testTimedOut ? `节点超时（${Math.round(testTimeoutMs / 1000)}s）` : '运行已取消';
+          broadcast('node-status', { runId, nodeId: node.id, status: 'error', test: true, error: message });
+          return json(res, 200, { ok: false, error: message, turns: r?.turns, model: r?.model, artifacts: r?.artifacts, ...(r?.permission ? { permission: r.permission } : {}) });
+        }
         broadcast('node-status', {
           runId, nodeId: node.id, status: 'success', test: true,
           ...(normalized.structuredOutput.type === 'json' ? {} : { outputPreview: String(output).slice(0, 4000) }),
@@ -2223,6 +2548,7 @@ export function apply(ctx, config) {
           ok: true, output, structuredOutput: normalized.structuredOutput,
           ...(typeof r === 'object' && r ? {
             turns: r.turns, model: r.model, artifacts: r.artifacts,
+            ...(r.permission ? { permission: r.permission } : {}),
             ...(r.input !== undefined ? { input: r.input } : {}),
             ...(r.workspaceStats !== undefined ? { workspaceStats: r.workspaceStats } : {}),
           } : {}),
@@ -2232,7 +2558,8 @@ export function apply(ctx, config) {
     } catch (e) {
       const message = testTimedOut ? `节点超时（${Math.round(testTimeoutMs / 1000)}s）` : String(e.message || e);
       broadcast('node-status', { runId, nodeId: node.id, status: 'error', test: true, error: message });
-      if (!res.writableEnded) json(res, 200, { ok: false, error: message });
+      // 失败也要留痕实际生效权限（评审 §18.2）：nodeDetails 由分派层/fail() 统一带上
+      if (!res.writableEnded) json(res, 200, { ok: false, error: message, ...(e.nodeDetails?.permission ? { permission: e.nodeDetails.permission } : {}) });
     } finally {
       clearTimeout(testTimer);
     }
@@ -2490,6 +2817,8 @@ export function apply(ctx, config) {
     const workflowVariables = variableDefinitionsToValues(persistedWorkflow?.variables || []);
     const lint = lintWorkflowGraph(graph);
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });
+    const grant = checkRuntimeGrant(graph, prev.workflowId || null);
+    if (!grant.ok) return json(res, 403, { ok: false, error: grant.error, code: grant.code, elevated: grant.elevated });
     const { runId } = startRun(graph, {
       triggerInput, workflowName: prev.workflowName || null, workflowId: prev.workflowId || null,
       globalVariables: globals.globalVariables, workflowVariables, runInputs,
@@ -2544,6 +2873,9 @@ export function apply(ctx, config) {
     const workflowVariables = variableDefinitionsToValues(persistedWorkflow?.variables || []);
     const lint = lintWorkflowGraph(graph);
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });
+    // 续跑可能带改过的图：高权限集合同样须当前授权
+    const grant = checkRuntimeGrant(graph, prev.workflowId || null);
+    if (!grant.ok) return json(res, 403, { ok: false, error: grant.error, code: grant.code, elevated: grant.elevated });
     const reusableSet = new Set(reusable);
     const resumeSeed = {
       runId: prev.runId,
@@ -3589,9 +3921,76 @@ export function apply(ctx, config) {
     });
   } }, { scoped: false });
 
-  // runtime 徽标数据源：插件形态下 agent 恒走 dsh 底座
-  register({ kind: 'exact', path: '/wf1/api/runtime-config', handler(_req, res) {
-    json(res, 200, { runtime: { available: true, runtime: 'dsh-plugin', reasons: [] } });
+  // runtime 徽标数据源：dsh 底座恒可用；外部 runtime 逐个异步探测（有界 + TTL 缓存 + in-flight 去重）。
+  // 保持 scoped:true —— scoped:false 会同时绕过 requestStore 的工作区解析、ensureTriggers() 与异常包装，
+  // 不只是去掉 409。响应只给枚举原因与解析后的版本，不回显 bin 绝对路径 / 原始 stdout / env。
+  // 设置面板无会话上下文（system/info 先例），handler 不碰工作区 → scoped:false。
+  // 安装态与准入态分离（评审 §18.3）：pi 未启用也探测安装态，卡片才能给安装命令；
+  // available 仍表示「现在可执行」，执行门禁不变。refresh=1 强制重探（generation 竞态已修）。
+  register({ kind: 'exact', path: '/wf1/api/runtime-config', async handler(req, res) {
+    const url = new URL(req.url, 'http://wf1.local');
+    if (url.searchParams.get('refresh') === '1') clearProbeCache();
+    const piEnabled = piEnabledEffective();
+    const runtimes = [{ id: 'dsh', available: true, installed: true }];
+    for (const adapter of EXTERNAL_RUNTIMES.values()) {
+      const probed = await probeRuntime(adapter);
+      const entry = { id: adapter.id, installed: probed.available, ...(probed.version ? { version: probed.version } : {}) };
+      if (adapter.id === 'pi' && !piEnabled) {
+        runtimes.push({ ...entry, available: false, reason: 'disabled-by-host' });
+        continue;
+      }
+      runtimes.push(probed.available
+        ? { ...entry, available: true }
+        : { ...entry, available: false, reason: probed.reason });
+    }
+    // 三态分开回（评审 §18.2）：开关绑用户值；YAML 强制开时页面能解释为何仍启用
+    json(res, 200, {
+      runtime: { available: true, runtime: 'dsh-plugin', reasons: [] },
+      runtimes,
+      enablePiRuntime: piEnabled,
+      piUserEnabled: runtimeSettingsStore.read().enablePiRuntime === true,
+      piDeploymentEnabled: config.enablePiRuntime === true,
+    });
+  } }, { scoped: false });
+
+  // pi 准入用户级开关写入（scoped:false + 自带异常兜底 + Origin 防护，评审 §18.3）。
+  // 只收 { enablePiRuntime: boolean }；损坏请求体/写盘失败分别 400/500，不炸宿主。
+  register({ kind: 'exact', path: '/wf1/api/runtime-settings', async handler(req, res) {
+    if (req.method !== 'PUT') return json(res, 405, { error: 'method' });
+    if (rejectCrossSite(req, res)) return undefined;
+    let body;
+    try { body = await readBody(req); } catch (error) { return json(res, 400, { error: String(error.message || error), code: 'bad-body' }); }
+    try {
+      const saved = runtimeSettingsStore.write(body);
+      return json(res, 200, { ok: true, ...saved, enablePiRuntime: piEnabledEffective(), piDeploymentEnabled: config.enablePiRuntime === true });
+    } catch (error) {
+      if (error instanceof TypeError) return json(res, 400, { ok: false, error: error.message, code: 'invalid-runtime-settings' });
+      ctx.logger?.error?.(`runtime-settings 写入失败：${error.stack || error.message || error}`);
+      return json(res, 500, { ok: false, error: '设置写入失败', code: 'runtime-settings-io' });
+    }
+  } }, { scoped: false });
+
+  // 高权限运行授权（设计 §18.1）：服务端从已保存图重算 elevated 集合落 grant，不信前端传值。
+  register({ kind: 'exact', path: '/wf1/api/runtime-grant', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    if (rejectCrossSite(req, res)) return undefined;
+    let body;
+    try { body = await readBody(req); } catch (error) { return routeError(res, error); }
+    const workflowId = String(body?.workflowId || '').trim();
+    if (!workflowId) return json(res, 400, { error: '缺少 workflowId', code: 'workflow-required' });
+    const wf = readWf(workflowId);
+    if (!wf) return json(res, 404, { error: '工作流不存在', code: 'workflow-not-found' });
+    const elevated = elevatedSetOf(wf.graph);
+    if (!Object.keys(elevated).length) return json(res, 400, { error: '该工作流没有高权限节点，无需授权', code: 'no-elevated-nodes' });
+    try {
+      const grants = readGrants();
+      grants[workflowId] = { elevated, grantedAt: new Date().toISOString() };
+      atomicJson(grantsFile(), { version: 1, grants });
+      return json(res, 200, { ok: true, workflowId, elevated: elevatedListOf(wf.graph, elevated) });
+    } catch (error) {
+      ctx.logger?.error?.(`runtime-grant 写入失败：${error.stack || error.message || error}`);
+      return json(res, 500, { ok: false, error: '授权写入失败', code: 'runtime-grant-io' });
+    }
   } });
 
   // ---- agent 节点默认值（设置面板「Workflow One」）：渠道/模型/思考级别 ----

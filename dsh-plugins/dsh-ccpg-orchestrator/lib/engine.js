@@ -8,6 +8,7 @@ import { getScriptOutputSchema, validateScriptOutput } from './script-schema.js'
 import { normalizeScriptTimeout, SCRIPT_LIMITS } from './script-runner.js';
 import { validateNotificationNodeData } from './notifications.js';
 import { validateSubworkflowNode, subworkflowTemplateFields } from './subworkflow.js';
+import { RUNTIME_PERMISSION_MODES, DEFAULT_RUNTIME_PERMISSION } from './runtime-cli.js';
 // 相对 v1 的升级：
 //   - 多运行实例并存（Map 而非单 this.s）
 //   - 并发上限（就绪节点排队，槽位释放依次启动）
@@ -792,6 +793,41 @@ registerKind({
     }
     try { getAgentOutputConfig(node.data || {}); }
     catch (error) { issues.push({ level: 'error', message: `智能体「${node.data?.label || node.id}」输出 Schema 无效：${error.message}` }); }
+    // 外部 runtime：dsh 专属字段不生效，必须显式告知，不能让人以为勾了就有效
+    const runtimeId = String(node.data?.runtime || 'dsh').trim() || 'dsh';
+    if (runtimeId !== 'dsh') {
+      const label = node.data?.label || node.id;
+      const externalModel = String(node.data?.externalModel || '').trim();
+      if (!['codex', 'claude', 'pi'].includes(runtimeId)) {
+        issues.push({ level: 'error', message: `智能体「${label}」的 runtime「${runtimeId}」无效（可选 dsh/codex/claude/pi）` });
+      }
+      if (runtimeId === 'pi') {
+        if (!externalModel) issues.push({ level: 'error', message: `智能体「${label}」选 pi 必须填模型（provider/model，如 airouter/glm-5.3-flash）` });
+        else if (!/^[^/\s]+\/[^/\s]+$/.test(externalModel)) issues.push({ level: 'error', message: `智能体「${label}」的 pi 模型须为 provider/model 形式（当前：${externalModel}）` });
+        issues.push({ level: 'warn', message: `智能体「${label}」用 pi 执行：pi 无沙箱，以 dsh 用户身份全自动执行命令与读写文件，仅在受信工作区使用` });
+      }
+      // 权限模式（设计 §17/§18）：非法值 error 阻断；高权限 warn 提示（运行期另有授权门禁）
+      const permRaw = node.data?.runtimePermission;
+      const modes = RUNTIME_PERMISSION_MODES[runtimeId];
+      if (modes && permRaw !== undefined && permRaw !== null && permRaw !== ''
+        && (typeof permRaw !== 'string' || !modes.includes(permRaw))) {
+        issues.push({ level: 'error', message: `智能体「${label}」的权限模式「${String(permRaw)}」无效（${runtimeId} 可选：${modes.join('/')}）` });
+      }
+      const perm = modes ? (modes.includes(permRaw) ? permRaw : DEFAULT_RUNTIME_PERMISSION[runtimeId]) : null;
+      if (runtimeId === 'codex' && perm === 'full') {
+        issues.push({ level: 'warn', message: `智能体「${label}」用 codex 全权限（danger-full-access）：不限写范围、可联网，以 dsh 用户身份执行，运行前需显式授权` });
+      }
+      if (runtimeId === 'claude' && (perm === 'bash' || perm === 'full')) {
+        issues.push({ level: 'warn', message: `智能体「${label}」的 claude 权限为 ${perm === 'full' ? '全权限（bypassPermissions）' : '放行 Bash'}：无命令级边界，以 dsh 用户身份执行任意命令，运行前需显式授权` });
+      }
+      if ((node.data?.tools || []).length) issues.push({ level: 'warn', message: `智能体「${label}」的工具白名单只对 dsh 底座生效，外部 runtime 用自带工具` });
+      if ((node.data?.skills || []).length) issues.push({ level: 'warn', message: `智能体「${label}」的技能只对 dsh 底座生效，外部 runtime 用自带技能` });
+      if (node.data?.maxRounds) issues.push({ level: 'warn', message: `智能体「${label}」的轮数上限对外部 runtime 不生效（codex 多工具调用在同一 turn 内，claude 只有最终轮数）` });
+      if (node.data?.modelTimeoutSec) issues.push({ level: 'warn', message: `智能体「${label}」的单次请求超时对外部 runtime 不生效，只有节点总超时兜底` });
+      if (node.data?.model || node.data?.channel || node.data?.reasoningEffort) {
+        issues.push({ level: 'warn', message: `智能体「${label}」的 dsh 渠道/模型/思考档位对外部 runtime 不生效，模型请填「模型」栏（externalModel）` });
+      }
+    }
     return issues;
   },
 });

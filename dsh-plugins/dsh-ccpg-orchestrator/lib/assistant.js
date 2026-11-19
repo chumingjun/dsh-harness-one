@@ -221,7 +221,7 @@ export function canvasAssistantPersona() {
 ## 画布模型
 - 图 = 节点 + 有向边。节点类型 9 种：
   - input 输入：data.text 触发文本模板（支持 {{变量}}）
-  - agent 智能体：data.prompt 系统提示词、data.inputTemplate 输入模板（{{上游节点名}} 引用上游输出）、data.tools 工具名数组（如 feishu_doc_read/web_fetch）、data.model/data.channel 可选
+  - agent 智能体：data.prompt 系统提示词、data.inputTemplate 输入模板（{{上游节点名}} 引用上游输出）、data.tools 工具名数组（如 feishu_doc_read/web_fetch）、data.model/data.channel 可选。执行底座 data.runtime 可选 dsh（缺省）/codex/claude/pi；选外部 runtime 时模型填 data.externalModel（codex/claude 可留空跟随 CLI 默认，pi 必填 provider/model 如 airouter/glm-5.3-flash），可选 data.requireArtifact=true 要求本次产出新的非空文件。权限模式 data.runtimePermission 可选：codex=sandbox（缺省）/full，claude=restricted（缺省）/bash/full，pi 无选项（恒全权限，由宿主开关准入）；full/bash 属高权限，运行前需用户在画布显式授权（服务端按工作流 elevated 集合校验，助手不得代为授权或绕过），不要主动给节点设高权限。外部 runtime 用 CLI 自带工具与技能，data.tools/data.skills/data.model/data.channel/data.reasoningEffort/data.maxRounds/data.modelTimeoutSec 对它不生效（不要为外部节点填这些）；节点总超时 data.timeoutSec 仍生效。注意 data.runtimeModel 是运行结果回填的瞬态字段，不是配置，保存时会被剔除，不要写它
   - script 脚本：固定 JavaScript；data.inputs 为命名参数数组，每项用 expression 完整变量或 value JSON 常量；data.code 必须声明同步 function main(input, workspace) 并返回 JSON；workspace 仅可 list/read/write/remove 当前节点工作区；可选 data.outputSchema 和 data.scriptTimeoutMs（100-10000）
   - condition 条件：data.include/data.exclude 逗号分隔关键词，命中走 true 边否则 false 边；条件节点的两条出边必须 branch="true"/"false"
   - http 请求：data.url/method/headers/body
