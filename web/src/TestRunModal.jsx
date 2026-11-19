@@ -150,6 +150,11 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
         </div>
       )}
 
+      {/* systemone 冷启动提示：首次调用需加载模型，别让人以为卡死 */}
+      {running && node.data.nodeType === 'systemone' && !progress && (
+        <p className="sec-hint">本地模型判断中…首次调用需加载模型（约 5–10 秒），之后每次不到 1 秒</p>
+      )}
+
       {/* 流式进度 */}
       {running && progress && (
         <div className="test-progress">
