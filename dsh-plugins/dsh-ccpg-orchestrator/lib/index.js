@@ -2219,7 +2219,9 @@ export function apply(ctx, config) {
         const r = await kind.execute({
           node, s: orchLike, engine: orchLike,
           signal: testAbort.signal, emit: broadcast, runId,
-          render: (tpl) => renderTemplate(tpl || '', orchLike.templateCtx(node)),
+          // options 必须透传（与引擎 render 同形）：implicitUpstream:false 等语义丢不得，
+          // 否则字面量模板会被拼上上游文本（systemone state / http url 都受影响）。
+          render: (tpl, options = {}) => renderTemplate(tpl || '', { ...orchLike.templateCtx(node), ...options }),
         });
         const normalized = normalizeExecutionResult(r);
         const output = normalized.output;

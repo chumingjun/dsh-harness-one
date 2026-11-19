@@ -563,4 +563,20 @@ await test('接线：试运行 orchLike 拿到 endpoint，响应带 usage/durati
   });
 });
 
+await test('接线：试运行 render 透传 options（字面量 state 不拼上游文本）', async () => {
+  const impl = captureFetch((body) => {
+    assert.equal(body.state, '密码错误'); // 丢 implicitUpstream:false 时这里会混入上游包装
+    return noulRes(0.99);
+  });
+  await withFetch(impl, async () => {
+    const r = await callRoute('/wf1/api/node/test', 'POST', {
+      node: { id: 'j1', type: 'systemone', data: { mode: 'noul', statement: 's', state: '密码错误' } },
+      upstreamOutputs: { up: '这是上游文本' }, upstreamLabels: { up: '上游' }, triggerInput: '',
+    });
+    assert.equal(r.body.ok, true, r.body.error);
+    assert.equal(r.body.structuredOutput.value.verdict, 'yes');
+    assert.ok(!r.body.output.includes('上游'));
+  });
+});
+
 console.log(`\n${passed} passed${process.exitCode ? '（存在失败）' : ''}`);
