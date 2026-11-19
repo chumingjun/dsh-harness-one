@@ -26,6 +26,7 @@ export function projectRunNodeStates(nodes, detail, runId) {
     if (st.error) data.runError = st.error;
     if (st.durationMs != null) data.durationMs = st.durationMs;
     if (st.model) data.runtimeModel = st.model;
+    if (st.usage) data.runtimeUsage = st.usage;
     if (st.artifacts) { data.artifacts = st.artifacts; data.artifactsRunId = runId; }
     const out = outputs[n.id];
     if (out != null) data.runOutput = String(out).slice(0, 4000);

@@ -5,6 +5,7 @@ import { apiUrl } from './api.js';
 import { parseJsonResponseText } from './json-response.js';
 import { trialRequestUrls } from './trial-request.js';
 import { Modal, useToast } from './ui.jsx';
+import { SystemOneVerdict } from './SystemOneVerdict.jsx';
 
 export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId, workflowVariables, inputSchema, runInputs, triggerInput, onClose, onResult }) {
   const toast = useToast();
@@ -163,14 +164,24 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
           <div className="test-sec-title">
             {result.ok ? `✓ 结果（${result.at}${result.turns ? ` · ${result.turns} 轮` : ''}${result.model ? ` · ${result.model}` : ''}）` : `✕ 失败（${result.at}）`}
           </div>
-          <pre>{result.ok ? result.output : result.error}</pre>
+          {result.ok && node.data.nodeType === 'systemone' && result.structuredOutput?.type === 'json' ? (
+            <SystemOneVerdict
+              value={result.structuredOutput.value}
+              usage={result.usage}
+              durationMs={result.durationMs}
+              model={result.model}
+              thresholds={{ yes: node.data.yesThreshold, no: node.data.noThreshold }}
+            />
+          ) : (
+            <pre>{result.ok ? result.output : result.error}</pre>
+          )}
           {result.ok && result.input !== undefined && (
             <details className="test-structured">
               <summary>解析后的 JSON 入参</summary>
               <pre>{JSON.stringify(result.input, null, 2)}</pre>
             </details>
           )}
-          {result.ok && result.structuredOutput?.type === 'json' && (
+          {result.ok && result.structuredOutput?.type === 'json' && node.data.nodeType !== 'systemone' && (
             <details className="test-structured" open>
               <summary>结构化输出预览</summary>
               <pre>{JSON.stringify(result.structuredOutput.value, null, 2)}</pre>
@@ -260,7 +271,7 @@ function parseStructuredInput(value) {
 
 function stripRuntime(data) {
   const {
-    runStatus, runOutput, runError, runChars, runtimeStructuredOutput,
+    runStatus, runOutput, runError, runChars, runtimeStructuredOutput, runtimeUsage,
     livePreview, artifacts, sessionId, durationMs, runtimeModel, test, ...rest
   } = data;
   return rest;

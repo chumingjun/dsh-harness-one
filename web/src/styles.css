@@ -729,6 +729,16 @@ body {
 .s1-truncated { font-size: 11px; color: var(--warn-fg, #F59E0B); }
 .s1-raw summary { font-size: 11px; cursor: pointer; opacity: .7; }
 .s1-raw pre { max-height: 200px; overflow: auto; font-size: 11px; }
+.s1-status { display: flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 11px; opacity: .85; }
+.s1-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.s1-dot-ok { background: #10B981; }
+.s1-dot-off { background: #78716C; }
+.s1-dot-idle { background: #F59E0B; }
+.s1-rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.s1-option-row { display: grid; grid-template-columns: 110px 1fr auto auto auto; align-items: center; gap: 6px; }
+.s1-option-row input { min-width: 0; }
+.s1-option-name { font-family: var(--mono, monospace); }
+.s1-level-index { font-size: 11px; opacity: .6; text-align: center; }
 
 /* 连接桩 */
 .flow-handle {
