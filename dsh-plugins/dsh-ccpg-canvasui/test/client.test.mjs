@@ -63,6 +63,19 @@ assert.equal(
   true,
 );
 
+// 本地执行底座卡片（设计 §16/§18）：接线 / 安装命令 / pi 两步确认与无沙箱警示 / refresh 语义。
+// 交互行为由浏览器真跑验证（§18.5）；此处守住关键接线与安全文案不被静默改掉。
+assert.equal(bundle.includes("react.createElement(RuntimesCard)"), true);
+assert.equal(bundle.includes("npm i -g @openai/codex"), true);
+assert.equal(bundle.includes("npm i -g @anthropic-ai/claude-code"), true);
+assert.equal(bundle.includes("npm i -g @earendil-works/pi-coding-agent"), true);
+assert.equal(bundle.includes('"/wf1/api/runtime-settings"'), true);
+assert.equal(bundle.includes("enablePiRuntime: !userOn"), true);
+assert.equal(bundle.includes("再点一次确认开启"), true);
+assert.equal(bundle.includes("pi 无沙箱：开启后所有工作流（含定时/触发）"), true);
+assert.equal(bundle.includes("?refresh=1"), true);
+assert.equal(bundle.includes("部署级（YAML enablePiRuntime）已强制启用"), true);
+
 const injectedSlots = [];
 const registeredTabs = [];
 const sidebarService = {
