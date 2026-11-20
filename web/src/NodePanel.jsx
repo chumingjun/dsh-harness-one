@@ -149,7 +149,7 @@ function SystemOneStatus() {
   return (
     <div className="s1-status" title={state.reason || ''}>
       <span className={`s1-dot ${state.available ? 's1-dot-ok' : 's1-dot-off'}`} />
-      {state.available ? `本地模型就绪 · ${state.model}` : (state.reason || '未检测到本地模型')}
+      {state.available ? `本地模型就绪 · ${state.model}` : `${state.reason || '未检测到本地模型'} · 可在 dsh 设置 → Workflow One 配置与测试`}
     </div>
   );
 }
