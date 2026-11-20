@@ -219,7 +219,9 @@ export async function probeSystemOne({ url, model, fetchImpl = globalThis.fetch,
     const data = JSON.parse(text);
     // models 列表供设置卡片 datalist 候选；模型不在时也返回（候选仍可用）
     const models = (data.models || []).map((m) => String(m.name || m.model || '')).filter(Boolean);
-    const found = models.some((name) => name.split(':')[0] === model);
+    // 无 tag 配置匹配同名任意 tag；带 tag 配置精确匹配（datalist 候选是带 tag 名，
+    // 旧逻辑剥 tag 后与全名比较会把已装的 :4b 误报成未安装）
+    const found = models.some((name) => name === model || (!model.includes(':') && name.split(':')[0] === model));
     if (!found) return { available: false, reason: `模型 ${model} 未安装：ollama pull ${model}`, models };
     return { available: true, model, models, ms: Date.now() - t0 };
   } catch {

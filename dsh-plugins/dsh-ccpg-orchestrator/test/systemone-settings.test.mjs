@@ -109,6 +109,14 @@ await test('probe：模型不在 → pull 指路且 models 仍返回', async () 
   assert.deepEqual(r.models, ['other:7b']);
 });
 
+await test('probe：配置带 tag 模型 → 精确匹配命中（datalist 候选是带 tag 名）', async () => {
+  const impl = captureFetch(() => tagsRes(['pplx-decider-flash:latest', 'pplx-decider-flash:4b']));
+  const r = await probeSystemOne({ url: 'http://localhost:11434/v1/systemone', model: 'pplx-decider-flash:4b', fetchImpl: impl });
+  assert.equal(r.available, true);
+  const miss = await probeSystemOne({ url: 'http://localhost:11434/v1/systemone', model: 'pplx-decider-flash:8b', fetchImpl: impl });
+  assert.equal(miss.available, false); // 带 tag 配置不做跨 tag 模糊匹配
+});
+
 // ---- 两段式测试 ----
 await test('testSystemOne：全绿→ok 含 probeMs/judgmentMs/value，冒烟题固定', async () => {
   const impl = ollamaMock(['m:latest'], 0.99);
