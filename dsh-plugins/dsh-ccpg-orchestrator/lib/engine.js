@@ -8,6 +8,10 @@ import { getScriptOutputSchema, validateScriptOutput } from './script-schema.js'
 import { normalizeScriptTimeout, SCRIPT_LIMITS } from './script-runner.js';
 import { validateNotificationNodeData } from './notifications.js';
 import { validateSubworkflowNode, subworkflowTemplateFields } from './subworkflow.js';
+import {
+  SYSTEMONE_MODES, MAX_STATE_CHARS, buildSystemOneQuestion, callSystemOne,
+  shapeSystemOneAnswer, mapSystemOneUsage, lintSystemOneNode, systemOneEdgeTaken,
+} from './systemone.js';
 // 相对 v1 的升级：
 //   - 多运行实例并存（Map 而非单 this.s）
 //   - 并发上限（就绪节点排队，槽位释放依次启动）
@@ -92,6 +96,7 @@ export class Orchestrator {
     this.runChildWorkflow = null; // index.js 注入：同步启动并等待子工作流
     this.onCancel = null; // index.js 注入：父运行取消时传播到子运行
     this.resolveNodeTimeout = null; // index.js 注入：(node) => 该节点未配 timeoutSec 时的默认超时秒；空 = 内置 NODE_TIMEOUT_MS
+    this.systemone = null; // index.js 注入：{url, model} System One 部署级地址/模型（节点 data 不含地址）
   }
 
   emit(event, payload) {
@@ -365,6 +370,7 @@ export class Orchestrator {
         ...(extra?.turns != null ? { turns: extra.turns } : {}),
         ...(extra?.durationMs != null ? { durationMs: extra.durationMs } : {}),
         ...(extra?.model ? { model: extra.model } : {}),
+        ...(extra?.usage ? { usage: extra.usage } : {}),
         ...(extra?.artifacts ? { artifacts: extra.artifacts } : {}),
         ...(extra?.sessionId ? { sessionId: extra.sessionId } : {}),
       });
@@ -726,6 +732,49 @@ registerKind({
       issues.push({ level: 'warn', message: `HTTP 节点「${node.data?.label || node.id}」允许访问内网地址（SSRF 风险自担）` });
     }
     return issues;
+  },
+});
+
+// systemone：本地 System One 轻判断（是否/分类/评分）。薄接线：模板渲染 → state 截断 →
+// lib/systemone.js 请求/整形；分流走 edgeTaken（缺 verdict 全放行，continueOnFail 不断流）。
+registerKind({
+  type: 'systemone',
+  async execute({ node, engine, render, signal }) {
+    const cfg = engine.systemone;
+    if (!cfg?.url) throw new Error('System One 未配置（宿主初始化异常）');
+    const d = node.data || {};
+    const mode = SYSTEMONE_MODES.includes(d.mode) ? d.mode : 'noul';
+    const r = (tpl) => render(tpl || '', { implicitUpstream: false }).text;
+    let state = r(d.state || '{{$upstream}}');
+    const truncated = state.length > MAX_STATE_CHARS;
+    if (truncated) state = state.slice(0, MAX_STATE_CHARS);
+    const rendered = {
+      statement: r(d.statement),
+      instructions: r(d.instructions),
+      trueCriteria: r(d.trueCriteria),
+      falseCriteria: r(d.falseCriteria),
+      options: (Array.isArray(d.options) ? d.options : []).map((o) => ({ name: String(o?.name ?? '').trim(), description: r(o?.description) })),
+      levels: (Array.isArray(d.levels) ? d.levels : []).map((l) => r(l)),
+    };
+    const question = buildSystemOneQuestion(mode, rendered);
+    const raw = await callSystemOne({ url: cfg.url, model: cfg.model, state, question, signal });
+    const { data, output } = shapeSystemOneAnswer({ mode, answer: raw.answer, d, rendered });
+    return {
+      output: truncated ? `${output}\n（判断依据超过 ${MAX_STATE_CHARS} 字符，已截断）` : output,
+      data: truncated ? { ...data, stateTruncated: true } : data,
+      usage: mapSystemOneUsage(raw.usage, raw.cachedCount),
+      model: raw.model || cfg.model,
+    };
+  },
+  lint: lintSystemOneNode,
+  edgeTaken: systemOneEdgeTaken,
+  templateLintFields(node) {
+    const d = node.data || {};
+    return [
+      d.state, d.statement, d.instructions, d.trueCriteria, d.falseCriteria,
+      ...(Array.isArray(d.options) ? d.options.map((o) => o?.description) : []),
+      ...(Array.isArray(d.levels) ? d.levels : []),
+    ];
   },
 });
 

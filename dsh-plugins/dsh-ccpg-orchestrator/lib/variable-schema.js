@@ -18,6 +18,16 @@ const STATIC_DATA_SCHEMAS = {
   input: objectSchema({
     text: field('string', '输入节点配置文本'), triggerInput: field('string', '本次触发输入'), upstreamText: field('string', '直接上游拼接文本'),
   }),
+  systemone: objectSchema({
+    mode: field('string', '判断模式', { enum: ['noul', 'choice', 'score'] }),
+    verdict: field('string', '判决：noul 为 yes/no/unsettled，choice 为选项名'),
+    value: field('number', 'noul 概率（0–1）或 score 连续分'),
+    probabilities: objectSchema({}, 'choice 逐选项 / score 逐档概率分布'),
+    confidence: field('number', '模型置信度（choice/score）'),
+    unsettled: field('boolean', 'noul 是否待定（阈值区间内，含压线）'),
+    legend: objectSchema({}, 'score 档位索引→描述'),
+    stateTruncated: field('boolean', '判断依据是否超长被截断'),
+  }, 'System One 轻判断结果'),
 };
 
 const META_SCHEMA = objectSchema({

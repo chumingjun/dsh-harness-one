@@ -55,6 +55,11 @@ import { collectInstallReport, compareSemver, executePlan, planUpgrade, PACKAGE 
 import { NotificationChannelRegistry, WorkflowNotificationManager, summarizeNotificationText } from './notifications.js';
 import { listFeishuCreds, addFeishuCred, removeFeishuCred, setDefaultFeishuCred, getFeishuCredOrEnv } from './credentials.js';
 import { Orchestrator, lintGraph, getKind } from './engine.js';
+import { probeSystemOne, testSystemOne } from './systemone.js';
+import {
+  SystemOneSettingsError, SystemOneSettingsStore, normalizeSystemOneSettings,
+  resolveSystemOneSettings, systemoneUrlIssue,
+} from './systemone-settings.js';
 import { validateWorkflowInputs } from './workflow-inputs.js';
 import {
   MAX_CHILD_RUNS_PER_ROOT,
@@ -179,6 +184,10 @@ export const inject = ['agents', 'agentDefaultModel', 'sessions', 'tools', 'webS
 
 export const Config = z.object({
   staticDir: z.string().default(''),
+  // System One 本地轻判断模型：部署级地址/模型，绝不进节点 data——
+  // 画布、导入图、助手补丁都没有把请求指向任意地址的面（无 SSRF）。
+  systemoneUrl: z.string().default('http://localhost:11434/v1/systemone'),
+  systemoneModel: z.string().default('pplx-decider-flash'),
 });
 
 const workspaceContext = new AsyncLocalStorage();
@@ -1202,6 +1211,10 @@ export function apply(ctx, config) {
     });
     return { ...result, artifacts: safeWsList(ws) };
   };
+  // System One 配置注入：用户设置（非空字段）> 部署 Config；orch.systemone 永远是 effective。
+  // 正式运行与试运行（orchLike）每请求读它——PUT 原地更新即热生效，无需重启。
+  const systemoneSettingsStore = new SystemOneSettingsStore();
+  orch.systemone = resolveSystemOneSettings(systemoneSettingsStore.read(), config);
 
   // ---- webhook 完成回调（失败隔离：只记日志/内存元数据，绝不影响运行状态）----
   const pendingHookCallbacks = new Map(); // runId → hook
@@ -2179,6 +2192,7 @@ export function apply(ctx, config) {
       emit: broadcast, // runAgentNode 的流式事件直接进 SSE
       nodeRunner: (node, run, s, ctl) => runAgentNode(ctx, node, run, s, ctl), // agent kind 经此调用
       scriptRunner: orch.scriptRunner,
+      systemone: orch.systemone,
       renderTemplate,
       templateCtx(n) {
         return {
@@ -2207,10 +2221,13 @@ export function apply(ctx, config) {
       const kind = getKind(node.type);
       if (kind) {
         // 真实执行（agent 会流式推 agent-progress）
+        const testStartedAt = Date.now();
         const r = await kind.execute({
           node, s: orchLike, engine: orchLike,
           signal: testAbort.signal, emit: broadcast, runId,
-          render: (tpl) => renderTemplate(tpl || '', orchLike.templateCtx(node)),
+          // options 必须透传（与引擎 render 同形）：implicitUpstream:false 等语义丢不得，
+          // 否则字面量模板会被拼上上游文本（systemone state / http url 都受影响）。
+          render: (tpl, options = {}) => renderTemplate(tpl || '', { ...orchLike.templateCtx(node), ...options }),
         });
         const normalized = normalizeExecutionResult(r);
         const output = normalized.output;
@@ -2223,6 +2240,7 @@ export function apply(ctx, config) {
           ok: true, output, structuredOutput: normalized.structuredOutput,
           ...(typeof r === 'object' && r ? {
             turns: r.turns, model: r.model, artifacts: r.artifacts,
+            usage: r.usage, durationMs: Date.now() - testStartedAt,
             ...(r.input !== undefined ? { input: r.input } : {}),
             ...(r.workspaceStats !== undefined ? { workspaceStats: r.workspaceStats } : {}),
           } : {}),
@@ -2237,6 +2255,61 @@ export function apply(ctx, config) {
       clearTimeout(testTimer);
     }
   } });
+
+  // System One 就绪探针：只 GET Ollama /api/tags 查模型在不在，不 POST 判断（避免触发模型加载）。
+  // scoped:false——部署级状态，不涉工作区数据（与 agent-defaults 同语义）。
+  register({ kind: 'exact', path: '/wf1/api/systemone/status', async handler(req, res) {
+    if (req.method !== 'GET') return json(res, 405, { error: 'method' });
+    const probe = await probeSystemOne({ url: orch.systemone.url, model: orch.systemone.model });
+    json(res, 200, { ok: true, ...probe });
+  } }, { scoped: false });
+
+  // System One 用户级设置（与 agent-defaults 同语义：scoped:false，dsh 用户级存储）。
+  const systemoneSettingsPayload = () => ({
+    ok: true,
+    defaults: systemoneSettingsStore.read(),
+    effective: { ...orch.systemone },
+    deployment: { url: config.systemoneUrl, model: config.systemoneModel },
+  });
+  register({ kind: 'exact', path: '/wf1/api/systemone/settings', async handler(req, res) {
+    try {
+      if (req.method === 'GET') return json(res, 200, systemoneSettingsPayload());
+      if (req.method === 'PUT') {
+        const body = await readBody(req);
+        const settings = normalizeSystemOneSettings(body);
+        systemoneSettingsStore.write(settings);
+        orch.systemone = resolveSystemOneSettings(settings, config);
+        return json(res, 200, systemoneSettingsPayload());
+      }
+      return json(res, 405, { ok: false, error: '仅支持 GET/PUT', code: 'method-not-allowed' });
+    } catch (error) {
+      if (error instanceof SystemOneSettingsError) {
+        return json(res, error.status || 400, { ok: false, error: error.message, code: error.code });
+      }
+      if (error instanceof RequestBodyError) {
+        return json(res, Number(error.status) || 400, { ok: false, error: String(error.message || error), code: error.code || 'invalid-request' });
+      }
+      ctx.logger?.error?.(`systemone-settings 接口失败：${error.stack || error.message || error}`);
+      return json(res, 500, { ok: false, error: '设置读写失败', code: 'internal-error' });
+    }
+  } }, { scoped: false });
+
+  // 两段式测试连接：测草稿（空字段回退 effective），先验证再提交；业务失败恒 200 回 body。
+  register({ kind: 'exact', path: '/wf1/api/systemone/test', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method' });
+    let body;
+    try { body = await readBody(req); } catch (error) {
+      if (error instanceof RequestBodyError) {
+        return json(res, Number(error.status) || 400, { ok: false, error: String(error.message || error) });
+      }
+      throw error;
+    }
+    const url = typeof body?.url === 'string' ? body.url.trim() : '';
+    const model = typeof body?.model === 'string' ? body.model.trim() : '';
+    const issue = systemoneUrlIssue(url);
+    if (issue) return json(res, 400, { ok: false, error: issue });
+    json(res, 200, await testSystemOne({ url: url || orch.systemone.url, model: model || orch.systemone.model }));
+  } }, { scoped: false });
 
   // ---- 运行历史 ----
   // ---- 运行列表共享整形（/runs API 与 workflow_runs 助手工具同源，不双写）----

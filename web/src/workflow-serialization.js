@@ -19,6 +19,7 @@ const RUNTIME_NODE_DATA_FIELDS = new Set([
   'sessionId',
   'durationMs',
   'runtimeModel',
+  'runtimeUsage',
   'runStartedAt',
   'runTurns',
   'artifactsRunId',

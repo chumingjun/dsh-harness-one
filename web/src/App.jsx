@@ -29,6 +29,7 @@ const STATUS_CN = { running: '运行中', success: '成功', error: '失败', ca
 import { FlowNode } from './FlowNode.jsx';
 import { EdgeLine } from './EdgeLine.jsx';
 import { NODE_REGISTRY, kindOf } from './registry.jsx';
+import { edgeBranchLabel, systemOneBranchChips, nextSystemOneBranch } from './systemone-view.js';
 import { AddNodeMenu, CanvasAddMenu, MoreMenu } from './ToolbarMenus.jsx';
 import { NodePanel } from './NodePanel.jsx';
 import { WorkflowList } from './WorkflowList.jsx';
@@ -182,6 +183,7 @@ export default function App() {
           if (st.error) data.runError = st.error; else data.runError = null;
           if (st.durationMs != null) data.durationMs = st.durationMs;
           if (st.model) data.runtimeModel = st.model;
+          if (st.usage) data.runtimeUsage = st.usage;
           if (st.artifacts) { data.artifacts = st.artifacts; data.artifactsRunId = runId; }
           const out = (detail.outputs || {})[nodeId];
           if (out != null) data.runOutput = String(out).slice(0, 4000);
@@ -499,6 +501,7 @@ export default function App() {
           if (p.outputPreview != null) data.runOutput = p.outputPreview;
           if (p.hasTrace) data.hasTrace = true;
           if (p.model) data.runtimeModel = p.model;
+          if (p.usage) data.runtimeUsage = p.usage;
           if (p.artifacts) { data.artifacts = p.artifacts; data.artifactsRunId = p.runId || null; }
           if (p.sessionId) data.sessionId = p.sessionId;
           return { ...n, data };
@@ -722,6 +725,7 @@ export default function App() {
           if (st.error) data.runError = st.error;
           if (st.durationMs != null) data.durationMs = st.durationMs;
           if (st.model) data.runtimeModel = st.model;
+          if (st.usage) data.runtimeUsage = st.usage;
           if (st.artifacts) { data.artifacts = st.artifacts; data.artifactsRunId = p.runId || null; }
           if (st.sessionId) data.sessionId = st.sessionId;
           const out = (p.outputs || {})[nodeId];
@@ -1159,6 +1163,9 @@ export default function App() {
         runOutput: output.slice(0, 4000),
         runChars: output.length,
         runtimeStructuredOutput: d.structuredOutput,
+        runtimeUsage: d.usage,
+        runtimeModel: d.model,
+        durationMs: d.durationMs,
         test: true,
       },
     } : n)));
@@ -1195,6 +1202,10 @@ export default function App() {
       const hasTrue = existing.some((e) => (e.branch || e.data?.branch) === 'true');
       const hasFalse = existing.some((e) => (e.branch || e.data?.branch) === 'false');
       branch = !hasTrue ? 'true' : !hasFalse ? 'false' : 'true';
+    } else if (src.data.nodeType === 'systemone') {
+      // 三路拖线成型：yes → no → unsettled 按序补未用分支；choice 按选项序
+      const existing = edgesRef.current.filter((e) => e.source === sourceId).map((e) => e.branch || e.data?.branch).filter(Boolean);
+      branch = nextSystemOneBranch(src.data, existing);
     }
     setEdges((eds) => [...eds, toFlowEdge({ id: `e_${Date.now().toString(36)}`, source: sourceId, target: id, branch })]);
     setSelectedId(id);
@@ -1404,6 +1415,9 @@ export default function App() {
     if (srcNode?.data.nodeType === 'condition') {
       const existing = eds.filter((e) => e.source === params.source);
       branch = existing.length === 0 ? 'true' : existing.every((e) => (e.branch || e.data?.branch) === 'true') ? 'false' : 'true';
+    } else if (srcNode?.data.nodeType === 'systemone') {
+      const existing = eds.filter((e) => e.source === params.source).map((e) => e.branch || e.data?.branch).filter(Boolean);
+      branch = nextSystemOneBranch(srcNode.data, existing);
     }
     setEdges(() => {
       const added = addEdge({ ...params, id: `e_${Date.now().toString(36)}` }, eds);
@@ -1659,6 +1673,9 @@ export default function App() {
       statusOf.set(id, st);
     }
     const EDGE_COLOR = { success: palette.edge.success, running: palette.edge.running, error: palette.edge.error, skipped: palette.edge.skipped, canceled: palette.edge.canceled };
+    // 边标签按源节点类型映射（condition 是/否、systemone 判决集）；nodesRef 读取不进 deps——
+    // 标签映射只依赖 mode/选项名，节点编辑后随下一次 edges/status 变化自愈
+    const srcDataById = new Map(nodesRef.current.map((n) => [n.id, n.data]));
     return edges.map((e) => {
       const src = statusOf.get(e.source) || 'idle';
       const color = EDGE_COLOR[src] || palette.edge.idle;
@@ -1669,11 +1686,11 @@ export default function App() {
         type: 'insertable',
         // onInsert 直接注入边 data：styledEdges 随 [edges,statusKey] 重建，insertNodeOnEdge 引用稳定
         data: { onInsert: insertNodeOnEdge, branch },
-        label: branch ? (branch === 'true' ? '是' : '否') : undefined,
+        label: edgeBranchLabel(srcDataById.get(e.source), branch),
         labelStyle: { fill: palette.labelFill, fontSize: 11 },
         labelBgStyle: { fill: palette.labelBg },
         animated: src === 'running',
-        style: { stroke: color, strokeWidth: active ? 2.5 : 1.5, strokeDasharray: branch === 'false' ? '6 3' : undefined },
+        style: { stroke: color, strokeWidth: active ? 2.5 : 1.5, strokeDasharray: ['false', 'no', 'unsettled'].includes(branch) ? '6 3' : undefined },
         markerEnd: { type: MarkerType.ArrowClosed, color },
       };
     });
@@ -1917,6 +1934,19 @@ export default function App() {
                   ))}
                 </div>
               </section>
+            ) : selectedSourceNode?.data.nodeType === 'systemone' ? (
+              <section className="panel-sec">
+                <h4>分支 <span className="sec-hint">命中哪个判决走这条边</span></h4>
+                <div className="tool-chips">
+                  {systemOneBranchChips(selectedSourceNode.data).map(([v, label]) => (
+                    <button key={v} className={`chip ${(selectedEdge.branch || selectedEdge.data?.branch) === v ? 'chip-on' : ''}`}
+                      onClick={() => updateEdgeBranch(selectedEdge.id, v)}>{label}</button>
+                  ))}
+                  <button className={`chip ${!(selectedEdge.branch || selectedEdge.data?.branch) ? 'chip-on' : ''}`}
+                    onClick={() => updateEdgeBranch(selectedEdge.id, undefined)}>不限</button>
+                </div>
+                {selectedSourceNode.data.mode === 'score' && <p className="sec-hint">评分节点不分流：所有出边放行，下游从变量树取 data.value。</p>}
+              </section>
             ) : (
               <section className="panel-sec"><p className="sec-hint">普通数据流连线。点击画布空白处关闭。</p></section>
             )}
@@ -2019,6 +2049,8 @@ export default function App() {
               if (st.error) data.runError = st.error;
               if (st.durationMs != null) data.durationMs = st.durationMs;
               if (st.model) data.runtimeModel = st.model;
+              if (st.usage) data.runtimeUsage = st.usage;
+          if (st.usage) data.runtimeUsage = st.usage;
               if (st.artifacts) { data.artifacts = st.artifacts; data.artifactsRunId = runId; }
               const out = (detail.outputs || {})[nodeId];
               if (out != null) data.runOutput = String(out).slice(0, 4000);
