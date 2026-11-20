@@ -24,10 +24,16 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
   const [result, setResult] = useState(null); // { ok, output, error, at, meta }
   const [history, setHistory] = useState([]); // 最近几次试运行结果
   const [showDiff, setShowDiff] = useState(false);
+  const [confirmPermission, setConfirmPermission] = useState(false);
   const esRef = useRef(null);
   const requestAbortRef = useRef(null);
 
   const hasUpstream = upstreamNodes.length > 0;
+  // 高权限节点试运行须每次显式确认（设计 §18.1，服务端同样强制 confirmPermission）
+  const runtime = String(node.data?.runtime || 'dsh').trim();
+  const perm = node.data?.runtimePermission;
+  const elevated = (runtime === 'codex' && perm === 'full')
+    || (runtime === 'claude' && (perm === 'bash' || perm === 'full'));
 
   // 流式进度：监听 agent-progress（runId 匹配 test_ 前缀即试运行）
   useEffect(() => {
@@ -49,6 +55,11 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
   };
 
   const run = async () => {
+    if (elevated && !confirmPermission) {
+      toast('该节点为高权限，请先勾选下方的执行确认', 'error');
+      return;
+    }
+    setConfirmPermission(false);
     setRunning(true);
     setProgress(null);
     setResult(null);
@@ -81,6 +92,7 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
         body: JSON.stringify({
           node: { id: node.id, type: node.data.nodeType, data: stripRuntime(node.data) },
           upstreamOutputs, upstreamStructuredOutputs, upstreamLabels,
+          ...(elevated ? { confirmPermission: true } : {}),
           workflowId,
           workflowVariables,
           inputSchema,
@@ -119,6 +131,17 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
         </>
       )}
     >
+      {/* 高权限试运行确认（每次试跑各自确认，不存持久授权） */}
+      {elevated && (
+        <div className="panel-note note-warn" style={{ marginBottom: 10 }}>
+          <div>该节点为高权限（{runtime} · {perm === 'full' ? '全权限' : '放行 Bash'}）：将以 dsh 用户身份全自动执行，可写工作区外、联网、删改文件。</div>
+          <label className="check-row" style={{ marginTop: 6 }}>
+            <input type="checkbox" checked={confirmPermission} onChange={(e) => setConfirmPermission(e.target.checked)} />
+            <span>我已知晓风险，确认本次试运行</span>
+          </label>
+        </div>
+      )}
+
       {/* 上游假输入 */}
       {hasUpstream && (
         <div className="test-inputs">

@@ -63,6 +63,19 @@ assert.equal(
   true,
 );
 
+// 本地执行底座卡片（设计 §16/§18）：接线 / 安装命令 / pi 两步确认与无沙箱警示 / refresh 语义。
+// 交互行为由浏览器真跑验证（§18.5）；此处守住关键接线与安全文案不被静默改掉。
+assert.equal(bundle.includes("react.createElement(RuntimesCard)"), true);
+assert.equal(bundle.includes("npm i -g @openai/codex"), true);
+assert.equal(bundle.includes("npm i -g @anthropic-ai/claude-code"), true);
+assert.equal(bundle.includes("npm i -g @earendil-works/pi-coding-agent"), true);
+assert.equal(bundle.includes('"/wf1/api/runtime-settings"'), true);
+assert.equal(bundle.includes("enablePiRuntime: !userOn"), true);
+assert.equal(bundle.includes("再点一次确认开启"), true);
+assert.equal(bundle.includes("pi 无沙箱：开启后所有工作流（含定时/触发）"), true);
+assert.equal(bundle.includes("?refresh=1"), true);
+assert.equal(bundle.includes("部署级（YAML enablePiRuntime）已强制启用"), true);
+
 // System One 设置卡片：存在性 + 关键文案 + 挂载顺序（Agent 卡之后）。
 // mock react 不渲染组件，交互语义（清结果/尚未保存/保存重探）归真机 E2E 点验。
 assert.equal(bundle.includes("function SystemOneSettingsCard()"), true);
@@ -147,17 +160,28 @@ assert.deepEqual(registeredSources.map((s) => s.name + s.trigger), ["workflow-on
 
 const opened = [];
 client.__test.setBetterSidebarService({
-  openTab(input) {
-    opened.push(input);
+  openTab(seed, scope) {
+    opened.push({ seed, scope });
   },
 });
 assert.equal(client.__test.openWorkflowSidebar(), true);
-// better-sidebar 0.25 openTab 形状（#168）：sessionId 取 localStorage 当前会话（此处无 → null）；
+// better-sidebar 0.32 openTab 形状：(seed{type,target,reveal}, scope{sessionId})。
+// 旧 {kind,params,revealIfOpened} 会被宿主静默忽略；target 必须 'right'，
+// 否则画布落底部工作台只剩一条窄缝。此处 localStorage 无会话 → 省略 scope。
 // bundle 在 vm 上下文执行，嵌套对象原型不同，JSON 归一化后比较
 assert.deepEqual(
-  opened.map((input) => JSON.parse(JSON.stringify(input))),
-  [{ sessionId: null, kind: "ccpg:workflow", params: { title: "工作流" }, revealIfOpened: true }],
+  JSON.parse(JSON.stringify(opened)),
+  [{ seed: { type: "ccpg:workflow", title: "工作流", target: "right", reveal: true } }],
 );
+// 有当前会话时经第二参 scope 定向，不污染 seed
+opened.length = 0;
+storage.set("dsh.sessions.current", JSON.stringify({ sessionId: "sess_scope" }));
+assert.equal(client.__test.openWorkflowSidebar(), true);
+assert.deepEqual(JSON.parse(JSON.stringify(opened)), [{
+  seed: { type: "ccpg:workflow", title: "工作流", target: "right", reveal: true },
+  scope: { sessionId: "sess_scope" },
+}]);
+storage.delete("dsh.sessions.current");
 client.__test.setBetterSidebarService(null);
 assert.equal(client.__test.openWorkflowSidebar(), false);
 

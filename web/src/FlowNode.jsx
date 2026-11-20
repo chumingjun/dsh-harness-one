@@ -60,7 +60,13 @@ export function FlowNode({ data, selected, id, onAddChild }) {
     <div className={`flow-node ${status === 'running' ? 'flow-node-is-running' : ''}`} style={{ borderColor: meta.color, ...STATUS_STYLE[status] }}>
       <Handle type="target" position={Position.Left} className="flow-handle flow-handle-target" />
       <div className="flow-node-head" style={{ background: meta.color }}>
-        <span className="flow-node-title"><span dangerouslySetInnerHTML={{ __html: meta.icon }} />{data.label || meta.label}</span>
+        <span className="flow-node-title">
+          <span dangerouslySetInnerHTML={{ __html: meta.icon }} />
+          {meta.headExtra?.(data) && (
+            <span className="flow-node-runtime-icon" title={`执行底座：${data.runtime}`} dangerouslySetInnerHTML={{ __html: meta.headExtra(data) }} />
+          )}
+          {data.label || meta.label}
+        </span>
         <span className="flow-node-badge">
           {status === 'running' && elapsed && <span className="flow-node-elapsed" title="已执行时长">{elapsed}</span>}
           {status === 'running' && STATUS_TEXT.running}
@@ -71,7 +77,12 @@ export function FlowNode({ data, selected, id, onAddChild }) {
         <p className="flow-node-hint">{clip(meta.summary(data), 60)}</p>
         {badges.length > 0 && (
           <p className="flow-node-badges">
-            {badges.map((b, i) => <span key={i} className={`badge ${b.cls || ''}`} title={b.title}>{b.text}</span>)}
+            {badges.map((b, i) => (
+              <span key={i} className={`badge ${b.cls || ''}`} title={b.title}>
+                {b.icon && <span className="badge-icon" dangerouslySetInnerHTML={{ __html: b.icon }} />}
+                {b.text}
+              </span>
+            ))}
           </p>
         )}
         {status === 'running' && data.livePreview && (

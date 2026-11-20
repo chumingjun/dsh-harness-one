@@ -99,6 +99,7 @@ export default function App() {
   const [skills, setSkills] = useState([]);
   const [llmConfig, setLLMConfig] = useState({});
   const [runtime, setRuntime] = useState(null);
+  const [runtimes, setRuntimes] = useState([]); // 节点可选执行底座（含可用性与原因）
   const [lint, setLint] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [modal, setModal] = useState(null); // { type: 'confirm'|'prompt'|'rename', ... }
@@ -118,6 +119,7 @@ export default function App() {
   const [nodeDetail, setNodeDetail] = useState(null); // 日志行点击 → { runId, nodeId }
   // 断点续跑选择弹窗：待启动的图 + 可续跑的上次运行 + preview 返回的复用/重跑明细
   const [resumeChoice, setResumeChoice] = useState(null); // { lastRun, plan, startFresh, startResume }
+  const [permissionGrant, setPermissionGrant] = useState(null); // { workflowId, workflowName, elevated, resolve }
   const [feishuCreds, setFeishuCreds] = useState([]);
   const { screenToFlowPosition, fitView } = useReactFlow();
   const nodesRef = useRef(nodes);
@@ -311,6 +313,7 @@ export default function App() {
       if (skillsData) setSkills(skillsData.skills || []);
       if (llmData) setLLMConfig(llmData);
       if (runtimeData) setRuntime(runtimeData.runtime || { available: false });
+      if (Array.isArray(runtimeData?.runtimes)) setRuntimes(runtimeData.runtimes);
       if (credsData) setFeishuCreds(credsData.credentials || []);
       if (larkData) setLarkStatus(larkData.status || null);
       const workflowsData = await j('/workflows');
@@ -343,6 +346,19 @@ export default function App() {
       if (runsData?.runs?.length) setRunList(runsData.runs);
     })();
   }, [hostSession.id, setNodes, setEdges]);
+
+  // 设置页可能刚改过 pi 准入/装过 CLI：画布重获焦点时重取底座列表，
+  // 不必重载页面（评审 §18.2；服务端执行校验仍是最终兜底）。
+  useEffect(() => {
+    const onFocus = () => {
+      fetch(apiUrl('/runtime-config')).then((r) => r.json()).then((data) => {
+        if (data?.runtime) setRuntime(data.runtime);
+        if (Array.isArray(data?.runtimes)) setRuntimes(data.runtimes);
+      }).catch(() => {});
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
 
   // 切换器数据源：拉本工作区运行列表（不限当前画布——定时/webhook 运行也要出胶囊）。
   // SSE run-start/run-end 触发即时刷新；存在 live 运行时 5s 轮询兜底刷新进度。
@@ -1008,10 +1024,10 @@ export default function App() {
       return;
     }
     // 断点续跑：上次运行失败/取消且图未变时，让用户选重新跑还是接着跑
-    const startFresh = () => {
+    const startFresh = async () => {
       setProgress({});
       setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, runStatus: 'idle', runError: null, runOutput: undefined, runtimeStructuredOutput: undefined, livePreview: undefined, liveTurns: undefined, runTurns: undefined, runStartedAt: undefined } })));
-      return fetch(apiUrl('/run'), {
+      const postRun = () => fetch(apiUrl('/run'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1023,13 +1039,28 @@ export default function App() {
           workflowName: currentWf?.name,
           canvasId: canvasIdRef.current,
         }),
-      })
-        .then((res) => res.json().then((data) => ({ res, data })))
-        .then(({ res, data }) => {
-          if (!res.ok) { toast(`启动失败：${data.error}`, 'error'); return null; }
-          return data.runId;
-        })
-        .catch(() => { toast('启动失败：网络错误', 'error'); return null; });
+      }).then((res) => res.json().then((data) => ({ res, data })));
+      try {
+        let { res, data } = await postRun();
+        // 高权限未授权（设计 §18.1）：弹窗逐节点确认 → 服务端落 grant → 重试启动。
+        // 授权绑定当前 elevated 集合，图的高权限部分变化后服务端会再次拒绝。
+        if (!res.ok && data.code === 'RUNTIME_PERMISSION_UNGRANTED' && runWorkflowId) {
+          const confirmed = await new Promise((resolve) => {
+            setPermissionGrant({ workflowId: runWorkflowId, workflowName: currentWf?.name, elevated: data.elevated || [], resolve });
+          });
+          setPermissionGrant(null);
+          if (!confirmed) return null;
+          const grantRes = await fetch(apiUrl('/runtime-grant'), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ workflowId: runWorkflowId, grantRevision: data.grantRevision }),
+          });
+          const grantData = await grantRes.json();
+          if (!grantRes.ok) { toast(`授权失败：${grantData.error}`, 'error'); return null; }
+          ({ res, data } = await postRun());
+        }
+        if (!res.ok) { toast(`启动失败：${data.error}`, 'error'); return null; }
+        return data.runId;
+      } catch { toast('启动失败：网络错误', 'error'); return null; }
     };
     const startResume = async () => {
       const res = await fetch(apiUrl('/runs/resume'), {
@@ -1903,6 +1934,7 @@ export default function App() {
             feishuCreds={feishuCreds}
             notificationChannels={catalog.notificationChannels}
             llmConfig={llmConfig}
+            runtimes={runtimes}
             upstreamNodes={upstreamNodes}
             upstreamPreviews={upstreamPreviews}
             graph={toGraph()}
@@ -2021,6 +2053,31 @@ export default function App() {
           ) : (
             <p className="sec-hint">「从上次继续」复用已完成节点的输出，只补跑未完成部分。「重新运行」全部节点从头执行。</p>
           )}
+        </Modal>
+      )}
+      {permissionGrant && (
+        <Modal
+          title="高权限节点需要你的授权"
+          onClose={() => permissionGrant.resolve(false)}
+          footer={(
+            <>
+              <button className="btn" onClick={() => permissionGrant.resolve(false)}>取消</button>
+              <button className="btn btn-primary" onClick={() => permissionGrant.resolve(true)}>授权并运行</button>
+            </>
+          )}
+        >
+          <p className="panel-note note-warn" style={{ marginBottom: 8 }}>
+            工作流「{permissionGrant.workflowName || permissionGrant.workflowId}」含 {permissionGrant.elevated.length} 个高权限节点。
+            授权后这些节点将以 dsh 用户身份全自动执行（可写工作区外、联网、删改文件），
+            <strong>定时与触发运行同样生效</strong>。节点的高权限配置变化后需重新授权。
+          </p>
+          <ul className="test-artifact-list">
+            {permissionGrant.elevated.map((n) => (
+              <li key={n.nodeId}>
+                {n.label} — {n.runtime} · {n.permission === 'full' ? '全权限' : n.permission === 'bash' ? '放行 Bash' : n.permission}
+              </li>
+            ))}
+          </ul>
         </Modal>
       )}
       {historyOpen && <RunHistory onClose={() => setHistoryOpen(false)} workflowId={currentWf?.id || null}

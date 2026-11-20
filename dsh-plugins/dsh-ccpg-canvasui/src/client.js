@@ -278,15 +278,18 @@ window.__ModuleLoader__.load({
       if (!betterSidebarRef.svc) return false;
       // 不传 path：path 语义是「文件路径」，宿主会编码成 dsh-resource://file
       // 会话文件地址并 realpath 校验，传假路径直接 ENOENT；自定义 tab 类型
-      // 走 kind 打开即可（single:true 注册保证单实例聚焦）。
-      // better-sidebar 0.25 openTab 形状：{sessionId, kind, params, revealIfOpened}。
+      // 走 type 打开即可（single:true 注册保证单实例聚焦）。
+      // better-sidebar 0.32 openTab 形状：(seed{type,target,reveal}, scope{sessionId})。
+      // 旧的 {kind,params,revealIfOpened} 会被静默忽略（不抛错，按钮看着像死的）；
+      // target 必须显式 'right'，否则落插件自己的底部工作台，画布只剩一条窄缝。
       try {
+        var sessionId = currentDshSessionId(null);
         betterSidebarRef.svc.openTab({
-          sessionId: currentDshSessionId(null),
-          kind: WORKFLOW_TAB_TYPE,
-          params: { title: "工作流" },
-          revealIfOpened: true,
-        });
+          type: WORKFLOW_TAB_TYPE,
+          title: "工作流",
+          target: "right",
+          reveal: true,
+        }, sessionId ? { sessionId: sessionId } : undefined);
       } catch (e) {
         return false; // 无会话/服务态异常：回退新窗口打开
       }
@@ -1720,6 +1723,137 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // ---- 本地执行底座引导卡片（设计 §16/§18）----
+    // 探测状态 + 安装引导 + pi 一键开关（两步确认 + 无沙箱警示）。
+    // 图标与 web 注册表同款形状，但 bundle 禁跨插件值导入 → 内联自包含。
+    var RUNTIME_CARD_META = {
+      codex: { name: "Codex", icon: '<path d="M5 7l5 5-5 5"/><path d="M13 17h6"/>', install: "npm i -g @openai/codex", posture: "默认沙箱：写限工作区、禁网；节点级可选「全权限」（运行前需授权）" },
+      claude: { name: "Claude Code", icon: '<path d="M12 4v16M4 12h16M6.3 6.3l11.4 11.4M17.7 6.3L6.3 17.7"/>', install: "npm i -g @anthropic-ai/claude-code", posture: "默认受限：文件编辑、禁 Bash；节点级可选「放行 Bash / 全权限」（运行前需授权）" },
+      pi: { name: "Pi", icon: '<path d="M5 7h14"/><path d="M9 7v10"/><path d="M15 7v7a3 3 0 003 3"/>', install: "npm i -g @earendil-works/pi-coding-agent", posture: "无沙箱 · 恒全权限：以你的用户权限执行命令；模型须填 provider/model" },
+    };
+    var runtimeCardBtn = {
+      cursor: "pointer", borderRadius: "8px", padding: "3px 10px", fontSize: "12px",
+      border: "1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,.3))",
+      background: "transparent", color: "var(--dsw-alias-label-primary)",
+    };
+
+    function RuntimesCard() {
+      var a = s2(null), info = a[0], setInfo = a[1];
+      var b = s2(false), loading = b[0], setLoading = b[1];
+      var c = s2(false), confirming = c[0], setConfirming = c[1];
+      var e = s2(""), copied = e[0], setCopied = e[1];
+      var f = s2(false), toggleBusy = f[0], setToggleBusy = f[1];
+      var g = s2(""), error = g[0], setError = g[1];
+
+      var load = react.useCallback(function (refresh) {
+        setLoading(true);
+        systemGet("/wf1/api/runtime-config" + (refresh ? "?refresh=1" : ""))
+          .then(function (d) { if (d && d.runtimes) { setInfo(d); setError(""); } })
+          .catch(function () { setError("读不到执行底座状态"); })
+          .finally(function () { setLoading(false); });
+      }, []);
+      react.useEffect(function () { load(false); }, [load]);
+
+      var copy = function (id, text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function () {
+            setCopied(id);
+            setTimeout(function () { setCopied(""); }, 2000);
+          }).catch(function () {});
+        }
+      };
+
+      // pi 开关绑用户级设置；开启两步确认（复用升级按钮防手滑模式），关闭直接生效
+      var togglePi = function () {
+        var userOn = !!(info && info.piUserEnabled);
+        if (!userOn && !confirming) {
+          setConfirming(true);
+          setTimeout(function () { setConfirming(false); }, 6000);
+          return;
+        }
+        setConfirming(false);
+        setToggleBusy(true);
+        fetch("/wf1/api/runtime-settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enablePiRuntime: !userOn }),
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          if (d && d.ok) load(false);
+          else setError((d && d.error) || "开关保存失败");
+        }).catch(function () { setError("连接不上本地服务"); })
+          .finally(function () { setToggleBusy(false); });
+      };
+
+      var runtimes = (info && info.runtimes) || [];
+      var external = runtimes.filter(function (r) { return r.id !== "dsh"; });
+      var piDeploy = !!(info && info.piDeploymentEnabled);
+      var piEffective = !!(info && info.enablePiRuntime);
+
+      return react.createElement(
+        "div",
+        { style: { display: "flex", flexDirection: "column", gap: "8px", padding: "12px 14px", borderRadius: "12px", border: "1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,.25))" } },
+        react.createElement(
+          "div",
+          { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" } },
+          react.createElement(
+            "div",
+            null,
+            react.createElement("div", { style: { fontSize: "14px", fontWeight: 600 } }, "本地执行底座"),
+            react.createElement("div", { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } }, "把 agent 节点委派给本机 CLI；在节点面板「执行底座」选用"),
+          ),
+          react.createElement("button", { style: runtimeCardBtn, onClick: function () { load(true); }, disabled: loading }, loading ? "探测中…" : "刷新"),
+        ),
+        error ? react.createElement("div", { style: { fontSize: "12px", color: "#f87171" } }, error) : null,
+        external.map(function (r) {
+          var meta = RUNTIME_CARD_META[r.id] || { name: r.id, icon: "", install: "", posture: "" };
+          var status = r.available
+            ? { text: "已就绪" + (r.version ? " · " + r.version : ""), bg: "rgba(52,211,153,.18)" }
+            : r.reason === "disabled-by-host"
+              ? { text: "未启用", bg: "rgba(251,191,36,.18)" }
+              : !r.installed
+                ? { text: "未安装", bg: "rgba(148,163,184,.2)" }
+                : { text: "不可用", bg: "rgba(248,113,113,.15)" };
+          return react.createElement(
+            "div",
+            { key: r.id, style: { display: "flex", flexDirection: "column", gap: "4px", padding: "8px 0", borderTop: "1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,.15))" } },
+            react.createElement(
+              "div",
+              { style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" } },
+              react.createElement("span", {
+                style: { width: "18px", height: "18px", display: "inline-flex", color: "var(--dsw-alias-label-primary)" },
+                dangerouslySetInnerHTML: { __html: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + meta.icon + "</svg>" },
+              }),
+              react.createElement("span", { style: { fontSize: "13px", fontWeight: 600 } }, meta.name),
+              react.createElement("span", { style: { fontSize: "11px", padding: "2px 8px", borderRadius: "999px", background: status.bg } }, status.text),
+              r.id === "pi"
+                ? react.createElement("button", {
+                    style: Object.assign({}, runtimeCardBtn, piEffective ? { background: "rgba(52,211,153,.25)" } : {}),
+                    onClick: togglePi, disabled: toggleBusy,
+                  }, toggleBusy ? "保存中…" : confirming ? "再点一次确认开启" : piEffective ? "已开启 · 点击关闭" : "启用")
+                : null,
+            ),
+            react.createElement("div", { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } }, meta.posture),
+            r.id === "pi" && piDeploy
+              ? react.createElement("div", { style: { fontSize: "12px", color: "rgba(251,191,36,.9)" } }, "部署级（YAML enablePiRuntime）已强制启用；页面开关只改用户设置，有效值仍为开。")
+              : null,
+            r.id === "pi" && confirming
+              ? react.createElement("div", { style: { fontSize: "12px", color: "#f87171" } }, "pi 无沙箱：开启后所有工作流（含定时/触发）的 pi 节点都将以你的用户权限执行命令与读写文件。仅在你信任这些工作流时开启。")
+              : null,
+            !r.installed
+              ? react.createElement(
+                  "div",
+                  { style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" } },
+                  react.createElement("code", { style: { fontSize: "12px", padding: "2px 6px", borderRadius: "6px", background: "var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,.12))" } }, meta.install),
+                  react.createElement("button", { style: runtimeCardBtn, onClick: function () { copy(r.id, meta.install); } }, copied === r.id ? "已复制" : "复制"),
+                  react.createElement("span", { style: { fontSize: "11px", color: "var(--dsw-alias-text-secondary)" } }, "装完点刷新"),
+                )
+              : null,
+          );
+        }),
+        react.createElement("div", { style: { fontSize: "12px", color: "var(--dsw-alias-text-secondary)" } }, "首次使用：先在终端完成各 CLI 自己的登录/鉴权（codex login / claude 登录 / pi 配置 provider）。"),
+      );
+    }
+
     // ================= System One 轻判断模型（服务地址 / 模型） =================
     // 测试连接测的是草稿（先验证再提交）；保存不强制测试门禁（Ollama 可能暂时没起，
     // 预配置不该被拦——与 Agent 卡一致）。结果只属于被测的那组值：改字段即清空。
@@ -2021,6 +2155,8 @@ window.__ModuleLoader__.load({
         // —— Agent 节点默认值：渠道 / 模型 / 思考级别 ——
         react.createElement(AgentDefaultsCard),
 
+        // —— 本地执行底座：CLI 探测状态 / 安装引导 / pi 准入开关 ——
+        react.createElement(RuntimesCard),
         // —— System One 轻判断模型：服务地址 / 模型 / 测试连接 ——
         react.createElement(SystemOneSettingsCard),
 

@@ -16,6 +16,19 @@ const ICONS = {
   subworkflow: I('<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5M16 13l2 2-2 2"/>'),
 };
 
+// 外部 runtime 图标：节点头部与徽标共用，便于在画布上一眼区分执行底座。
+// 终端符 = codex，星芒 = claude code，π = pi。禁 emoji（跨平台渲染不一致）。
+export const RUNTIME_ICONS = {
+  codex: I('<path d="M5 7l5 5-5 5"/><path d="M13 17h6"/>'),
+  claude: I('<path d="M12 4v16M4 12h16M6.3 6.3l11.4 11.4M17.7 6.3L6.3 17.7"/>'),
+  pi: I('<path d="M5 7h14"/><path d="M9 7v10"/><path d="M15 7v7a3 3 0 003 3"/>'),
+};
+
+export const runtimeIconOf = (data) => {
+  const id = String(data?.runtime || 'dsh');
+  return id !== 'dsh' ? (RUNTIME_ICONS[id] || null) : null;
+};
+
 export const NODE_REGISTRY = [
   {
     type: 'input',
@@ -26,14 +39,24 @@ export const NODE_REGISTRY = [
   {
     type: 'agent',
     icon: ICONS.agent, label: '智能体', color: 'var(--type-agent)',
+    // 外部 runtime 在节点头部类型图标旁再挂一个底座图标，画布扫一眼即可区分
+    headExtra: (d) => runtimeIconOf(d),
     preset: () => ({ label: '新智能体', prompt: '', tools: [] }),
     summary: (d) => `提示词：${d.prompt || '(默认助手)'}`,
-    badges: (d) => [
-      d.model && { text: shortModel(d.model), cls: 'badge-model', title: `模型：${d.model}` },
-      d.maxRounds && { text: `↻${d.maxRounds}` },
-      (d.tools || []).length > 0 && { text: '工具' },
-      (d.skills || []).length > 0 && { text: `技能 ${d.skills.length}` },
-    ].filter(Boolean),
+    badges: (d) => {
+      // 外部 runtime 用自带工具/技能，且轮数无法在线限制——这些 dsh 专属徽标不显示，
+      // 免得画布上看着像生效了。模型徽标改读配置字段 externalModel（不是瞬态 runtimeModel）。
+      const external = Boolean(d.runtime && d.runtime !== 'dsh');
+      const model = external ? d.externalModel : d.model;
+      return [
+        external && { icon: RUNTIME_ICONS[d.runtime], text: d.runtime, cls: 'badge-runtime', title: `执行底座：${d.runtime}` },
+        model && { text: shortModel(model), cls: 'badge-model', title: `模型：${model}` },
+        !external && d.maxRounds && { text: `↻${d.maxRounds}` },
+        !external && (d.tools || []).length > 0 && { text: '工具' },
+        !external && (d.skills || []).length > 0 && { text: `技能 ${d.skills.length}` },
+        external && d.requireArtifact && { text: '需产物', title: '本次必须产出新的非空文件' },
+      ].filter(Boolean);
+    },
   },
   {
     type: 'condition',
