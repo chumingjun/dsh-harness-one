@@ -211,17 +211,49 @@ export async function probeSystemOne({ url, model, fetchImpl = globalThis.fetch,
   }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const t0 = Date.now();
   try {
     const res = await fetchImpl(tagsUrl, { method: 'GET', signal: ctrl.signal });
     const text = await res.text();
     if (!res.ok) return { available: false, reason: `Ollama 返回 HTTP ${res.status}（GET ${tagsUrl}）` };
     const data = JSON.parse(text);
-    const found = (data.models || []).some((m) => String(m.name || m.model || '').split(':')[0] === model);
-    if (!found) return { available: false, reason: `模型 ${model} 未安装：ollama pull ${model}` };
-    return { available: true, model };
+    // models 列表供设置卡片 datalist 候选；模型不在时也返回（候选仍可用）
+    const models = (data.models || []).map((m) => String(m.name || m.model || '')).filter(Boolean);
+    const found = models.some((name) => name.split(':')[0] === model);
+    if (!found) return { available: false, reason: `模型 ${model} 未安装：ollama pull ${model}`, models };
+    return { available: true, model, models, ms: Date.now() - t0 };
   } catch {
     return { available: false, reason: `无法连接 Ollama（${tagsUrl}）：先运行 ollama serve` };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+// 两段式测试连接：探针（tags，不触发模型加载）+ 冒烟判断（固定题）。
+// 测可用性不测正确性：拿到合法概率即通过，不要求判决值。冷启动在测试时发生，
+// 用户第一次跑工作流就是热的。
+const SMOKE_STATE = '天空是蓝色的，草是绿色的。';
+const SMOKE_STATEMENT = '天空是蓝色的';
+export async function testSystemOne({ url, model, fetchImpl = globalThis.fetch, timeoutMs = 30000 }) {
+  const probe = await probeSystemOne({ url, model, fetchImpl });
+  const models = probe.models || [];
+  if (!probe.available) return { ok: false, stage: 'probe', reason: probe.reason, models };
+  const t0 = Date.now();
+  try {
+    const raw = await callSystemOne({
+      url, model, state: SMOKE_STATE,
+      question: { type: 'noul', instructions: SMOKE_STATEMENT },
+      signal: AbortSignal.timeout(timeoutMs), fetchImpl,
+    });
+    const value = raw.answer?.noul;
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return { ok: false, stage: 'judgment', reason: '模型响应缺少判决概率', models };
+    }
+    return { ok: true, probeMs: probe.ms, judgmentMs: Date.now() - t0, value, models };
+  } catch (e) {
+    const reason = e?.name === 'AbortError'
+      ? `判断调用超时（${Math.round(timeoutMs / 1000)} 秒）；首次加载模型较慢，可重试`
+      : String(e?.message || e);
+    return { ok: false, stage: 'judgment', reason, models };
   }
 }

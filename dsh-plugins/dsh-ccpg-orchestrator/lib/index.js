@@ -55,7 +55,11 @@ import { collectInstallReport, compareSemver, executePlan, planUpgrade, PACKAGE 
 import { NotificationChannelRegistry, WorkflowNotificationManager, summarizeNotificationText } from './notifications.js';
 import { listFeishuCreds, addFeishuCred, removeFeishuCred, setDefaultFeishuCred, getFeishuCredOrEnv } from './credentials.js';
 import { Orchestrator, lintGraph, getKind } from './engine.js';
-import { probeSystemOne } from './systemone.js';
+import { probeSystemOne, testSystemOne } from './systemone.js';
+import {
+  SystemOneSettingsError, SystemOneSettingsStore, normalizeSystemOneSettings,
+  resolveSystemOneSettings, systemoneUrlIssue,
+} from './systemone-settings.js';
 import { validateWorkflowInputs } from './workflow-inputs.js';
 import {
   MAX_CHILD_RUNS_PER_ROOT,
@@ -1207,8 +1211,10 @@ export function apply(ctx, config) {
     });
     return { ...result, artifacts: safeWsList(ws) };
   };
-  // System One 部署级配置注入：正式运行与试运行（orchLike）共用同一引用，单点覆盖。
-  orch.systemone = { url: config.systemoneUrl, model: config.systemoneModel };
+  // System One 配置注入：用户设置（非空字段）> 部署 Config；orch.systemone 永远是 effective。
+  // 正式运行与试运行（orchLike）每请求读它——PUT 原地更新即热生效，无需重启。
+  const systemoneSettingsStore = new SystemOneSettingsStore();
+  orch.systemone = resolveSystemOneSettings(systemoneSettingsStore.read(), config);
 
   // ---- webhook 完成回调（失败隔离：只记日志/内存元数据，绝不影响运行状态）----
   const pendingHookCallbacks = new Map(); // runId → hook
@@ -2254,8 +2260,55 @@ export function apply(ctx, config) {
   // scoped:false——部署级状态，不涉工作区数据（与 agent-defaults 同语义）。
   register({ kind: 'exact', path: '/wf1/api/systemone/status', async handler(req, res) {
     if (req.method !== 'GET') return json(res, 405, { error: 'method' });
-    const probe = await probeSystemOne({ url: config.systemoneUrl, model: config.systemoneModel });
+    const probe = await probeSystemOne({ url: orch.systemone.url, model: orch.systemone.model });
     json(res, 200, { ok: true, ...probe });
+  } }, { scoped: false });
+
+  // System One 用户级设置（与 agent-defaults 同语义：scoped:false，dsh 用户级存储）。
+  const systemoneSettingsPayload = () => ({
+    ok: true,
+    defaults: systemoneSettingsStore.read(),
+    effective: { ...orch.systemone },
+    deployment: { url: config.systemoneUrl, model: config.systemoneModel },
+  });
+  register({ kind: 'exact', path: '/wf1/api/systemone/settings', async handler(req, res) {
+    try {
+      if (req.method === 'GET') return json(res, 200, systemoneSettingsPayload());
+      if (req.method === 'PUT') {
+        const body = await readBody(req);
+        const settings = normalizeSystemOneSettings(body);
+        systemoneSettingsStore.write(settings);
+        orch.systemone = resolveSystemOneSettings(settings, config);
+        return json(res, 200, systemoneSettingsPayload());
+      }
+      return json(res, 405, { ok: false, error: '仅支持 GET/PUT', code: 'method-not-allowed' });
+    } catch (error) {
+      if (error instanceof SystemOneSettingsError) {
+        return json(res, error.status || 400, { ok: false, error: error.message, code: error.code });
+      }
+      if (error instanceof RequestBodyError) {
+        return json(res, Number(error.status) || 400, { ok: false, error: String(error.message || error), code: error.code || 'invalid-request' });
+      }
+      ctx.logger?.error?.(`systemone-settings 接口失败：${error.stack || error.message || error}`);
+      return json(res, 500, { ok: false, error: '设置读写失败', code: 'internal-error' });
+    }
+  } }, { scoped: false });
+
+  // 两段式测试连接：测草稿（空字段回退 effective），先验证再提交；业务失败恒 200 回 body。
+  register({ kind: 'exact', path: '/wf1/api/systemone/test', async handler(req, res) {
+    if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method' });
+    let body;
+    try { body = await readBody(req); } catch (error) {
+      if (error instanceof RequestBodyError) {
+        return json(res, Number(error.status) || 400, { ok: false, error: String(error.message || error) });
+      }
+      throw error;
+    }
+    const url = typeof body?.url === 'string' ? body.url.trim() : '';
+    const model = typeof body?.model === 'string' ? body.model.trim() : '';
+    const issue = systemoneUrlIssue(url);
+    if (issue) return json(res, 400, { ok: false, error: issue });
+    json(res, 200, await testSystemOne({ url: url || orch.systemone.url, model: model || orch.systemone.model }));
   } }, { scoped: false });
 
   // ---- 运行历史 ----
