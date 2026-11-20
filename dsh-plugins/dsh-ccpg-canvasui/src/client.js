@@ -1365,6 +1365,10 @@ window.__ModuleLoader__.load({
     // agent 节点默认值（渠道/模型/思考级别）：与 llm-config 目录配套使用
     var AGENT_DEFAULTS_API = "/wf1/api/agent-defaults";
     var LLM_CONFIG_API = "/wf1/api/llm-config";
+    // System One 轻判断模型：用户级设置（空=跟随部署默认）+ 两段式测试连接
+    var SYSTEMONE_SETTINGS_API = "/wf1/api/systemone/settings";
+    var SYSTEMONE_TEST_API = "/wf1/api/systemone/test";
+    var SYSTEMONE_STATUS_API = "/wf1/api/systemone/status";
 
     function systemGet(api) {
       return fetch(api, { headers: { accept: "application/json" } }).then(function (r) {
@@ -1716,6 +1720,215 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // ================= System One 轻判断模型（服务地址 / 模型） =================
+    // 测试连接测的是草稿（先验证再提交）；保存不强制测试门禁（Ollama 可能暂时没起，
+    // 预配置不该被拦——与 Agent 卡一致）。结果只属于被测的那组值：改字段即清空。
+
+    function SystemOneSettingsCard() {
+      var a = s2(null), saved = a[0], setSaved = a[1]; // GET 回包 {defaults, effective, deployment}
+      var b = s2({ url: "", model: "" }), draft = b[0], setDraft = b[1];
+      var c = s2(null), status = c[0], setStatus = c[1]; // 探针 {available, model, reason, models}
+      var d = s2(false), testing = d[0], setTesting = d[1];
+      var e = s2(null), testResult = e[0], setTestResult = e[1];
+      var f = s2(false), saving = f[0], setSaving = f[1];
+      var g = s2(null), message = g[0], setMessage = g[1]; // {kind:'ok'|'err', text}
+
+      var loadStatus = react.useCallback(function () {
+        systemGet(SYSTEMONE_STATUS_API).then(function (r) {
+          if (r && r.ok) setStatus(r);
+        }).catch(function () {});
+      }, []);
+
+      react.useEffect(function () {
+        var dead = false;
+        systemGet(SYSTEMONE_SETTINGS_API).then(function (r) {
+          if (dead || !r || !r.ok) return;
+          setSaved(r);
+          setDraft({ url: r.defaults.url || "", model: r.defaults.model || "" });
+        }).catch(function () {});
+        loadStatus();
+        return function () { dead = true; };
+      }, [loadStatus]);
+
+      var dirty = !!saved && (draft.url !== saved.defaults.url || draft.model !== saved.defaults.model);
+
+      var patchDraft = function (patch) {
+        setMessage(null);
+        setTestResult(null);
+        setDraft(function (prev) { return Object.assign({}, prev, patch); });
+      };
+
+      // 与服务端 systemoneUrlIssue 同语义：空=跟随部署；必须可解析且 http(s)
+      var urlIssue = function (url) {
+        if (!url) return null;
+        try {
+          var u = new URL(url);
+          if (u.protocol !== "http:" && u.protocol !== "https:") return "服务地址必须是 http(s)://";
+          return null;
+        } catch (err) { return "服务地址不是合法 URL"; }
+      };
+
+      var doTest = function () {
+        var issue = urlIssue(draft.url.trim());
+        if (issue) { setMessage({ kind: "err", text: issue }); return; }
+        setTesting(true);
+        setTestResult(null);
+        setMessage(null);
+        systemPost(SYSTEMONE_TEST_API, { url: draft.url.trim(), model: draft.model.trim() })
+          .then(function (r) {
+            if (r && (r.ok || r.stage)) {
+              setTestResult(r);
+              if (r.ok) setStatus({ available: true, model: draft.model.trim() || (saved && saved.effective.model) });
+            } else {
+              setMessage({ kind: "err", text: (r && r.error) || "测试失败" });
+            }
+          })
+          .catch(function () { setMessage({ kind: "err", text: "连接不上本地服务，请确认 dsh 正在运行" }); })
+          .finally(function () { setTesting(false); });
+      };
+
+      var save = function () {
+        var issue = urlIssue(draft.url.trim());
+        if (issue) { setMessage({ kind: "err", text: issue }); return; }
+        setSaving(true);
+        setMessage(null);
+        fetch(SYSTEMONE_SETTINGS_API, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: draft.url.trim(), model: draft.model.trim() }),
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            if (r && r.ok) {
+              setSaved(r);
+              setDraft({ url: r.defaults.url || "", model: r.defaults.model || "" });
+              setMessage({ kind: "ok", text: "已保存，新发起的运行立即生效" });
+              loadStatus();
+            } else {
+              setMessage({ kind: "err", text: (r && r.error) || "保存失败" });
+            }
+          })
+          .catch(function () { setMessage({ kind: "err", text: "连接不上本地服务，请确认 dsh 正在运行" }); })
+          .finally(function () { setSaving(false); });
+      };
+
+      // datalist 候选：探针/测试返回的已装模型并集（防手滑打错模型名；仍允许自由输入）
+      var modelCandidates = ((status && status.models) || [])
+        .concat((testResult && testResult.models) || [])
+        .filter(function (m, i, arr) { return arr.indexOf(m) === i; });
+
+      var secondary = "var(--dsw-alias-text-secondary)";
+      var green = "rgba(52,211,153,1)";
+      var red = "rgba(248,113,113,1)";
+      var dotColor = !status ? "#F59E0B" : status.available ? "#10B981" : "#78716C";
+      var statusText = !status
+        ? "探测本地模型…"
+        : status.available
+          ? "就绪 · " + (status.model || "")
+          : (status.reason || "未检测到本地模型");
+
+      var resultText = null;
+      var resultColor = secondary;
+      if (testing) {
+        resultText = "正在测试…首次调用需加载模型（约 5–10 秒）";
+      } else if (testResult && testResult.ok) {
+        resultText = "✓ 连接 " + testResult.probeMs + "ms · ✓ 模型在位 · ✓ 判断可用 " + testResult.judgmentMs + "ms" + (dirty ? " · 尚未保存" : "");
+        resultColor = green;
+      } else if (testResult && testResult.stage === "probe") {
+        resultText = "✗ " + testResult.reason;
+        resultColor = red;
+      } else if (testResult && testResult.stage === "judgment") {
+        resultText = "✗ 判断调用失败：" + testResult.reason;
+        resultColor = red;
+      }
+
+      var btnStyle = {
+        cursor: "pointer", borderRadius: "8px", padding: "5px 14px", fontSize: "13px",
+        border: "1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,.3))",
+        background: "transparent", color: "var(--dsw-alias-label-primary)",
+      };
+
+      return react.createElement(
+        "div",
+        {
+          style: {
+            border: "1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,.25))",
+            borderRadius: "10px", padding: "12px 14px", display: "flex",
+            flexDirection: "column", gap: "10px",
+          },
+        },
+        react.createElement("div", { style: { fontSize: "13px", fontWeight: 600 } }, "System One 轻判断模型"),
+        react.createElement(
+          "div",
+          { style: { fontSize: "12px", color: secondary, lineHeight: "18px" } },
+          "「轻判断」节点用的本地判断模型。留空 = 跟随部署默认；测试连接验证当前填写的值，保存后新发起的运行立即生效。",
+        ),
+        !saved
+          ? react.createElement("div", { style: { fontSize: "12px", color: secondary } }, "正在读取设置…")
+          : [
+              defaultsField("服务地址", react.createElement("input", {
+                key: "url", type: "text", style: selectStyle,
+                value: draft.url, placeholder: saved.deployment.url,
+                disabled: saving || testing,
+                onChange: function (ev) { patchDraft({ url: ev.target.value }); },
+              })),
+              defaultsField("模型", react.createElement("div", { key: "model" },
+                react.createElement("input", {
+                  type: "text", style: selectStyle,
+                  value: draft.model, placeholder: saved.deployment.model,
+                  list: "s1-model-candidates",
+                  disabled: saving || testing,
+                  onChange: function (ev) { patchDraft({ model: ev.target.value }); },
+                }),
+                react.createElement("datalist", { id: "s1-model-candidates" },
+                  modelCandidates.map(function (m) { return react.createElement("option", { key: m, value: m }); }),
+                ),
+              )),
+            ],
+        react.createElement(
+          "div",
+          { style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", minHeight: "22px" } },
+          react.createElement(
+            "span",
+            { style: { display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", color: secondary } },
+            react.createElement("span", { style: { width: "8px", height: "8px", borderRadius: "50%", background: dotColor, flexShrink: 0 } }),
+            statusText,
+          ),
+          react.createElement(
+            "button",
+            {
+              style: Object.assign({}, btnStyle, { opacity: testing || saving || !saved ? 0.45 : 1, cursor: testing || saving || !saved ? "default" : "pointer" }),
+              disabled: testing || saving || !saved,
+              onClick: doTest,
+            },
+            testing ? "测试中…" : "测试连接",
+          ),
+          react.createElement(
+            "button",
+            {
+              style: Object.assign({}, btnStyle, {
+                background: "var(--dsw-alias-accent-bg, #4F46E5)", color: "#fff", borderColor: "transparent",
+                opacity: dirty && !saving ? 1 : 0.45, cursor: dirty && !saving ? "pointer" : "default",
+              }),
+              disabled: !dirty || saving,
+              onClick: save,
+            },
+            saving ? "保存中…" : "保存",
+          ),
+        ),
+        resultText
+          ? react.createElement("div", { key: "result", style: { fontSize: "12px", color: resultColor, lineHeight: "18px" } }, resultText)
+          : null,
+        message
+          ? react.createElement(
+              "div",
+              { key: "msg", style: { fontSize: "12px", color: message.kind === "ok" ? green : red, lineHeight: "18px" } },
+              (message.kind === "ok" ? "✓ " : "✗ ") + message.text,
+            )
+          : null,
+      );
+    }
+
     function WorkflowOneSection() {
       var a = s2(null), info = a[0], setInfo = a[1];
       var b = s2(null), check = b[0], setCheck = b[1];
@@ -1807,6 +2020,9 @@ window.__ModuleLoader__.load({
 
         // —— Agent 节点默认值：渠道 / 模型 / 思考级别 ——
         react.createElement(AgentDefaultsCard),
+
+        // —— System One 轻判断模型：服务地址 / 模型 / 测试连接 ——
+        react.createElement(SystemOneSettingsCard),
 
         // —— 第一眼：当前版本大字 + 状态一句话 ——
         react.createElement(

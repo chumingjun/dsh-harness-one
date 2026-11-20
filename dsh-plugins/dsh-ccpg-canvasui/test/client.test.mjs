@@ -63,6 +63,21 @@ assert.equal(
   true,
 );
 
+// System One 设置卡片：存在性 + 关键文案 + 挂载顺序（Agent 卡之后）。
+// mock react 不渲染组件，交互语义（清结果/尚未保存/保存重探）归真机 E2E 点验。
+assert.equal(bundle.includes("function SystemOneSettingsCard()"), true);
+assert.equal(bundle.includes('var SYSTEMONE_SETTINGS_API = "/wf1/api/systemone/settings";'), true);
+assert.equal(bundle.includes('var SYSTEMONE_TEST_API = "/wf1/api/systemone/test";'), true);
+assert.equal(bundle.includes('var SYSTEMONE_STATUS_API = "/wf1/api/systemone/status";'), true);
+assert.equal(bundle.includes("尚未保存"), true);
+assert.equal(bundle.includes("正在测试…首次调用需加载模型（约 5–10 秒）"), true);
+assert.equal(bundle.includes("已保存，新发起的运行立即生效"), true);
+assert.equal(bundle.includes("setTestResult(null);"), true); // patchDraft 清测试结果
+assert.ok(
+  bundle.indexOf("react.createElement(AgentDefaultsCard)") <
+    bundle.indexOf("react.createElement(SystemOneSettingsCard)"),
+);
+
 const injectedSlots = [];
 const registeredTabs = [];
 const sidebarService = {
