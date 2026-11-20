@@ -535,8 +535,8 @@ full 模式下模型以 dsh 用户权限全自动执行：可写工作区外、�
 机制（运行期单点授权，覆盖所有路径，不做导入/助手侧钩子——单一 choke point 更简且无绕过）：
 - **elevated 定义**：codex full；claude bash|full。pi 另由实例级门禁管（开关警示文案明确：开启后所有工作流含定时/触发的 pi 节点均可全权限执行）。
 - **grant 存储**：工作区级 `.workflow-one/state/runtime-grants.json`（与 triggers.json 同目录先例）：`{version:1, grants:{[workflowId]:{elevated:{[nodeId]:{runtime,permission}}, grantedAt}}}`。
-- **服务端校验**：startWorkflowRun（手动/助手/trigger/schedule/catch-up 共享入口）计算当前 elevated 集合；非空且无**逐节点精确匹配**（nodeId→{runtime,permission}）的 grant → 拒 RUNTIME_PERMISSION_UNGRANTED（附节点清单），运行不启动。elevated 集合任何变化（新增/升级/换底座/删节点）→ 失配 → 重新确认；非 elevated 编辑不失效。
-- **授权 API**：POST /wf1/api/runtime-grant {workflowId}（scoped，带 §18.5 Origin 防护）→ 服务端从已保存图重算 elevated 集合并落 grant（不信前端传值）。
+- **服务端校验**：所有正式运行在 `startRun` 计算当前 elevated 集合，覆盖草稿、助手、定时、补跑、子工作流、webhook、回放和续跑。找不到逐节点精确匹配（nodeId→{runtime,permission}）的 grant 时，返回 `RUNTIME_PERMISSION_UNGRANTED`（附节点清单与 `grantRevision`）。高权限集合变更后需重新确认，其他编辑仍可沿用授权。
+- **授权 API**：`POST /wf1/api/runtime-grant` 接受 `{workflowId, grantRevision}`（scoped，带 §18.5 Origin 防护）。服务端从已保存图重算 elevated 集合及摘要，摘要一致才写入授权，否则返回 409。
 - **画布 UX**：startRunFlow 收到 RUNTIME_PERMISSION_UNGRANTED → 确认弹窗逐节点列 label/runtime/模式/风险 → 「授权并运行」= POST grant + 重试启动；取消则中止。助手/自动路径无 UI → 拒绝并提示「到画布运行一次以授权」。
 - **node/test**：elevated 节点须 body.confirmPermission===true（试运行弹窗展示警示+勾选）；无持久 grant，每次试跑各自确认。
 - 助手契约补充：elevated 节点运行前需用户授权，助手不得代为 grant。

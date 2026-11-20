@@ -29,7 +29,7 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
 
   const hasUpstream = upstreamNodes.length > 0;
   // 高权限节点试运行须每次显式确认（设计 §18.1，服务端同样强制 confirmPermission）
-  const runtime = String(node.data?.runtime || 'dsh');
+  const runtime = String(node.data?.runtime || 'dsh').trim();
   const perm = node.data?.runtimePermission;
   const elevated = (runtime === 'codex' && perm === 'full')
     || (runtime === 'claude' && (perm === 'bash' || perm === 'full'));
@@ -58,6 +58,7 @@ export function TestRunModal({ node, upstreamNodes, upstreamPreviews, workflowId
       toast('该节点为高权限，请先勾选下方的执行确认', 'error');
       return;
     }
+    setConfirmPermission(false);
     setRunning(true);
     setProgress(null);
     setResult(null);

@@ -49,11 +49,13 @@ test('TestRunModal：elevated 试运行须勾选确认，请求体带 confirmPer
   assert.ok(modal.includes('confirmPermission'));
   assert.ok(modal.includes('我已知晓风险，确认本次试运行'));
   assert.match(modal, /elevated && !confirmPermission/);
+  assert.match(modal, /setConfirmPermission\(false\);\s*setRunning\(true\)/);
 });
 
 test('App：未授权启动走授权弹窗→grant→重试；focus 重取底座列表', () => {
   assert.ok(app.includes('RUNTIME_PERMISSION_UNGRANTED'));
   assert.ok(app.includes("apiUrl('/runtime-grant')"));
+  assert.ok(app.includes('grantRevision: data.grantRevision'));
   assert.ok(app.includes('授权并运行'));
   assert.ok(app.includes("window.addEventListener('focus', onFocus)"));
 });

@@ -26,7 +26,7 @@ import { SessionId } from '@deepseek-ai/dsh-session';
 import { installModelSelection } from '@deepseek-ai/dsh-agent';
 import { buildChildEnv, probeRuntime, runExternalCli, assertInsideRealRoot, clearProbeCache, resolveRuntimePermission, LIMITS as RUNTIME_LIMITS } from './runtime-cli.js';
 import { RuntimeSettingsStore } from './runtime-settings.js';
-import { elevatedSetOf, grantMatches, elevatedListOf } from './runtime-grants.js';
+import { elevatedSetOf, grantMatches, elevatedListOf, runtimeGrantRevision } from './runtime-grants.js';
 import { codexRuntime } from './runtime-codex.js';
 import { claudeRuntime } from './runtime-claude.js';
 import { piRuntime } from './runtime-pi.js';
@@ -202,6 +202,18 @@ export const Config = z.object({
 
 const workspaceContext = new AsyncLocalStorage();
 
+class RuntimeGrantError extends Error {
+  constructor(message, graph, elevated) {
+    super(message);
+    this.code = 'RUNTIME_PERMISSION_UNGRANTED';
+    this.retryable = false;
+    this.response = {
+      ok: false, error: message, code: this.code,
+      elevated: elevatedListOf(graph, elevated), grantRevision: runtimeGrantRevision(elevated),
+    };
+  }
+}
+
 export function apply(ctx, config) {
   ctxRef = ctx; // replayTrace 需要在路由 handler 里拿到 ctx.sessionPersistence
   ensureWorkflowSkill({ log: (msg) => ctx.logger?.info?.(`[orchestrator] ${msg}`) }); // / 菜单入口：workflow-one 技能种子
@@ -342,18 +354,14 @@ export function apply(ctx, config) {
     } catch { return {}; }
   };
   // 启动前校验：elevated 集合非空且无精确匹配 grant → 拒绝（覆盖所有运行入口）。
-  const checkRuntimeGrant = (graph, workflowId) => {
+  const requireRuntimeGrant = (graph, workflowId) => {
     const elevated = elevatedSetOf(graph);
-    if (!Object.keys(elevated).length) return { ok: true };
-    const list = elevatedListOf(graph, elevated);
-    if (!workflowId) {
-      return { ok: false, code: 'RUNTIME_PERMISSION_UNGRANTED', elevated: list, error: '含高权限节点的工作流须先保存，再到画布运行一次以授权' };
-    }
-    if (grantMatches(readGrants()[workflowId], elevated)) return { ok: true };
-    return {
-      ok: false, code: 'RUNTIME_PERMISSION_UNGRANTED', elevated: list,
-      error: `工作流含 ${list.length} 个高权限节点（全权限/放行 Bash），需运行者显式授权后才能执行（含定时与触发）`,
-    };
+    const count = Object.keys(elevated).length;
+    if (!count || (workflowId && grantMatches(readGrants()[workflowId], elevated))) return;
+    const message = workflowId
+      ? `工作流含 ${count} 个高权限节点（全权限/放行 Bash），需运行者显式授权后才能执行（含定时与触发）`
+      : '含高权限节点的工作流须先保存，再到画布运行一次以授权';
+    throw new RuntimeGrantError(message, graph, elevated);
   };
   const currentPaths = () => currentStore().paths;
   const currentDatabase = () => currentStore().database;
@@ -432,6 +440,7 @@ export function apply(ctx, config) {
   let ensureTriggers = () => {};
   const internalRouteError = (res, error) => {
     if (res.writableEnded) return undefined;
+    if (error instanceof RuntimeGrantError) return json(res, 403, error.response);
     if (error instanceof RequestBodyError) {
       return json(res, Number(error.status) || 500, {
         error: String(error.message || error),
@@ -510,9 +519,6 @@ export function apply(ctx, config) {
       const err = lint.issues.find((i) => i.level === 'error')?.message || '图存在错误';
       return { ok: false, error: `图有错误不能运行：${err}`, code: 'workflow-invalid-graph', issues: lint.issues };
     }
-    // 高权限授权：助手/trigger/schedule/catch-up/列表运行全经此入口，未授权一律拒
-    const grant = checkRuntimeGrant(wf.graph, wf.id);
-    if (!grant.ok) return { ok: false, error: grant.error, code: grant.code, elevated: grant.elevated };
     let globals; try { globals = globalContext(); } catch (error) { return { ok: false, error: String(error.message || error), code: error.code }; }
     let inputs;
     try {
@@ -521,15 +527,20 @@ export function apply(ctx, config) {
     } catch (error) {
       return { ok: false, error: String(error.message || error), code: error.code || 'workflow-input-invalid' };
     }
-    const { runId } = startRun(wf.graph, {
-      triggerInput, workflowName: wf.name, workflowId: wf.id,
-      canvasId,
-      globalVariables: globals.globalVariables,
-      workflowVariables: variableDefinitionsToValues(wf.variables),
-      runInputs: inputs,
-      source,
-    });
-    return { ok: true, runId };
+    try {
+      const { runId } = startRun(wf.graph, {
+        triggerInput, workflowName: wf.name, workflowId: wf.id,
+        canvasId,
+        globalVariables: globals.globalVariables,
+        workflowVariables: variableDefinitionsToValues(wf.variables),
+        runInputs: inputs,
+        source,
+      });
+      return { ok: true, runId };
+    } catch (error) {
+      if (error instanceof RuntimeGrantError) return error.response;
+      throw error;
+    }
   };
 
   const canvasTools = {
@@ -624,13 +635,18 @@ export function apply(ctx, config) {
         const lint = lintWorkflowGraph(cv.graph);
         if (!lint.ok) return `图有错误不能运行：\n${lint.issues.filter((x) => x.level === 'error').map((x) => x.message).join('\n')}`;
         const globals = (() => { try { return globalContext(); } catch { return { globalVariables: {} }; } })();
-        const { runId } = startRun(cv.graph, {
-          triggerInput: args.triggerInput ?? '', workflowName: null, workflowId: null,
-          canvasId: exec.canvasId,
-          globalVariables: globals.globalVariables,
-          source: 'assistant',
-        });
-        return JSON.stringify({ started: true, runId });
+        try {
+          const { runId } = startRun(cv.graph, {
+            triggerInput: args.triggerInput ?? '', workflowName: null, workflowId: null,
+            canvasId: exec.canvasId,
+            globalVariables: globals.globalVariables,
+            source: 'assistant',
+          });
+          return JSON.stringify({ started: true, runId });
+        } catch (error) {
+          if (error instanceof RuntimeGrantError) return error.message;
+          throw error;
+        }
       },
     },
     canvas_run_status: {
@@ -1305,6 +1321,7 @@ export function apply(ctx, config) {
     suppressNotifications = false,
   } = {}) => {
     const store = currentStore();
+    requireRuntimeGrant(graph, workflowId);
     const runId = providedRunId || `run_${Date.now().toString(36)}_${++runIdSeq}`;
     if (!suppressNotifications) notifications.startRun({ runId, graph, workflowName, workflowId });
     pendingRunIds.add(runId);
@@ -1403,7 +1420,6 @@ export function apply(ctx, config) {
     const childInputs = validateSubworkflowInputs(mapped.runInputs, childWorkflow.inputSchema);
     if (signal?.aborted || run.canceled) throw new SubworkflowError('父运行已取消', 'SUBWORKFLOW_CANCELED');
 
-    childCountByRoot.set(rootRunId, childCount);
     const child = startRun(childWorkflow.graph, {
       triggerInput: mapped.triggerInput,
       workflowName: childWorkflow.name,
@@ -1420,6 +1436,7 @@ export function apply(ctx, config) {
       suppressNotifications: true,
     });
     if (!child?.runId || !child?.promise) throw new SubworkflowError('子工作流启动失败', 'SUBWORKFLOW_START_FAILED');
+    childCountByRoot.set(rootRunId, childCount);
     const children = childRunOf(run.runId);
     const cancelChild = (reason) => { try { orch.cancel(child.runId, reason); } catch { /* 子运行可能已结束 */ } };
     children.set(child.runId, cancelChild);
@@ -2404,9 +2421,6 @@ export function apply(ctx, config) {
     if (!graph || !Array.isArray(graph.nodes)) return json(res, 400, { error: '缺少 graph' });
     const lint = lintWorkflowGraph(graph);
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });
-    // 画布手动运行直走 startRun（不经 startWorkflowRun），授权校验须在此同样把守
-    const grant = checkRuntimeGrant(graph, workflowId);
-    if (!grant.ok) return json(res, 403, { ok: false, error: grant.error, code: grant.code, elevated: grant.elevated });
     const { runId } = startRun(graph, {
       triggerInput: body.triggerInput ?? '', workflowName, workflowId,
       canvasId: body.canvasId || null,
@@ -2817,8 +2831,6 @@ export function apply(ctx, config) {
     const workflowVariables = variableDefinitionsToValues(persistedWorkflow?.variables || []);
     const lint = lintWorkflowGraph(graph);
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });
-    const grant = checkRuntimeGrant(graph, prev.workflowId || null);
-    if (!grant.ok) return json(res, 403, { ok: false, error: grant.error, code: grant.code, elevated: grant.elevated });
     const { runId } = startRun(graph, {
       triggerInput, workflowName: prev.workflowName || null, workflowId: prev.workflowId || null,
       globalVariables: globals.globalVariables, workflowVariables, runInputs,
@@ -2873,9 +2885,6 @@ export function apply(ctx, config) {
     const workflowVariables = variableDefinitionsToValues(persistedWorkflow?.variables || []);
     const lint = lintWorkflowGraph(graph);
     if (!lint.ok) return json(res, 400, { error: lint.issues.find((i) => i.level === 'error').message, lint });
-    // 续跑可能带改过的图：高权限集合同样须当前授权
-    const grant = checkRuntimeGrant(graph, prev.workflowId || null);
-    if (!grant.ok) return json(res, 403, { ok: false, error: grant.error, code: grant.code, elevated: grant.elevated });
     const reusableSet = new Set(reusable);
     const resumeSeed = {
       runId: prev.runId,
@@ -3978,13 +3987,18 @@ export function apply(ctx, config) {
     try { body = await readBody(req); } catch (error) { return routeError(res, error); }
     const workflowId = String(body?.workflowId || '').trim();
     if (!workflowId) return json(res, 400, { error: '缺少 workflowId', code: 'workflow-required' });
+    if (typeof body.grantRevision !== 'string' || !/^[a-f0-9]{64}$/.test(body.grantRevision)) {
+      return json(res, 400, { error: '缺少有效的权限确认版本', code: 'runtime-grant-revision-required' });
+    }
     const wf = readWf(workflowId);
     if (!wf) return json(res, 404, { error: '工作流不存在', code: 'workflow-not-found' });
     const elevated = elevatedSetOf(wf.graph);
+    if (body.grantRevision !== runtimeGrantRevision(elevated)) {
+      return json(res, 409, { error: '高权限节点已变化，请重新运行并确认', code: 'runtime-grant-stale' });
+    }
     if (!Object.keys(elevated).length) return json(res, 400, { error: '该工作流没有高权限节点，无需授权', code: 'no-elevated-nodes' });
     try {
-      const grants = readGrants();
-      grants[workflowId] = { elevated, grantedAt: new Date().toISOString() };
+      const grants = { ...readGrants(), [workflowId]: { elevated, grantedAt: new Date().toISOString() } };
       atomicJson(grantsFile(), { version: 1, grants });
       return json(res, 200, { ok: true, workflowId, elevated: elevatedListOf(wf.graph, elevated) });
     } catch (error) {

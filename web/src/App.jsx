@@ -1048,7 +1048,7 @@ export default function App() {
           if (!confirmed) return null;
           const grantRes = await fetch(apiUrl('/runtime-grant'), {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ workflowId: runWorkflowId }),
+            body: JSON.stringify({ workflowId: runWorkflowId, grantRevision: data.grantRevision }),
           });
           const grantData = await grantRes.json();
           if (!grantRes.ok) { toast(`授权失败：${grantData.error}`, 'error'); return null; }

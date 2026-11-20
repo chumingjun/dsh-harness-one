@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { apply } from '../lib/index.js';
+import { graphFingerprint } from '../lib/run-scope.js';
 
 function responseCapture() {
   const listeners = new Map();
@@ -317,6 +318,60 @@ await test('未绑定画布的会话：canvas_* 拒绝、workflow_* 可用', asy
   const wfDef = registeredTools.get('workflow_list');
   const listOut = await wfDef.execute({}, { agent: { session: { id: 'session-1' } } });
   assert.ok(maybeJson(listOut), 'workflow_list 不依赖画布绑定');
+});
+
+const privilegedGraph = {
+  nodes: [{ id: 'external', type: 'agent', data: { label: '本地执行', prompt: '输出 OK', runtime: 'claude', runtimePermission: 'bash' } }],
+  edges: [],
+};
+
+await test('权限变更使旧确认失效，定时和子工作流均拒绝启动未授权节点', async () => {
+  const workflowId = 'wf_privileged';
+  const save = (graph) => call('POST', '/wf1/api/workflows', { id: workflowId, name: '授权测试', graph });
+  assert.equal((await save(privilegedGraph)).status, 200);
+  const scheduled = await call('POST', '/wf1/api/schedule', { workflowId, cron: '0 9 * * *' });
+  assert.equal(scheduled.status, 200);
+  const run = (graph) => call('POST', '/wf1/api/run', { workflowId, graphFingerprint: graphFingerprint(graph) });
+  const ungranted = await run(privilegedGraph);
+  assert.equal(ungranted.status, 403);
+  assert.equal(ungranted.body.elevated[0].permission, 'bash');
+  const grant = (grantRevision) => call('POST', '/wf1/api/runtime-grant', { workflowId, grantRevision });
+  assert.equal((await grant()).status, 400);
+  assert.equal((await grant(ungranted.body.grantRevision)).status, 200);
+
+  const upgraded = structuredClone(privilegedGraph);
+  upgraded.nodes[0].data.runtimePermission = 'full';
+  assert.equal((await save(upgraded)).status, 200);
+  assert.equal((await grant(ungranted.body.grantRevision)).status, 409);
+  const scheduledRun = await call('POST', '/wf1/api/schedule/run', { key: scheduled.body.key });
+  assert.equal(scheduledRun.status, 403);
+  assert.equal(scheduledRun.body.code, 'RUNTIME_PERMISSION_UNGRANTED');
+  const schedules = await call('GET', '/wf1/api/schedule');
+  assert.equal(schedules.body.schedules.find((row) => row.key === scheduled.body.key).fireCount, 0);
+
+  const parent = await call('POST', '/wf1/api/run', {
+    graph: { nodes: [{ id: 'child', type: 'subworkflow', data: { workflowId } }], edges: [] },
+  });
+  assert.equal(parent.status, 200);
+  let detail;
+  for (let i = 0; i < 50; i += 1) {
+    detail = (await call('GET', `/wf1/api/runs/detail?id=${parent.body.runId}`)).body;
+    if (detail.finishedAt) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(detail.nodeStates.child.errorCode, 'RUNTIME_PERMISSION_UNGRANTED');
+  assert.deepEqual(detail.children, []);
+  const current = await run(upgraded);
+  assert.equal(current.status, 403);
+  assert.equal(current.body.elevated[0].permission, 'full');
+  assert.equal((await grant(current.body.grantRevision)).status, 200);
+});
+
+await test('助手不能启动带高权限节点的未保存草稿', async () => {
+  const canvasId = 'cv_privileged_draft';
+  const bound = await call('POST', '/wf1/api/assistant/bind', { sessionId: 'session-1', canvasId, graph: privilegedGraph });
+  assert.equal(bound.status, 200);
+  assert.match(await runTool('canvas_run_workflow', {}, canvasId), /须先保存/);
 });
 
 await test('workflow_run_cancel：all:true 可批量取消（无 live 时不误报）', async () => {
