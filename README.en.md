@@ -18,6 +18,10 @@
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/chumingjun/dsh-harness-one" alt="MIT license"></a>
 </p>
 
+> **Notice**: v0.13.0 removes the standalone Express deployment under `server/` (default port 4020).
+> This change affects **only** the standalone Express deployment; the dsh plugin path (`/wf1/api/*`) and the standalone canvas are fully unaffected.
+> If you use the standalone deployment, follow [Install](#install) to set up the dsh plugin, then [migrate your existing data](#migrate-existing-data).
+
 ## Turn real agents into observable workflows
 
 `Workflow One` is a visual AI workflow orchestrator for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness). Describe what you need in natural language and the AI will plan and create a DAG of real dsh agents, scripts, conditions, and HTTP nodes. Fine-tune it on the canvas when needed, then start the flow, inspect every node's input, output, and artifacts, and resume interrupted runs without starting over.
@@ -74,6 +78,14 @@ sh dsh-plugins/start.sh dev
 ```
 
 Models and API keys are managed entirely by the dsh profile. This repository and its plugins never hard-code or store keys. See [`dsh-plugins/README.md`](dsh-plugins/README.md) for complete setup, configuration, and development details.
+
+For frontend development, start the `dev` profile above. After editing `web/`, run `sh dsh-plugins/build-web.sh` again, then open and refresh Workflow from the target session in the dsh UI at `http://127.0.0.1:4021/`. The host supplies the session ID needed to load workspace data.
+
+### Migrate existing data
+
+1. Stop the old Express process and back up `data/` from the root of the old checkout. The dsh plugin does not import that directory by default.
+2. Install and start the plugin. Open Workflow from a session in the target workspace. Use Import in the workflow list to import each backed-up `data/workflows/*.json` file. Import `data/graph.json` if you want to keep the unnamed draft as well.
+3. Re-upload and select any attachments used by the workflows from the old `data/attachments/` directory. Rebind credentials as needed. Verify the imported workflows and attachments and run a test before deleting the old backup.
 
 ## How it works
 

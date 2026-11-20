@@ -18,6 +18,10 @@
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/chumingjun/dsh-harness-one" alt="MIT 许可证"></a>
 </p>
 
+> **公告**：自 v0.13.0 起，本仓库移除 `server/` 独立 Express 部署形态（默认端口 4020）。
+> 此变更只影响独立 Express 部署；dsh 插件路径（`/wf1/api/*`）与独立画布完全不受影响。
+> 仍在使用 4020 独立部署的用户请按[安装](#安装)配置 dsh 插件，并按下文[迁移旧数据](#迁移旧数据)。
+
 ## 一句话，把真实 Agent 变成可观察的工作流
 
 `Workflow One` 是运行在 [DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) 中的可视化 AI 工作流编排器。只需用自然语言描述需求，AI 会自动规划并创建由真实 dsh agent、脚本、条件分支和 HTTP 节点组成的 DAG；也可在画布中微调后启动流程，实时查看每个节点的输入、输出和产物，失败后从中断处恢复。
@@ -77,7 +81,15 @@ sh dsh-plugins/start.sh dev
 
 模型和密钥完全由 dsh profile 管理。插件使用 dsh 默认模型栈，也支持在 `cordis.patch.yml` 或 `~/.dsh/settings.yaml` 中追加 provider；本仓库和插件不写死、不存储任何 key。完整安装、配置与开发循环见 [`dsh-plugins/README.md`](dsh-plugins/README.md)。
 
+前端开发时，启动上述 `dev` profile。修改 `web/` 后重跑 `sh dsh-plugins/build-web.sh`，再到 `http://127.0.0.1:4021/` 的目标会话中打开「工作流」并刷新画布。宿主会注入工作区所需的会话 ID。
+
 > 普通 dsh 的 lark-cli 由 `setup.sh` 或插件自举安装；Desktop 仅在用户明确点击后通过受管 pnpm 安装。
+
+### 迁移旧数据
+
+1. 停止旧 Express 进程，备份旧仓库根目录下的 `data/`。dsh 插件默认不会导入这个目录。
+2. 安装并启动 dsh 插件，在目标工作区的会话中打开「工作流」。通过工作流列表的导入功能逐个选择备份中 `data/workflows/*.json`。如需保留未命名草稿，也可导入 `data/graph.json`。
+3. 在新工作流里重新上传和选择旧 `data/attachments/` 中用到的附件，重新绑定凭据。确认工作流和附件齐全，并试跑一次后再清理旧备份。
 
 ## 界面与使用方式
 
