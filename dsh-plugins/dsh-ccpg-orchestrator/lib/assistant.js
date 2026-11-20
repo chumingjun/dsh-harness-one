@@ -8,7 +8,7 @@
 import { lintGraph } from './engine.js';
 
 // ---- 已知节点类型（与前端 registry.jsx、引擎 nodeKinds 对齐）----
-const NODE_TYPES = ['input', 'agent', 'script', 'condition', 'http', 'output', 'notify', 'note', 'subworkflow'];
+const NODE_TYPES = ['input', 'agent', 'script', 'condition', 'http', 'systemone', 'output', 'notify', 'note', 'subworkflow'];
 
 // 服务端生成的节点 id：与前端 n_<type>_<ts><rand> 风格区分，AI 引用稳定
 export function newCanvasNodeId() {
@@ -40,6 +40,11 @@ const PATCH_HINTS = [
   [/没有上游连线/, '从上游节点 connect 一条边到该输出节点'],
   [/多个名为「.+?」的节点/, '用 renameNode 消除同名，避免模板引用歧义'],
   [/单批 ops 上限/, '一批最多 60 个操作，拆成多批'],
+  [/选项数必须 2–255/, 'choice 模式至少 2 个选项：data.options 数组 [{name,description}]'],
+  [/档位数必须 2–10/, 'score 模式至少 2 档：data.levels 为低→高的字符串数组'],
+  [/未配置判断语句/, 'noul 模式必须填 data.statement，让「真」=你期望的结果'],
+  [/阈值倒置/, 'noThreshold 必须小于 yesThreshold（默认 0.3/0.7）'],
+  [/不是合法判决/, '边 branch 必须是判决原值：noul 用 yes/no/unsettled，choice 用当前选项名'],
 ];
 export const withPatchHint = (line) => {
   for (const [re, hint] of PATCH_HINTS) {
@@ -219,11 +224,12 @@ export function canvasAssistantPersona() {
   return `你是「物业工作流画布」的 AI 助手，帮助用户创建/修改/测试节点式工作流。用户在聊天里提需求，你调用画布工具落图。
 
 ## 画布模型
-- 图 = 节点 + 有向边。节点类型 9 种：
+- 图 = 节点 + 有向边。节点类型 10 种：
   - input 输入：data.text 触发文本模板（支持 {{变量}}）
   - agent 智能体：data.prompt 系统提示词、data.inputTemplate 输入模板（{{上游节点名}} 引用上游输出）、data.tools 工具名数组（如 feishu_doc_read/web_fetch）、data.model/data.channel 可选。执行底座 data.runtime 可选 dsh（缺省）/codex/claude/pi；选外部 runtime 时模型填 data.externalModel（codex/claude 可留空跟随 CLI 默认，pi 必填 provider/model 如 airouter/glm-5.3-flash），可选 data.requireArtifact=true 要求本次产出新的非空文件。权限模式 data.runtimePermission 可选：codex=sandbox（缺省）/full，claude=restricted（缺省）/bash/full，pi 无选项（恒全权限，由宿主开关准入）；full/bash 属高权限，运行前需用户在画布显式授权（服务端按工作流 elevated 集合校验，助手不得代为授权或绕过），不要主动给节点设高权限。外部 runtime 用 CLI 自带工具与技能，data.tools/data.skills/data.model/data.channel/data.reasoningEffort/data.maxRounds/data.modelTimeoutSec 对它不生效（不要为外部节点填这些）；节点总超时 data.timeoutSec 仍生效。注意 data.runtimeModel 是运行结果回填的瞬态字段，不是配置，保存时会被剔除，不要写它
   - script 脚本：固定 JavaScript；data.inputs 为命名参数数组，每项用 expression 完整变量或 value JSON 常量；data.code 必须声明同步 function main(input, workspace) 并返回 JSON；workspace 仅可 list/read/write/remove 当前节点工作区；可选 data.outputSchema 和 data.scriptTimeoutMs（100-10000）
   - condition 条件：data.include/data.exclude 逗号分隔关键词，命中走 true 边否则 false 边；条件节点的两条出边必须 branch="true"/"false"
+  - systemone 轻判断：本地 System One 模型单发判断（快、零输出 token），data.mode="noul"|"choice"|"score"；data.state 判断依据模板（空=上游输出，只放直觉判断需要的字段）。noul：data.statement 判断语句（让「真」=期望结果，避免双重否定）+可选 trueCriteria/falseCriteria，阈值 yesThreshold/noThreshold 默认 0.7/0.3，压线=待定；choice：data.instructions 问题 + data.options [{name,description}]（2–255，名要有含义如 refund_request，可能「都不符合」时前置一个 noul 节点）；score：data.instructions 维度 + data.levels 字符串数组（2–10 档低→高，每档独立描述情境，不写「比上一档更…」）。分流边 branch=判决原值：noul 为 yes/no/unsettled，choice 为选项名；推荐三路范式：yes→业务处理、no→兜底、unsettled→agent 复核或 notify 人工。score 不分流，下游从变量树取 data.value。endpoint/模型是部署级配置，不在节点 data 里
   - http 请求：data.url/method/headers/body
   - output 输出：汇聚展示
   - notify 消息通知：运行级观察器，可独立放置或在线路中透传；data.channel="feishu"、data.mode="terminal"|"each_node"；群聊使用 data.channelConfig.targetType="chat_id" + oc_ 开头的群 ID，私聊使用 targetType="open_id" + ou_ 开头的用户 open_id；data.channelConfig.credentialId 可选

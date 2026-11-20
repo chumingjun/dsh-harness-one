@@ -18,6 +18,7 @@ import { buildFallbackSchema, describeVariables } from './variables.js';
 import { buildVariableScopeSnapshot } from './variable-scope.js';
 import { AgentSchemaEditor, DEFAULT_AGENT_SCHEMA } from './AgentSchemaEditor.jsx';
 import { ArtifactLinks } from './ArtifactPreview.jsx';
+import { SystemOneVerdict } from './SystemOneVerdict.jsx';
 import MarkdownDocument from './MarkdownDocument.jsx';
 import { Modal } from './ui.jsx';
 
@@ -131,6 +132,28 @@ function ScriptParameterRow({ input, index, error, templateProps, onChange, onRe
   );
 }
 
+// System One 就绪状态条：打开面板时 one-shot 探针（服务端 GET /api/tags，2s 超时）。
+// 在用户撞墙之前指路：Ollama 没起 / 模型没拉是前置条件问题，不是节点 bug。
+function SystemOneStatus() {
+  const [state, setState] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const ctrl = new AbortController();
+    fetch(apiUrl('/systemone/status'), { signal: ctrl.signal })
+      .then((r) => r.json())
+      .then((d) => { if (alive) setState(d); })
+      .catch(() => { if (alive) setState({ available: false, reason: '无法连接 Workflow One 服务' }); });
+    return () => { alive = false; ctrl.abort(); };
+  }, []);
+  if (!state) return <div className="s1-status"><span className="s1-dot s1-dot-idle" />探测本地模型…</div>;
+  return (
+    <div className="s1-status" title={state.reason || ''}>
+      <span className={`s1-dot ${state.available ? 's1-dot-ok' : 's1-dot-off'}`} />
+      {state.available ? `本地模型就绪 · ${state.model}` : `${state.reason || '未检测到本地模型'} · 可在 dsh 设置 → Workflow One 配置与测试`}
+    </div>
+  );
+}
+
 export function NodePanel({ node, onChange, onDelete, onTest, onClose, availableTools = [], availableWorkflows = [], skills = [], feishuEnabled = false, feishuCreds = [], notificationChannels = [], llmConfig = {}, runtimes = [], upstreamNodes = [], upstreamPreviews = {}, graph, workflowId, runId, workflowVariables, inputSchema, runInputs, triggerInput, globalVariableEpoch, progress }) {
   if (!node) return null;
   const [copied, setCopied] = useState(false);
@@ -163,6 +186,16 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
   const selectedSkills = Array.isArray(d.skills) ? d.skills : [];
   const scriptInputs = normalizeScriptInputs(d.inputs);
   const scriptInputErrors = validateScriptInputs(scriptInputs);
+  // systemone 行编辑器：选项（名+描述）与档位（有序字符串）；切模式不清空任何字段
+  const s1Options = Array.isArray(d.options) ? d.options : [];
+  const s1Levels = Array.isArray(d.levels) ? d.levels : [];
+  const setS1Option = (index, patch) => set({ options: s1Options.map((o, i) => (i === index ? { ...o, ...patch } : o)) });
+  const moveS1Level = (index, delta) => {
+    const next = [...s1Levels];
+    const [item] = next.splice(index, 1);
+    next.splice(index + delta, 0, item);
+    set({ levels: next });
+  };
   const providers = Array.isArray(llmConfig.providers) ? llmConfig.providers : [];
   // 默认值展示链与引擎解析链（agent-defaults.js）对齐：节点未配置时第一顺位是
   // 设置面板「Workflow One」默认值（wf1Defaults），未设置才回退 dsh 全局选择。
@@ -513,6 +546,129 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
             </Field>
             <p className="sec-hint">响应会保存为结构化数据；下游从变量树选择 status、headers、body 或 json 子字段。</p>
           </Section>
+        </>
+      )}
+
+      {nodeType === 'systemone' && (
+        <>
+          <Section title="判断模式" hint="本地 System One 模型 · 快、零输出 token">
+            <Field label="模式">
+              <select value={d.mode || 'noul'} onChange={(e) => set({ mode: e.target.value })}>
+                <option value="noul">是否判断</option>
+                <option value="choice">分类选择</option>
+                <option value="score">等级评分</option>
+              </select>
+            </Field>
+            <TemplateEditor
+              {...templateProps}
+              label="判断依据" hint="留空 = 全部上游输出"
+              rows={3}
+              value={d.state || ''}
+              onChange={(v) => set({ state: v })}
+              placeholder="只放直觉判断需要的字段，别灌整页快照"
+            />
+            <p className="sec-hint">切换模式不清空已配字段；endpoint/模型是部署级配置，不在节点里。</p>
+          </Section>
+          {(d.mode || 'noul') === 'noul' && (
+            <Section title="判断语句" hint="让「真」= 你期望的结果">
+              <TemplateEditor
+                {...templateProps}
+                label="语句" rows={2}
+                value={d.statement || ''}
+                onChange={(v) => set({ statement: v })}
+                placeholder="这次登录尝试失败了"
+              />
+              <details className="panel-structured">
+                <summary>真例 / 假例（可选）</summary>
+                <Field label="真例" hint="算「真」的具体情境" wide>
+                  <textarea rows={2} value={d.trueCriteria || ''} onChange={(e) => set({ trueCriteria: e.target.value })}
+                    placeholder="出现错误横幅" />
+                </Field>
+                <Field label="假例" hint="算「假」的具体情境（不是「非真」）" wide>
+                  <textarea rows={2} value={d.falseCriteria || ''} onChange={(e) => set({ falseCriteria: e.target.value })}
+                    placeholder="进入工作台" />
+                </Field>
+              </details>
+              <p className="sec-hint">避免双重否定；几个小判断胜过一个复合问题。</p>
+            </Section>
+          )}
+          {d.mode === 'choice' && (
+            <Section title="分类选项" hint="2–255 个，名要有含义" count={s1Options.length || undefined}>
+              <TemplateEditor
+                {...templateProps}
+                label="问题" rows={2}
+                value={d.instructions || ''}
+                onChange={(v) => set({ instructions: v })}
+                placeholder="这条消息属于哪类诉求"
+              />
+              <div className="s1-rows">
+                {s1Options.map((opt, index) => (
+                  <div key={index} className="s1-option-row">
+                    <input className="s1-option-name" value={opt.name || ''} maxLength={100} placeholder="选项名"
+                      onChange={(e) => setS1Option(index, { name: e.target.value })} />
+                    <input className="s1-option-desc" value={opt.description || ''} placeholder="这个选项覆盖什么"
+                      onChange={(e) => setS1Option(index, { description: e.target.value })} />
+                    <button type="button" className="btn-icon" title="删除选项" aria-label="删除选项"
+                      onClick={() => set({ options: s1Options.filter((_, i) => i !== index) })}><Trash2 size={14} /></button>
+                  </div>
+                ))}
+              </div>
+              <button type="button" className="btn btn-sm" disabled={s1Options.length >= 255}
+                onClick={() => set({ options: [...s1Options, { name: '', description: '' }] })}>
+                <Plus size={14} />添加选项
+              </button>
+              <p className="sec-hint">选项名要有含义（refund_request 而非 option_1）；可能「都不符合」时前置一个是否节点。改名后出边分支要同步（lint 会查）。</p>
+            </Section>
+          )}
+          {d.mode === 'score' && (
+            <Section title="评分档位" hint="2–10 档，低 → 高" count={s1Levels.length || undefined}>
+              <TemplateEditor
+                {...templateProps}
+                label="评分维度" rows={2}
+                value={d.instructions || ''}
+                onChange={(v) => set({ instructions: v })}
+                placeholder="报告质量"
+              />
+              <div className="s1-rows">
+                {s1Levels.map((level, index) => (
+                  <div key={index} className="s1-option-row">
+                    <span className="s1-level-index">{index}</span>
+                    <input className="s1-option-desc" value={level || ''} placeholder={`第 ${index} 档情境描述`}
+                      onChange={(e) => set({ levels: s1Levels.map((l, i) => (i === index ? e.target.value : l)) })} />
+                    <button type="button" className="btn-icon" title="上移" aria-label="上移" disabled={index === 0}
+                      onClick={() => moveS1Level(index, -1)}>↑</button>
+                    <button type="button" className="btn-icon" title="下移" aria-label="下移" disabled={index === s1Levels.length - 1}
+                      onClick={() => moveS1Level(index, 1)}>↓</button>
+                    <button type="button" className="btn-icon" title="删除档位" aria-label="删除档位"
+                      onClick={() => set({ levels: s1Levels.filter((_, i) => i !== index) })}><Trash2 size={14} /></button>
+                  </div>
+                ))}
+              </div>
+              <button type="button" className="btn btn-sm" disabled={s1Levels.length >= 10}
+                onClick={() => set({ levels: [...s1Levels, ''] })}>
+                <Plus size={14} />添加档位
+              </button>
+              <p className="sec-hint">每档独立描述情境，不写「比上一档更…」。评分不分流，下游从变量树取 data.value。</p>
+            </Section>
+          )}
+          {(d.mode || 'noul') === 'noul' && (
+            <Section title="分流阈值" hint="高级" defaultOpen={false}>
+              <div className="field-grid">
+                <Field label="是 &gt;" hint="概率大于此值 → 是">
+                  <input type="number" min="0" max="1" step="0.05" value={d.yesThreshold ?? ''}
+                    onChange={(e) => set({ yesThreshold: e.target.value === '' ? undefined : Number(e.target.value) })}
+                    placeholder="0.7" />
+                </Field>
+                <Field label="否 &lt;" hint="概率小于此值 → 否">
+                  <input type="number" min="0" max="1" step="0.05" value={d.noThreshold ?? ''}
+                    onChange={(e) => set({ noThreshold: e.target.value === '' ? undefined : Number(e.target.value) })}
+                    placeholder="0.3" />
+                </Field>
+              </div>
+              <p className="sec-hint">中间（含压线）= 待定，建议接人工复核；待定不算失败。选中出边可改分支。</p>
+            </Section>
+          )}
+          <SystemOneStatus />
         </>
       )}
 
@@ -928,8 +1084,18 @@ export function NodePanel({ node, onChange, onDelete, onTest, onClose, available
                 {d.runChars > (d.runOutput || '').length ? ` （前 ${(d.runOutput || '').length}/${d.runChars} 字）` : ''}
               </span>
             </div>
-            <pre className="panel-output">{d.runOutput || '(空结果)'}</pre>
-            {d.runtimeStructuredOutput?.type === 'json' && (
+            {nodeType === 'systemone' && d.runtimeStructuredOutput?.type === 'json' ? (
+              <SystemOneVerdict
+                value={d.runtimeStructuredOutput.value}
+                usage={d.runtimeUsage}
+                durationMs={d.durationMs}
+                model={d.runtimeModel}
+                thresholds={{ yes: d.yesThreshold, no: d.noThreshold }}
+              />
+            ) : (
+              <pre className="panel-output">{d.runOutput || '(空结果)'}</pre>
+            )}
+            {d.runtimeStructuredOutput?.type === 'json' && nodeType !== 'systemone' && (
               <details className="panel-structured" open={d.test}>
                 <summary>结构化输出预览</summary>
                 <pre className="panel-output">{JSON.stringify(d.runtimeStructuredOutput.value, null, 2)}</pre>

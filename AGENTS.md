@@ -59,20 +59,20 @@
 ### 常用命令
 
 ```sh
-npm test                                   # 全量单测聚合（scripts/run-tests.sh：web 14 套 + orchestrator 17 套 + llm-guard + canvasui + larkauth + one + document-preview）
+npm test                                   # 全量单测聚合（scripts/run-tests.sh：web 25 套 + orchestrator 32 套 + llm-guard 1 套 + canvasui 1 套 + larkauth 4 套 + one 1 套 + document-preview 18 例 node --test）
 sh dsh-plugins/build-web.sh                 # 画布双构建（/wf1/ base + 根 base），改前端后必跑（产物不入库，仅落工作区）
 sh dsh-plugins/setup.sh [profile] [端口]    # 安装（默认 dsh-ccpg / 4021）
 sh dsh-plugins/start.sh <profile>           # 启动
 sh dsh-plugins/pack.sh <tag>                # 打包 release（CI 同源）
 
 # 分套运行（改哪跑哪）
-cd web && npm test                          # 前端 14 套
-cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # orchestrator 17 套
+cd web && npm test                          # 前端 25 套
+cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # orchestrator 32 套
 node dsh-plugins/dsh-ccpg-canvasui/test/client.test.mjs         # canvasui 客户端
-node dsh-plugins/dsh-ccpg-document-preview/test/index.test.mjs  # 4 例
+cd dsh-plugins/dsh-ccpg-document-preview && npm test --silent    # node --test，18 例
 ```
 
-CI：`.github/workflows/ci.yml` 在 PR 与 main push 上跑 `npm test` + `build-web.sh`（产物不入库，仅验证可构建）；发版仍走 `release.yml`。
+CI：`.github/workflows/ci.yml` 仅在 pull_request 上跑 `npm test` + `build-web.sh`（产物不入库，仅验证可构建）；发版仍走 `release.yml`。
 
 ### 架构铁律（Workflow One 专属）
 
@@ -103,7 +103,7 @@ CI：`.github/workflows/ci.yml` 在 PR 与 main push 上跑 `npm test` + `build-
 
 ### 测试与验证
 
-- 单测全部是零依赖 node 断言脚本（`node:assert` + 自写 runner），直接 `node <file>` 运行；新插件照此约定写测试
-- 改引擎跑 orchestrator 17 套；改前端跑 web 14 套；改 canvasui 跑其 client 测试并重建 bundle；改预览跑 document-preview 4 例
+- 单测除 document-preview（`node --test` runner）外全部是零依赖 node 断言脚本（`node:assert` + 自写 runner），直接 `node <file>` 运行；新插件默认照此约定写测试
+- 改引擎跑 orchestrator 32 套；改前端跑 web 25 套；改 canvasui 跑其 client 测试并重建 bundle；改预览跑 document-preview 18 例（node --test）
 - 通知单测：`node test/notifications.test.mjs && node test/notification-feishu.test.mjs`。真实飞书测试是 `test/notification-feishu.live.mjs`（文件名刻意不匹配 `*.test.mjs`，默认测试/CI 不发送消息）；仅在用户明确批准收件人与实发后，用临时环境变量传入 App ID、App Secret 及 `FEISHU_CHAT_ID=oc_...` 或 `FEISHU_OPEN_ID=ou_...`，凭据绝不写入命令文档、源码、fixture 或日志
 - E2E 用 CDP（chrome-devtools）跑真实浏览器验证；dsh 官方 UI 首载慢，等待时间放宽（画布就绪 3.5s→6s），wait text 偶超时先多等几秒再判失败
