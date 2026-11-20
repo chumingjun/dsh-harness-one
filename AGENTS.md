@@ -66,10 +66,10 @@ sh dsh-plugins/start.sh <profile>           # 启动
 sh dsh-plugins/pack.sh <tag>                # 打包 release（CI 同源）
 
 # 分套运行（改哪跑哪）
-cd web && for t in src/*.test.mjs; do node "$t"; done  # 前端全量 25 套（package.json 分套 test 脚本仅枚举 22 套，勿以 npm test 替代）
-cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t"; done  # orchestrator 32 套
+(cd web && for t in src/*.test.mjs; do node "$t" || exit 1; done)  # 前端全量（web 内的 npm test 只跑显式枚举的测试）
+(cd dsh-plugins/dsh-ccpg-orchestrator && for t in test/*.test.mjs; do node "$t" || exit 1; done)  # orchestrator 全量
 node dsh-plugins/dsh-ccpg-canvasui/test/client.test.mjs         # canvasui 客户端
-cd dsh-plugins/dsh-ccpg-document-preview && npm test --silent    # node --test，18 例
+(cd dsh-plugins/dsh-ccpg-document-preview && npm test --silent)  # node --test
 ```
 
 CI：`.github/workflows/ci.yml` 仅在 pull_request 上跑 `npm test` + `build-web.sh`（产物不入库，仅验证可构建）；发版仍走 `release.yml`。
